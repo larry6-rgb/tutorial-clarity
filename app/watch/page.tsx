@@ -6,12 +6,68 @@ import { Suspense, useState, useEffect, useRef } from 'react';
 function WatchPageContent() {
   const searchParams = useSearchParams();
   const url = searchParams.get('url');
+  const saveMode = searchParams.get('save');
+  
   const [menuOpen, setMenuOpen] = useState(false);
-  const [spacebarEnabled, setSpacebarEnabled] = useState(true);
-  const [showHelper, setShowHelper] = useState(true);
+  const [spacebarOpen, setSpacebarOpen] = useState(false);
+  const [surfOpen, setSurfOpen] = useState(false);
+  const [surfVideos, setSurfVideos] = useState<any[]>([]);
   const playerRef = useRef<any>(null);
   const playerReadyRef = useRef(false);
   
+  // Load saved videos from localStorage
+  useEffect(() => {
+    loadSurfVideos();
+  }, []);
+
+  // Handle save mode (when bookmarklet is used)
+  useEffect(() => {
+    if (saveMode === 'true' && url) {
+      saveToSurf(url);
+      alert('Video saved to Surf list!');
+    }
+  }, [saveMode, url]);
+
+  const loadSurfVideos = () => {
+    const saved = localStorage.getItem('surfVideos');
+    if (saved) {
+      const videos = JSON.parse(saved);
+      // Filter out videos older than 1 week
+      const oneWeekAgo = Date.now() - (7 * 24 * 60 * 60 * 1000);
+      const filtered = videos.filter((v: any) => v.timestamp > oneWeekAgo);
+      setSurfVideos(filtered);
+      localStorage.setItem('surfVideos', JSON.stringify(filtered));
+    }
+  };
+
+  const saveToSurf = (videoUrl: string) => {
+    const videoId = extractVideoId(videoUrl);
+    if (!videoId) return;
+
+    const newVideo = {
+      id: videoId,
+      url: videoUrl,
+      title: `Video ${videoId}`,
+      timestamp: Date.now()
+    };
+
+    const saved = localStorage.getItem('surfVideos');
+    const videos = saved ? JSON.parse(saved) : [];
+    
+    // Check if already saved
+    if (!videos.find((v: any) => v.id === videoId)) {
+      videos.unshift(newVideo);
+      localStorage.setItem('surfVideos', JSON.stringify(videos));
+      loadSurfVideos();
+    }
+  };
+
+  const deleteSurfVideo = (videoId: string) => {
+    const filtered = surfVideos.filter(v => v.id !== videoId);
+    localStorage.setItem('surfVideos', JSON.stringify(filtered));
+    setSurfVideos(filtered);
+  };
+
   if (!url) {
     return <div style={{ padding: '20px', color: 'white' }}>No video URL provided</div>;
   }
@@ -44,7 +100,6 @@ function WatchPageContent() {
         events: {
           onReady: () => {
             playerReadyRef.current = true;
-            console.log('Player ready');
           }
         }
       });
@@ -54,7 +109,7 @@ function WatchPageContent() {
   // Spacebar control
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
-      if (e.code === 'Space' && spacebarEnabled && playerRef.current && playerReadyRef.current) {
+      if (e.code === 'Space' && playerRef.current && playerReadyRef.current) {
         e.preventDefault();
         
         try {
@@ -73,7 +128,7 @@ function WatchPageContent() {
 
     window.addEventListener('keydown', handleKeyPress);
     return () => window.removeEventListener('keydown', handleKeyPress);
-  }, [spacebarEnabled]);
+  }, []);
 
   return (
     <div style={{ 
@@ -113,96 +168,118 @@ function WatchPageContent() {
           border: '1px solid #384152',
           borderRadius: '8px',
           padding: '10px',
-          minWidth: '200px',
+          minWidth: '250px',
+          maxHeight: '500px',
+          overflowY: 'auto',
           zIndex: 1000
         }}>
-          <label style={{
-            display: 'flex',
-            alignItems: 'center',
-            gap: '10px',
-            color: 'white',
-            padding: '8px',
-            cursor: 'pointer'
-          }}>
-            <input
-              type="checkbox"
-              checked={spacebarEnabled}
-              onChange={(e) => setSpacebarEnabled(e.target.checked)}
-              style={{ cursor: 'pointer' }}
-            />
-            Spacebar Control
-          </label>
-        </div>
-      )}
-
-      {/* Overlay Helper Nudge */}
-      {showHelper && (
-        <div style={{
-          position: 'absolute',
-          bottom: '40px',
-          right: '40px',
-          background: '#4A90E2',
-          color: 'white',
-          padding: '15px 20px',
-          borderRadius: '12px',
-          boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
-          zIndex: 999,
-          maxWidth: '280px',
-          display: 'flex',
-          flexDirection: 'column',
-          gap: '10px'
-        }}>
-          <div style={{ fontSize: '14px', lineHeight: '1.4' }}>
-            <strong>Tip:</strong> Click the X button in the top-right corner of the video overlay to clear it
+          {/* Spacebar Control */}
+          <div style={{ marginBottom: '10px' }}>
+            <button
+              onClick={() => setSpacebarOpen(!spacebarOpen)}
+              style={{
+                width: '100%',
+                background: 'transparent',
+                border: 'none',
+                color: 'white',
+                padding: '8px',
+                textAlign: 'left',
+                cursor: 'pointer',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
+              <span>Spacebar Control</span>
+              <span>{spacebarOpen ? '▼' : '▶'}</span>
+            </button>
+            {spacebarOpen && (
+              <div style={{
+                padding: '10px',
+                color: '#aaa',
+                fontSize: '14px',
+                fontStyle: 'italic'
+              }}>
+                Use the spacebar to start and stop the video
+              </div>
+            )}
           </div>
-          
-          {/* Arrow pointing up and to the left */}
-          <svg 
-            style={{
-              position: 'absolute',
-              top: '-60px',
-              right: '20px',
-              width: '60px',
-              height: '70px'
-            }}
-            viewBox="0 0 60 70"
-          >
-            <defs>
-              <marker
-                id="arrowhead"
-                markerWidth="10"
-                markerHeight="10"
-                refX="5"
-                refY="5"
-                orient="auto"
-              >
-                <polygon points="0 0, 10 5, 0 10" fill="#4A90E2" />
-              </marker>
-            </defs>
-            <path
-              d="M 30 70 Q 40 40, 50 10"
-              stroke="#4A90E2"
-              strokeWidth="3"
-              fill="none"
-              markerEnd="url(#arrowhead)"
-            />
-          </svg>
-          
-          <button
-            onClick={() => setShowHelper(false)}
-            style={{
-              alignSelf: 'flex-end',
-              background: 'transparent',
-              border: '1px solid white',
-              color: 'white',
-              padding: '5px 15px',
-              borderRadius: '6px',
-              fontSize: '12px',
-              cursor: 'pointer'
-            }}
-          >
-            Got it
-          </button>
+
+          {/* Surf */}
+          <div>
+            <button
+              onClick={() => setSurfOpen(!surfOpen)}
+              style={{
+                width: '100%',
+                background: 'transparent',
+                border: 'none',
+                color: 'white',
+                padding: '8px',
+                textAlign: 'left',
+                cursor: 'pointer',
+                display: 'flex',
+                justifyContent: 'space-between',
+                alignItems: 'center'
+              }}
+            >
+              <span>Surf ({surfVideos.length})</span>
+              <span>{surfOpen ? '▼' : '▶'}</span>
+            </button>
+            {surfOpen && (
+              <div style={{ padding: '10px' }}>
+                {surfVideos.length === 0 ? (
+                  <div style={{ color: '#aaa', fontSize: '14px' }}>
+                    No saved videos yet
+                  </div>
+                ) : (
+                  surfVideos.map((video) => (
+                    <div
+                      key={video.id}
+                      style={{
+                        padding: '8px',
+                        marginBottom: '8px',
+                        background: '#0f1626',
+                        borderRadius: '6px',
+                        display: 'flex',
+                        justifyContent: 'space-between',
+                        alignItems: 'center',
+                        gap: '8px'
+                      }}
+                    >
+                      <a
+                        href={`/watch?url=${video.url}`}
+                        style={{
+                          color: '#4A90E2',
+                          textDecoration: 'none',
+                          fontSize: '13px',
+                          flex: 1,
+                          overflow: 'hidden',
+                          textOverflow: 'ellipsis',
+                          whiteSpace: 'nowrap'
+                        }}
+                      >
+                        {video.title}
+                      </a>
+                      <button
+                        onClick={() => deleteSurfVideo(video.id)}
+                        style={{
+                          background: '#ff4444',
+                          border: 'none',
+                          color: 'white',
+                          padding: '4px 8px',
+                          borderRadius: '4px',
+                          fontSize: '11px',
+                          cursor: 'pointer'
+                        }}
+                      >
+                        ✕
+                      </button>
+                    </div>
+                  ))
+                )}
+              </div>
+            )}
+          </div>
         </div>
       )}
 
