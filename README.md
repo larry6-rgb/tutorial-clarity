@@ -6,11 +6,11 @@ main you tube tutorial guidance app
 
 
 
-tutorial clarity is an app, primarily aimed at the elderly and computer newbies, but useful for all.  
+tutorial clarity is an app, primarily aimed at the elderly and computer newbies, but useful for all.
 
-This app will provide a suite of tools to deal with common YouTube irritations, and make it easier to understand and learn from tutorials.  
+This app will provide a suite of tools to deal with common YouTube irritations, and make it easier to understand and learn from tutorials.
 
-I have identified several difficulties, which I will first explain, and list the desired actions within the app to solve each problem.  
+I have identified several difficulties, which I will first explain, and list the desired actions within the app to solve each problem.
 
 In as much as is possible, all code work should be contained within the app, so that conflicts with YT operations will be kept to a minimum.
 
@@ -24,99 +24,107 @@ When the user has the app active, any time that they log in to YouTube, a TC log
 
 
 
-Even before they enter our app, they will have access to our first benefit. When scrolling through YouTube's offerings of videos, they might see something that interests them, but they want to see if there is something more interesting in the listings later on. They intend to come back to this first video. They end up watching something else and decide to return to the first video, but YouTube no longer shows it as an option. We solve this with our SURF option. While they are focused on the video, but have not selected it yet, they can click alt-space, and that will save that video to a list under menu/surf, which they can click for viewing in the future. These videos will be listed on the day that they are selected, and the list will cover seven days. If, later in the week, they don't find any offerings of interest to them, they can turn to this list of things of interest to select something to watch. This feature, SURF, shall be the first listing in the collapsed MENU list.
+1. SURF Even before they enter our app, they will have access to our first benefit. When scrolling through YouTube's offerings of videos, they might see something that interests them, but they want to see if there is something more interesting in the listings later on. They intend to come back to this first video. They end up watching something else and decide to return to the first video, but YouTube no longer shows it as an option. We solve this with our SURF option. While they are focused on the video, but have not selected it yet, they can click alt-space, and that will save that video to a list under menu/surf, which they can click for viewing in the future. These videos will be listed on the day that they are selected, and the list will cover seven days. If, later in the week, they don't find any offerings of interest to them, they can turn to this list of things of interest to select something to watch. This feature, SURF, shall be the first listing in the collapsed MENU list.
 
 
 
-SPACE BAR.  
+2.SPACE BAR.
 
 This is very important for use of other features. The user shall be able to use the space bar to start and pause the video, as well as the accompanying scroll, described later. When the video is paused, the last frame on the screen shall be displayed without any overlays blocking the view, in order that the user can study it at their own pace, so the information makes sense. The SPACE BAR is the largest key on the keyboard and is easier for someone with motor control issues to use than a mouse. SPACE BAR shall be the second feature on the MENU list.
 
 
 
-PROGRESS BAR.  
+3.PROGRESS BAR.
 
 We shall provide our own progress bar, separate from YouTube's, so we can impose some of our own functionality on it. The progress bar shall be shown on the bottom of the screen with a countdown timer at the left end, and an indicator of the current playback speed on the right end. The Progress Bar shall be next in our list of menu features, and it can be toggled to be shown or hidden, as the user wishes.
 
 
 
-SCROLL.  
+4.SCROLL.
 
 A written version of what the presenter is saying shall scroll across the bottom of the screen, in sync with the audio. The height of the scroll bar, and consequently the size of the text contained within it, shall be adjustable for people with poor vision. The user should be able to relocate the scroll bar to whatever position they desire. When the video is paused, this scroll shall pause also.
 
 
 
-MUTE.  
+5.MUTE.
 
 A mute/unmute toggle shall be offered in MENU, as well as a volume adjustment slider.
 
 
 
-In many tutorials, unfamiliar or technical terms are often used. Our DEFINITION function will allow the user to pause the scroll bar and highlight a word or phrase they don't understand. An explanation of the meaning will then pop up on the screen and remain there until the user either closes the definition bubble or restarts playback.
+6.DEFINITIONS. In many tutorials, unfamiliar or technical terms are often used. Our DEFINITION function will allow the user to pause the scroll bar and highlight a word or phrase they don't understand. An explanation of the meaning will then pop up on the screen and remain there until the user either closes the definition bubble or restarts playback.
 
 
 
-ZOOM.  
+7.ZOOM.
 
 While the video is paused, the user shall be able to zoom in on the screen (similar to pinch control on a phone) and move the cursor around within the zoom. Clicking upon words there shall trigger the DEFINITION feature. Restarting the video shall return the screen to normal size.
 
 
 
-CHAPTERS.  
+8.CHAPTERS.
 
 If a video contains them, we shall provide a time-stamped list of chapters, as well as titles if they are available. Clicking on a chapter shall jump the user directly to that play point.
 
 
 
-BOOKMARKS.  
+9.BOOKMARKS.
 
 The user shall be able to create a bookmark in one of two ways—by pressing B or by clicking at the desired point on the progress bar. Playback is paused to allow the user to make a note if desired. A small nudge will pop up asking if they wish to add a note, and an X to close if they do not. If they click the nudge, a larger window opens where they can input their notes. This note and timestamp are added to the list of bookmarks in MENU. Closing the note nudge resumes playback. A bookmark will be indicated by a ½‑inch spike on the progress bar, with noted timestamp. Within MENU each bookmark shall have the ability to be set as the start or end of a playback loop. The user shall be able to loop between any two bookmarks. Each bookmark can be erased individually or by a global close which removes all bookmarks.
 
 
 
-PLAYBACK SPEED.  
+10\. PLAYBACK SPEED.
 
 We will provide selectable speed boxes (.5×, .75×, 1×, 1.5×, 2×). The selected speed shall be highlighted and also displayed at the right end of the progress bar.
 
 
 
-RESUME SESSION.  
+11\. RESUME SESSION.
 
 If you have watched a video for at least 10 seconds and leave before the end, that departure point will be saved as a RESUME SESSION point. The next time you return to YouTube, regardless of what video you are watching, a nudge pops up asking if you wish to resume the last session on that video. If not, close it. If yes, it takes you back to that video at the point where you left off. The last ten session points will be listed in MENU; creating an eleventh deletes the oldest.
 
 
 
-CLEAR AUDIO.  
+12.CLEAR AUDIO.
 
-Some presenters speak with accents that make comprehension difficult. If desired, the user can click CLEAR AUDIO. AI will intercept the audio and convert it into a clear, AI‑generated English voice (male or female).  
+Some presenters speak with accents that make comprehension difficult. If desired, the user can click CLEAR AUDIO. AI will intercept the audio and convert it into a clear, AI‑generated English voice (male or female).
 
 
 
-CURSOR FOLLOWER.  
+13\. CURSOR FOLLOWER.
 
 The app will help users follow the presenter’s mouse pointer more easily. Pausing the video when the pointer is visible and clicking on it will activate a bright, high‑contrast halo marker that will jump between pointer stops, making it easier to follow the tutorial sequence.
 
 
 
-QUESTIONS.  
+14\. QUESTIONS.
 
 The user should be able to pause the video and ask questions of the video, which AI will answer. Example: “I didn’t understand that — can you explain a bit more?”
 
 
 
-TRANSLATION.  
-
-Tutorials should be available as real‑time audio translations into at least ten commonly used languages, more if feasible. Also, videos only available in other languages should have English translations.
+15\. TUTORIALS should be available as real‑time audio translations into at least ten commonly used languages, more if feasible. Also, videos only available in other languages should have English translations.
 
 
 
-SUMMARIZATION.  
+16.SUMMARIZATION.
 
 When the video finishes, or if the user chooses, AI will review the video and compose a concise, written summary that covers the concepts and main points. This gives users a quick way to recall or preview material — especially valuable for long or complex tutorials. The summary can appear within its own section in the MENU and can be copied, printed, or saved for later reference.
 
 
 
-TRANSCRIPT.  
+17\. TRANSCRIPT.
 
-A complete written transcript of everything said in the video shall be created automatically through speech‑to‑text processing. Each segment will be time‑stamped, and users can scroll, search, or click within the transcript to jump to that exact point in the video. The transcript will also support highlighting and linking into the DEFINITION, CLEAR AUDIO, and TRANSLATION features.
+A complete written transcript of everything said in the video shall be created automatically through speech‑to‑text processing. Each segment will be time‑stamped, and users can scroll, search, or click within the transcript to jump to that exact point in the video. The transcript will also support highlighting and linking into the DEFINITION, CLEAR AUDIO, and TRANSLATION 
+
+
+
+18.TRANSLATION.  Many users don't speak English as their native language, so this appshould have the ability to intercept the audio, and translate it into many foreign languages. Ideally, when as foreign language is selected from a drop down list, all written output from the app should also be translated if possible.
+
+
+
+19.FOREIGN CONTENT. Not all videos on YouTube are in English. This app should have the ability to intercept the foreign content and AI will translate it into clear English for the user. 
+
+&nbsp;
 

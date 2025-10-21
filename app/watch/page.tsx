@@ -1,160 +1,89 @@
 'use client';
-import React, { useEffect, useRef, useState } from 'react';
-import { useSearchParams, useRouter } from 'next/navigation';
 
-declare global {
-  interface Window {
-    YT: any;
-    onYouTubeIframeAPIReady?: () => void;
-  }
+import { useRouter } from 'next/navigation';
+import { useEffect, useState, useCallback } from 'react';
+
+interface SurfedVideo {
+  id: string;
+  title: string;
+  thumbnail: string;
+  url: string;
+  savedAt: number;
 }
 
-export default function WatchPage() {
+const MAX_SURFED_VIDEOS = 25;
+const SURF_EXPIRY_DAYS = 7;
+
+export default function HomePage() {
   const router = useRouter();
-  const searchParams = useSearchParams();
-  const rawParam = searchParams.get('url');
-
-  const [videoId, setVideoId] = useState<string | null>(null);
-  const [videoTitle, setVideoTitle] = useState<string>('');
   const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(false);
-  const [playerReady, setPlayerReady] = useState(false);
+  const [surfedVideos, setSurfedVideos] = useState<SurfedVideo[]>([]);
 
-  const playerRef = useRef<any>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
+  const getSurfedVideos = useCallback((): SurfedVideo[] => {
+    if (typeof window === 'undefined') return [];
+    const stored = localStorage.getItem('tc_surf_shelf');
+    if (!stored) return [];
+    let videos: SurfedVideo[] = [];
+    try { videos = JSON.parse(stored); } catch { return []; }
+    const now = Date.now();
+    const cutoff = now - SURF_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
+    videos = videos.filter(v => v.savedAt > cutoff).sort((a,b)=>b.savedAt-a.savedAt).slice(0, MAX_SURFED_VIDEOS);
+    localStorage.setItem('tc_surf_shelf', JSON.stringify(videos));
+    return videos;
+  }, []);
 
-  // Extract video ID
-  useEffect(() => {
-    if (!rawParam) return;
-    try {
-      const decoded = decodeURIComponent(rawParam);
-      const match = decoded.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
-      if (match) setVideoId(match[1]);
-    } catch {
-      const match = rawParam.match(/[?&]v=([a-zA-Z0-9_-]{11})/);
-      if (match) setVideoId(match[1]);
-    }
-  }, [rawParam]);
-
-  // Load YouTube IFrame API
-  useEffect(() => {
-    if (!videoId || !containerRef.current) return;
-
-    const initPlayer = () => {
-      if (!window.YT || !window.YT.Player) return;
-      playerRef.current = new window.YT.Player(containerRef.current, {
-        videoId,
-        height: '100%',
-        width: '100%',
-        playerVars: {
-          autoplay: 1,
-          controls: 0,
-          modestbranding: 1,
-          rel: 0,
-          fs: 0,
-          iv_load_policy: 3,
-          disablekb: 1,
-        },
-        events: {
-          onReady: (event: any) => {
-            setPlayerReady(true);
-            const title = event.target.getVideoData().title;
-            setVideoTitle(title);
-          },
-          onStateChange: (event: any) => {
-            setIsPlaying(event.data === 1);
-          },
-        },
-      });
-    };
-
-    if (window.YT && window.YT.Player) {
-      initPlayer();
-    } else {
-      const tag = document.createElement('script');
-      tag.src = 'https://www.youtube.com/iframe_api';
-      document.body.appendChild(tag);
-      window.onYouTubeIframeAPIReady = initPlayer;
-    }
-
-    return () => {
-      if (playerRef.current && playerRef.current.pauseVideo) {
-        playerRef.current.pauseVideo();
-      }
-    };
-  }, [videoId]);
-
-  // Spacebar toggle
-  useEffect(() => {
-    const onKey = (e: KeyboardEvent) => {
-      if (e.code === 'Space' || e.key === ' ') {
-        e.preventDefault();
-        e.stopPropagation();
-        
-        if (playerReady && playerRef.current) {
-          if (isPlaying) {
-            playerRef.current.pauseVideo();
-          } else {
-            playerRef.current.playVideo();
-          }
-        }
-      }
-    };
-    
-    document.addEventListener('keydown', onKey, true);
-    return () => document.removeEventListener('keydown', onKey, true);
-  }, [playerReady, isPlaying]);
+  useEffect(() => { setSurfedVideos(getSurfedVideos()); }, [getSurfedVideos]);
 
   return (
-    <main className="relative w-screen h-screen bg-black text-white overflow-hidden">
-      {/* Exit button */}
-      <button
-        onClick={() => router.push('/')}
-        className="absolute top-4 left-4 z-50 px-3 py-1 bg-gray-800/80 text-white rounded hover:bg-gray-700"
-      >
-        ✖ Exit
-      </button>
+    <main className="relative flex h-screen w-full flex-col items-center justify-center bg-gray-900 text-white">
+      <h1 className="mb-6 text-4xl font-bold text-blue-400">Tutorial Clarity</h1>
+      <p className="mb-8 text-lg text-gray-300">Your enhanced YouTube experience.</p>
 
-      {/* Menu button */}
+      <div className="space-x-4">
+        <button
+          onClick={() => router.push('/watch')}
+          className="rounded bg-blue-600 px-6 py-3 text-lg text-white shadow-lg hover:bg-blue-700 transition-colors"
+        >
+          Open Watch Page
+        </button>
+      </div>
+
+      {/* Menu panel (Surf Shelf) */}
+      <div
+        className={`fixed top-16 right-4 z-50 w-80 max-h-[80vh] overflow-y-auto rounded-lg border border-blue-600 bg-gray-800 p-4 shadow-lg transition-opacity duration-200 ${
+          isMenuOpen ? 'opacity-100 visible' : 'opacity-0 invisible'
+        }`}
+      >
+        <h2 className="mb-3 text-lg font-semibold text-blue-400">🌊 Surf Shelf ({surfedVideos.length}/{MAX_SURFED_VIDEOS})</h2>
+        {surfedVideos.length === 0 ? (
+          <p className="text-sm text-gray-400">No videos surfed yet. Go to Watch to save.</p>
+        ) : (
+          <ul className="space-y-3">
+            {surfedVideos.map((v) => (
+              <li key={v.id} className="flex items-center space-x-3 rounded-md bg-gray-700 p-2">
+                <img src={v.thumbnail} alt={v.title} className="h-10 w-16 rounded-sm object-cover" />
+                <div className="flex-grow">
+                  <button
+                    onClick={() => router.push(`/watch?url=${encodeURIComponent(v.url)}`)}
+                    className="text-left text-sm text-blue-300 hover:text-blue-100 line-clamp-2"
+                    title={v.title}
+                  >
+                    {v.title}
+                  </button>
+                  <p className="text-xs text-gray-400">Saved: {new Date(v.savedAt).toLocaleDateString()}</p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        )}
+      </div>
+
       <button
-        onClick={() => setIsMenuOpen(!isMenuOpen)}
-        className="fixed top-4 right-4 z-50 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded shadow-lg"
+        onClick={() => setIsMenuOpen(v => !v)}
+        className="fixed right-4 top-4 z-50 rounded bg-blue-600 px-4 py-2 text-white shadow-lg hover:bg-blue-700"
       >
         Menu
       </button>
-
-      {/* Menu panel */}
-      {isMenuOpen && (
-        <div className="fixed top-16 right-4 z-50 w-64 bg-gray-800 border border-blue-600 rounded-lg p-4 shadow-lg">
-          <h2 className="text-lg font-semibold mb-3 text-blue-400">🎮 Controls</h2>
-          <p className="text-sm text-gray-300 mb-2">
-            • Press <span className="font-bold text-white">Spacebar</span> to{' '}
-            {isPlaying ? 'pause' : 'play'}
-          </p>
-          <p className="text-sm text-gray-400">Status: {isPlaying ? '▶️ Playing' : '⏸️ Paused'}</p>
-        </div>
-      )}
-
-      {/* Player container - absolute positioned to fill screen */}
-      {videoId ? (
-        <div 
-          ref={containerRef}
-          className="absolute inset-0 w-full h-full"
-        />
-      ) : (
-        <div className="flex items-center justify-center w-full h-full">
-          <p className="text-gray-400">No valid YouTube URL detected.</p>
-        </div>
-      )}
-
-      {/* Bottom-left title bar */}
-      {videoTitle && (
-        <div className="fixed bottom-4 left-4 bg-gray-900/95 border border-gray-700 rounded-lg px-4 py-1.5 z-40 max-w-md">
-          <p className="text-xs text-gray-300 truncate">
-            📺 <span className="font-medium text-white">{videoTitle}</span>
-          </p>
-        </div>
-      )}
     </main>
   );
 }

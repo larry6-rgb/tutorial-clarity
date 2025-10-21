@@ -186,13 +186,16 @@ export default function YouTubePlayerComponent({
       />
       
       {!isLoaded && (
-        <div className="absolute inset-0 bg-black/80 flex items-center justify-center z-20">
-          <div className="text-white text-center">
-            <div className="animate-spin w-8 h-8 border-2 border-white border-t-transparent rounded-full mx-auto mb-4"></div>
-            <p>Loading video player...</p>
-          </div>
-        </div>
-      )}
+        <div
+  className={`absolute inset-0 bg-black/80 flex items-center justify-center z-20 transition-opacity duration-300 ${
+    isLoaded ? "opacity-0 pointer-events-none" : "opacity-100 pointer-events-auto"
+  }`}
+>
+  <div className="text-white text-center">
+    <div className="animate-spin w-8 h-8 border-2 border-white border-t-transparent rounded-full mx-auto mb-4"></div>
+    <p>Loading video player...</p>
+  </div>
+</div>     )}
       
       {/* Progress overlay */}
       {isLoaded && (
