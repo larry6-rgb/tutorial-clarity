@@ -11,7 +11,8 @@ export default function RootLayout({ children }: { children: React.ReactNode }) 
           margin: 0,
           height: '100%',
           minHeight: '100vh',
-          background: 'transparent',
+          background: '#0b0f19',
+          color: '#e5e7eb',
         }}
       >
         {children}

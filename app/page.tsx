@@ -1,161 +1,133 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
 import { useState } from 'react';
+import { useRouter } from 'next/navigation';
 
-export default function LandingPage() {
+export default function HomePage() {
   const router = useRouter();
   const [urlInput, setUrlInput] = useState('');
 
   const handleWatch = () => {
-    const trimmed = urlInput.trim();
-    if (!trimmed) return;
-    router.push(`/watch?url=${encodeURIComponent(trimmed)}`);
+    if (!urlInput.trim()) {
+      alert('Please enter a YouTube URL');
+      return;
+    }
+    
+    const videoId = extractVideoId(urlInput);
+    if (!videoId) {
+      alert('Please enter a valid YouTube URL');
+      return;
+    }
+    
+    router.push(`/watch?url=https://www.youtube.com/watch?v=${videoId}`);
   };
 
   return (
-    <div
-      style={{
-        position: 'fixed',
-        inset: 0,
-        width: '100vw',
-        height: '100vh',
-        backgroundColor: '#4A90E2',
-        backgroundImage: `
-          linear-gradient(rgba(255,255,255,0.12) 1px, transparent 1px),
-          linear-gradient(90deg, rgba(255,255,255,0.12) 1px, transparent 1px)
-        `,
-        backgroundSize: '40px 40px',
-        display: 'grid',
-        placeItems: 'center',
-        overflow: 'hidden',
-      }}
-    >
-      {/* Center column: title + cartouche */}
-      <div
-        style={{
-          width: 'min(92vw, 760px)',
-          display: 'flex',
-          flexDirection: 'column',
-          alignItems: 'center',
-          gap: '16px',
-        }}
-      >
-        {/* Title with lavender -> deep blue gradient */}
-        <h1
-          style={{
-            margin: 0,
-            textAlign: 'center',
-            fontSize: '48px',
-            fontWeight: 800,
-            lineHeight: 1.1,
-            background: 'linear-gradient(90deg, #C7A0FF, #2441A7)',
-            WebkitBackgroundClip: 'text',
-            backgroundClip: 'text',
-            color: 'transparent',
-          }}
-        >
+    <div style={{ 
+      minHeight: '100vh', 
+      display: 'flex', 
+      alignItems: 'center', 
+      justifyContent: 'center',
+      background: '#8BB8EC',
+      backgroundImage: `
+        linear-gradient(#ffffff 1px, transparent 1px),
+        linear-gradient(90deg, #ffffff 1px, transparent 1px)
+      `,
+      backgroundSize: '20px 20px',
+      padding: '20px'
+    }}>
+      <div style={{
+        background: '#000000',
+        borderRadius: '16px',
+        padding: '60px 50px',
+        boxShadow: '0 10px 40px rgba(0,0,0,0.3)',
+        maxWidth: '600px',
+        width: '100%',
+        display: 'flex',
+        flexDirection: 'column',
+        alignItems: 'center',
+        gap: '40px'
+      }}>
+        <h1 style={{ 
+          background: 'linear-gradient(135deg, #E6E6FA 0%, #4A90E2 100%)',
+          WebkitBackgroundClip: 'text',
+          WebkitTextFillColor: 'transparent',
+          backgroundClip: 'text',
+          fontSize: '48px', 
+          margin: 0,
+          fontWeight: 'bold',
+          textAlign: 'center'
+        }}>
           Tutorial Clarity
         </h1>
-
-        {/* Black cartouche */}
-        <div
-          style={{
-            position: 'relative',
-            width: 'min(92vw, 680px)',
-            borderRadius: '16px',
-            background: 'rgba(0,0,0,0.95)',
-            padding: '24px',
-            boxShadow: '0 20px 40px rgba(0,0,0,0.4)',
-            outline: '1px solid rgba(255,255,255,0.08)',
-          }}
-        >
-          {/* Menu button inside cartouche (top-right) */}
-          <button
-            onClick={() => alert('Menu inside cartouche (hook up to your panel)')}
+        
+        <div style={{ 
+          display: 'flex', 
+          gap: '10px', 
+          width: '100%',
+          flexDirection: 'column'
+        }}>
+          <input
+            type="text"
+            placeholder="Paste YouTube URL here"
+            value={urlInput}
+            onChange={(e) => setUrlInput(e.target.value)}
+            onKeyDown={(e) => {
+              if (e.key === 'Enter') handleWatch();
+            }}
             style={{
-              position: 'absolute',
-              top: '12px',
-              right: '12px',
+              width: '100%',
+              padding: '15px',
+              fontSize: '16px',
               borderRadius: '8px',
-              background: '#2563EB',
-              color: 'white',
-              padding: '8px 14px',
-              boxShadow: '0 4px 10px rgba(0,0,0,0.35)',
+              border: '1px solid #384152',
+              background: '#1a1a1a',
+              color: '#fff',
+              boxSizing: 'border-box'
+            }}
+          />
+          <button
+            onClick={handleWatch}
+            style={{
+              width: '100%',
+              padding: '15px 30px',
+              fontSize: '16px',
+              fontWeight: 'bold',
+              borderRadius: '8px',
               border: 'none',
+              background: '#4A90E2',
+              color: 'white',
               cursor: 'pointer',
             }}
-            onMouseOver={(e) => (e.currentTarget.style.background = '#1D4ED8')}
-            onMouseOut={(e) => (e.currentTarget.style.background = '#2563EB')}
           >
-            Menu
+            Watch Enhanced
           </button>
-
-          {/* Inner content centered */}
-          <div
-            style={{
-              width: 'min(100%, 520px)',
-              margin: '32px auto 0',
-              display: 'flex',
-              flexDirection: 'column',
-            }}
-          >
-            <label
-              htmlFor="yt-url"
-              style={{
-                marginBottom: '8px',
-                fontSize: '14px',
-                fontWeight: 600,
-                color: 'rgba(255,255,255,0.85)',
-              }}
-            >
-              Paste YouTube URL here
-            </label>
-
-            <input
-              id="yt-url"
-              type="url"
-              placeholder="https://www.youtube.com/watch?v=..."
-              value={urlInput}
-              onChange={(e) => setUrlInput(e.target.value)}
-              onKeyDown={(e) => { if (e.key === 'Enter') handleWatch(); }}
-              style={{
-                marginBottom: '16px',
-                width: '100%',
-                borderRadius: '10px',
-                border: '1px solid rgba(255,255,255,0.15)',
-                background: '#111827',
-                color: 'white',
-                padding: '12px 14px',
-                outline: 'none',
-                boxShadow: 'inset 0 0 0 2px transparent',
-              }}
-              onFocus={(e) => (e.currentTarget.style.boxShadow = 'inset 0 0 0 2px #3B82F6')}
-              onBlur={(e) => (e.currentTarget.style.boxShadow = 'inset 0 0 0 2px transparent')}
-            />
-
-            <button
-              onClick={handleWatch}
-              style={{
-                width: '100%',
-                borderRadius: '10px',
-                background: '#2563EB',
-                color: 'white',
-                padding: '12px 16px',
-                fontSize: '18px',
-                fontWeight: 700,
-                border: 'none',
-                cursor: 'pointer',
-                boxShadow: '0 10px 20px rgba(0,0,0,0.35)',
-              }}
-              onMouseOver={(e) => (e.currentTarget.style.background = '#1D4ED8')}
-              onMouseOut={(e) => (e.currentTarget.style.background = '#2563EB')}
-            >
-              Watch Enhanced
-            </button>
-          </div>
         </div>
       </div>
     </div>
   );
+}
+
+function extractVideoId(url: string): string | null {
+  const trimmed = url.trim();
+  
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
+    return trimmed;
+  }
+  
+  try {
+    const urlObj = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`);
+    
+    if (urlObj.hostname === 'youtu.be') {
+      return urlObj.pathname.slice(1);
+    }
+    
+    if (urlObj.hostname.includes('youtube.com')) {
+      return urlObj.searchParams.get('v');
+    }
+  } catch {
+    return null;
+  }
+  
+  return null;
 }

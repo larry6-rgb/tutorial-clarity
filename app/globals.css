@@ -170,3 +170,12 @@ iframe {
   background-clip: text;
   -webkit-text-fill-color: transparent;
 }
+/* Temporary kill-switch for blue landing block */
+#landing-root,
+.landing-root,
+[data-landing-root],
+#blue-landing,
+.blue-landing {
+  background: transparent !important;
+  background-image: none !important;
+}

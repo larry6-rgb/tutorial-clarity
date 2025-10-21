@@ -1,89 +1,263 @@
 'use client';
 
-import { useRouter } from 'next/navigation';
-import { useEffect, useState, useCallback } from 'react';
+import { useSearchParams } from 'next/navigation';
+import { Suspense, useState, useEffect, useRef } from 'react';
 
-interface SurfedVideo {
-  id: string;
-  title: string;
-  thumbnail: string;
-  url: string;
-  savedAt: number;
-}
+function WatchPageContent() {
+  const searchParams = useSearchParams();
+  const url = searchParams.get('url');
+  const [menuOpen, setMenuOpen] = useState(false);
+  const [spacebarEnabled, setSpacebarEnabled] = useState(true);
+  const [showHelper, setShowHelper] = useState(true);
+  const playerRef = useRef<any>(null);
+  const playerReadyRef = useRef(false);
+  
+  if (!url) {
+    return <div style={{ padding: '20px', color: 'white' }}>No video URL provided</div>;
+  }
 
-const MAX_SURFED_VIDEOS = 25;
-const SURF_EXPIRY_DAYS = 7;
+  const videoId = extractVideoId(url);
+  
+  if (!videoId) {
+    return <div style={{ padding: '20px', color: 'white' }}>Invalid YouTube URL</div>;
+  }
 
-export default function HomePage() {
-  const router = useRouter();
-  const [isMenuOpen, setIsMenuOpen] = useState(false);
-  const [surfedVideos, setSurfedVideos] = useState<SurfedVideo[]>([]);
+  // Load YouTube IFrame API
+  useEffect(() => {
+    if ((window as any).YT && (window as any).YT.Player) {
+      initPlayer();
+      return;
+    }
 
-  const getSurfedVideos = useCallback((): SurfedVideo[] => {
-    if (typeof window === 'undefined') return [];
-    const stored = localStorage.getItem('tc_surf_shelf');
-    if (!stored) return [];
-    let videos: SurfedVideo[] = [];
-    try { videos = JSON.parse(stored); } catch { return []; }
-    const now = Date.now();
-    const cutoff = now - SURF_EXPIRY_DAYS * 24 * 60 * 60 * 1000;
-    videos = videos.filter(v => v.savedAt > cutoff).sort((a,b)=>b.savedAt-a.savedAt).slice(0, MAX_SURFED_VIDEOS);
-    localStorage.setItem('tc_surf_shelf', JSON.stringify(videos));
-    return videos;
-  }, []);
+    const tag = document.createElement('script');
+    tag.src = 'https://www.youtube.com/iframe_api';
+    const firstScriptTag = document.getElementsByTagName('script')[0];
+    firstScriptTag.parentNode?.insertBefore(tag, firstScriptTag);
 
-  useEffect(() => { setSurfedVideos(getSurfedVideos()); }, [getSurfedVideos]);
+    (window as any).onYouTubeIframeAPIReady = () => {
+      initPlayer();
+    };
+
+    function initPlayer() {
+      playerRef.current = new (window as any).YT.Player('youtube-player', {
+        videoId: videoId,
+        events: {
+          onReady: () => {
+            playerReadyRef.current = true;
+            console.log('Player ready');
+          }
+        }
+      });
+    }
+  }, [videoId]);
+
+  // Spacebar control
+  useEffect(() => {
+    const handleKeyPress = (e: KeyboardEvent) => {
+      if (e.code === 'Space' && spacebarEnabled && playerRef.current && playerReadyRef.current) {
+        e.preventDefault();
+        
+        try {
+          const state = playerRef.current.getPlayerState();
+          
+          if (state === 1) {
+            playerRef.current.pauseVideo();
+          } else {
+            playerRef.current.playVideo();
+          }
+        } catch (error) {
+          console.error('Error controlling player:', error);
+        }
+      }
+    };
+
+    window.addEventListener('keydown', handleKeyPress);
+    return () => window.removeEventListener('keydown', handleKeyPress);
+  }, [spacebarEnabled]);
 
   return (
-    <main className="relative flex h-screen w-full flex-col items-center justify-center bg-gray-900 text-white">
-      <h1 className="mb-6 text-4xl font-bold text-blue-400">Tutorial Clarity</h1>
-      <p className="mb-8 text-lg text-gray-300">Your enhanced YouTube experience.</p>
-
-      <div className="space-x-4">
-        <button
-          onClick={() => router.push('/watch')}
-          className="rounded bg-blue-600 px-6 py-3 text-lg text-white shadow-lg hover:bg-blue-700 transition-colors"
-        >
-          Open Watch Page
-        </button>
-      </div>
-
-      {/* Menu panel (Surf Shelf) */}
-      <div
-        className={`fixed top-16 right-4 z-50 w-80 max-h-[80vh] overflow-y-auto rounded-lg border border-blue-600 bg-gray-800 p-4 shadow-lg transition-opacity duration-200 ${
-          isMenuOpen ? 'opacity-100 visible' : 'opacity-0 invisible'
-        }`}
-      >
-        <h2 className="mb-3 text-lg font-semibold text-blue-400">🌊 Surf Shelf ({surfedVideos.length}/{MAX_SURFED_VIDEOS})</h2>
-        {surfedVideos.length === 0 ? (
-          <p className="text-sm text-gray-400">No videos surfed yet. Go to Watch to save.</p>
-        ) : (
-          <ul className="space-y-3">
-            {surfedVideos.map((v) => (
-              <li key={v.id} className="flex items-center space-x-3 rounded-md bg-gray-700 p-2">
-                <img src={v.thumbnail} alt={v.title} className="h-10 w-16 rounded-sm object-cover" />
-                <div className="flex-grow">
-                  <button
-                    onClick={() => router.push(`/watch?url=${encodeURIComponent(v.url)}`)}
-                    className="text-left text-sm text-blue-300 hover:text-blue-100 line-clamp-2"
-                    title={v.title}
-                  >
-                    {v.title}
-                  </button>
-                  <p className="text-xs text-gray-400">Saved: {new Date(v.savedAt).toLocaleDateString()}</p>
-                </div>
-              </li>
-            ))}
-          </ul>
-        )}
-      </div>
-
+    <div style={{ 
+      width: '100vw', 
+      height: '100vh', 
+      background: '#000',
+      position: 'relative'
+    }}>
+      {/* Menu Button */}
       <button
-        onClick={() => setIsMenuOpen(v => !v)}
-        className="fixed right-4 top-4 z-50 rounded bg-blue-600 px-4 py-2 text-white shadow-lg hover:bg-blue-700"
+        onClick={() => setMenuOpen(!menuOpen)}
+        style={{
+          position: 'absolute',
+          top: '20px',
+          right: '20px',
+          padding: '10px 20px',
+          background: '#4A90E2',
+          color: 'white',
+          border: 'none',
+          borderRadius: '8px',
+          fontSize: '16px',
+          fontWeight: 'bold',
+          cursor: 'pointer',
+          zIndex: 1000
+        }}
       >
         Menu
       </button>
-    </main>
+
+      {/* Menu Dropdown */}
+      {menuOpen && (
+        <div style={{
+          position: 'absolute',
+          top: '70px',
+          right: '20px',
+          background: '#1a1a1a',
+          border: '1px solid #384152',
+          borderRadius: '8px',
+          padding: '10px',
+          minWidth: '200px',
+          zIndex: 1000
+        }}>
+          <label style={{
+            display: 'flex',
+            alignItems: 'center',
+            gap: '10px',
+            color: 'white',
+            padding: '8px',
+            cursor: 'pointer'
+          }}>
+            <input
+              type="checkbox"
+              checked={spacebarEnabled}
+              onChange={(e) => setSpacebarEnabled(e.target.checked)}
+              style={{ cursor: 'pointer' }}
+            />
+            Spacebar Control
+          </label>
+        </div>
+      )}
+
+      {/* Overlay Helper Nudge */}
+      {showHelper && (
+        <div style={{
+          position: 'absolute',
+          bottom: '40px',
+          right: '40px',
+          background: '#4A90E2',
+          color: 'white',
+          padding: '15px 20px',
+          borderRadius: '12px',
+          boxShadow: '0 4px 12px rgba(0,0,0,0.5)',
+          zIndex: 999,
+          maxWidth: '280px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '10px'
+        }}>
+          <div style={{ fontSize: '14px', lineHeight: '1.4' }}>
+            <strong>Tip:</strong> Click the X button in the top-right corner of the video overlay to clear it
+          </div>
+          
+          {/* Arrow pointing up and to the left */}
+          <svg 
+            style={{
+              position: 'absolute',
+              top: '-60px',
+              right: '20px',
+              width: '60px',
+              height: '70px'
+            }}
+            viewBox="0 0 60 70"
+          >
+            <defs>
+              <marker
+                id="arrowhead"
+                markerWidth="10"
+                markerHeight="10"
+                refX="5"
+                refY="5"
+                orient="auto"
+              >
+                <polygon points="0 0, 10 5, 0 10" fill="#4A90E2" />
+              </marker>
+            </defs>
+            <path
+              d="M 30 70 Q 40 40, 50 10"
+              stroke="#4A90E2"
+              strokeWidth="3"
+              fill="none"
+              markerEnd="url(#arrowhead)"
+            />
+          </svg>
+          
+          <button
+            onClick={() => setShowHelper(false)}
+            style={{
+              alignSelf: 'flex-end',
+              background: 'transparent',
+              border: '1px solid white',
+              color: 'white',
+              padding: '5px 15px',
+              borderRadius: '6px',
+              fontSize: '12px',
+              cursor: 'pointer'
+            }}
+          >
+            Got it
+          </button>
+        </div>
+      )}
+
+      {/* Video Player */}
+      <div style={{
+        width: '100%',
+        height: '100%',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center'
+      }}>
+        <iframe
+          id="youtube-player"
+          width="1280"
+          height="720"
+          src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&rel=0&modestbranding=1&iv_load_policy=3`}
+          title="YouTube video player"
+          frameBorder="0"
+          allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+          allowFullScreen
+          style={{ maxWidth: '100%', maxHeight: '100%' }}
+        />
+      </div>
+    </div>
   );
+}
+
+export default function WatchPage() {
+  return (
+    <Suspense fallback={<div>Loading...</div>}>
+      <WatchPageContent />
+    </Suspense>
+  );
+}
+
+function extractVideoId(url: string): string | null {
+  const trimmed = url.trim();
+  
+  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
+    return trimmed;
+  }
+  
+  try {
+    const urlObj = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`);
+    
+    if (urlObj.hostname === 'youtu.be') {
+      return urlObj.pathname.slice(1);
+    }
+    
+    if (urlObj.hostname.includes('youtube.com')) {
+      return urlObj.searchParams.get('v');
+    }
+  } catch {
+    return null;
+  }
+  
+  return null;
 }
