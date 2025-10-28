@@ -3,131 +3,76 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 
-export default function HomePage() {
+export default function Home() {
+  const [url, setUrl] = useState('');
   const router = useRouter();
-  const [urlInput, setUrlInput] = useState('');
 
-  const handleWatch = () => {
-    if (!urlInput.trim()) {
-      alert('Please enter a YouTube URL');
-      return;
-    }
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
     
-    const videoId = extractVideoId(urlInput);
-    if (!videoId) {
-      alert('Please enter a valid YouTube URL');
-      return;
+    // Extract video ID from YouTube URL
+    let videoId = '';
+    try {
+      const urlObj = new URL(url);
+      if (urlObj.hostname.includes('youtube.com')) {
+        videoId = urlObj.searchParams.get('v') || '';
+      } else if (urlObj.hostname.includes('youtu.be')) {
+        videoId = urlObj.pathname.slice(1);
+      }
+    } catch {
+      // If URL parsing fails, assume it's just a video ID
+      videoId = url;
     }
-    
-    router.push(`/watch?url=https://www.youtube.com/watch?v=${videoId}`);
+
+    if (videoId) {
+      router.push(`/watch?url=${videoId}`);
+    }
   };
 
   return (
-    <div style={{ 
-      minHeight: '100vh', 
-      display: 'flex', 
-      alignItems: 'center', 
-      justifyContent: 'center',
-      background: '#8BB8EC',
-      backgroundImage: `
-        linear-gradient(#ffffff 1px, transparent 1px),
-        linear-gradient(90deg, #ffffff 1px, transparent 1px)
-      `,
-      backgroundSize: '20px 20px',
-      padding: '20px'
-    }}>
-      <div style={{
-        background: '#000000',
-        borderRadius: '16px',
-        padding: '60px 50px',
-        boxShadow: '0 10px 40px rgba(0,0,0,0.3)',
-        maxWidth: '600px',
-        width: '100%',
-        display: 'flex',
-        flexDirection: 'column',
-        alignItems: 'center',
-        gap: '40px'
-      }}>
-        <h1 style={{ 
-          background: 'linear-gradient(135deg, #E6E6FA 0%, #4A90E2 100%)',
-          WebkitBackgroundClip: 'text',
-          WebkitTextFillColor: 'transparent',
-          backgroundClip: 'text',
-          fontSize: '48px', 
-          margin: 0,
-          fontWeight: 'bold',
-          textAlign: 'center'
-        }}>
-          Tutorial Clarity
-        </h1>
-        
-        <div style={{ 
-          display: 'flex', 
-          gap: '10px', 
-          width: '100%',
-          flexDirection: 'column'
-        }}>
-          <input
-            type="text"
-            placeholder="Paste YouTube URL here"
-            value={urlInput}
-            onChange={(e) => setUrlInput(e.target.value)}
-            onKeyDown={(e) => {
-              if (e.key === 'Enter') handleWatch();
-            }}
-            style={{
-              width: '100%',
-              padding: '15px',
-              fontSize: '16px',
-              borderRadius: '8px',
-              border: '1px solid #384152',
-              background: '#1a1a1a',
-              color: '#fff',
-              boxSizing: 'border-box'
-            }}
-          />
-          <button
-            onClick={handleWatch}
-            style={{
-              width: '100%',
-              padding: '15px 30px',
-              fontSize: '16px',
-              fontWeight: 'bold',
-              borderRadius: '8px',
-              border: 'none',
-              background: '#4A90E2',
-              color: 'white',
-              cursor: 'pointer',
-            }}
+    <div className="min-h-screen bg-gradient-to-br from-blue-600 to-blue-800 relative overflow-hidden">
+      {/* White checkered pattern overlay */}
+      <div 
+        className="absolute inset-0 opacity-10"
+        style={{
+          backgroundImage: `
+            linear-gradient(45deg, white 25%, transparent 25%),
+            linear-gradient(-45deg, white 25%, transparent 25%),
+            linear-gradient(45deg, transparent 75%, white 75%),
+            linear-gradient(-45deg, transparent 75%, white 75%)
+          `,
+          backgroundSize: '40px 40px',
+          backgroundPosition: '0 0, 0 20px, 20px -20px, -20px 0px'
+        }}
+      />
+      
+      {/* Content */}
+      <div className="relative z-10 flex items-center justify-center min-h-screen p-4">
+        <div className="bg-black rounded-lg shadow-2xl p-8 w-full max-w-md">
+          <h1 
+            className="text-4xl font-bold text-center mb-8 bg-gradient-to-r from-purple-300 to-blue-400 bg-clip-text text-transparent"
           >
-            Watch Enhanced
-          </button>
+            Tutorial Clarity
+          </h1>
+          
+          <form onSubmit={handleSubmit} className="space-y-4">
+            <input
+              type="text"
+              value={url}
+              onChange={(e) => setUrl(e.target.value)}
+              placeholder="Paste YouTube URL"
+              className="w-full px-4 py-3 bg-gray-900 text-white border border-gray-700 rounded-lg focus:outline-none focus:border-blue-500 focus:ring-1 focus:ring-blue-500"
+            />
+            
+            <button
+              type="submit"
+              className="w-full px-4 py-3 bg-gradient-to-r from-purple-500 to-blue-500 text-white font-semibold rounded-lg hover:from-purple-600 hover:to-blue-600 transition-all duration-200 shadow-lg hover:shadow-xl"
+            >
+              Watch Enhanced
+            </button>
+          </form>
         </div>
       </div>
     </div>
   );
-}
-
-function extractVideoId(url: string): string | null {
-  const trimmed = url.trim();
-  
-  if (/^[a-zA-Z0-9_-]{11}$/.test(trimmed)) {
-    return trimmed;
-  }
-  
-  try {
-    const urlObj = new URL(trimmed.startsWith('http') ? trimmed : `https://${trimmed}`);
-    
-    if (urlObj.hostname === 'youtu.be') {
-      return urlObj.pathname.slice(1);
-    }
-    
-    if (urlObj.hostname.includes('youtube.com')) {
-      return urlObj.searchParams.get('v');
-    }
-  } catch {
-    return null;
-  }
-  
-  return null;
 }
