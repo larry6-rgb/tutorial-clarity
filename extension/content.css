@@ -1,0 +1,59 @@
+/* Floating Icon */
+#tutorial-clarity-icon {
+  position: fixed;
+  bottom: 20px;
+  right: 20px;
+  width: 60px;
+  height: 60px;
+  background: #ff0000;
+  border-radius: 50%;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  cursor: pointer;
+  z-index: 10000;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  transition: transform 0.2s, box-shadow 0.2s;
+}
+
+#tutorial-clarity-icon:hover {
+  transform: scale(1.1);
+  box-shadow: 0 6px 16px rgba(0, 0, 0, 0.4);
+}
+
+#tutorial-clarity-icon img {
+  width: 48px;
+  height: 48px;
+}
+
+/* Notification */
+.tutorial-clarity-notification {
+  position: fixed;
+  top: 80px;
+  right: 20px;
+  background: #4caf50;
+  color: white;
+  padding: 16px 24px;
+  border-radius: 8px;
+  box-shadow: 0 4px 12px rgba(0, 0, 0, 0.3);
+  z-index: 10001;
+  font-family: Arial, sans-serif;
+  font-size: 14px;
+  font-weight: 500;
+  opacity: 0;
+  transform: translateX(400px);
+  transition: all 0.3s ease;
+}
+
+.tutorial-clarity-notification.show {
+  opacity: 1;
+  transform: translateX(0);
+}
+
+.tutorial-clarity-notification.error {
+  background: #f44336;
+}
+
+.tutorial-clarity-notification.info {
+  background: #2196f3;
+}

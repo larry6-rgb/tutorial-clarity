@@ -116,7 +116,7 @@ When the video finishes, or if the user chooses, AI will review the video and co
 
 17\. TRANSCRIPT.
 
-A complete written transcript of everything said in the video shall be created automatically through speech‑to‑text processing. Each segment will be time‑stamped, and users can scroll, search, or click within the transcript to jump to that exact point in the video. The transcript will also support highlighting and linking into the DEFINITION, CLEAR AUDIO, and TRANSLATION 
+A complete written transcript of everything said in the video shall be created automatically through speech‑to‑text processing. Each segment will be time‑stamped, and users can scroll, search, or click within the transcript to jump to that exact point in the video. The transcript will also support highlighting and linking into the DEFINITION, CLEAR AUDIO, and TRANSLATION
 
 
 
@@ -124,7 +124,31 @@ A complete written transcript of everything said in the video shall be created a
 
 
 
-19.FOREIGN CONTENT. Not all videos on YouTube are in English. This app should have the ability to intercept the foreign content and AI will translate it into clear English for the user. 
+19.FOREIGN CONTENT. Not all videos on YouTube are in English. This app should have the ability to intercept the foreign content and AI will translate it into clear English for the user.
 
-&nbsp;
+ 
+
+
+
+
+
+Directives for AI coding. 
+
+
+
+I know nothing about coding. So when you write new code to solve the problem that we're working on, only present me with full page file replacements that I can copy and paste into Windows 11. 
+
+Do not provide me with snippets or portions and ask me to locate where to insert them within the code. 
+
+I have a limited knowledge of computer functions, so you will need to guide me step-by-step through any procedures that we need to implement. 
+
+Whenever we develop the app to a stage where all functions are working properly and we push it to GIT, create a reference point in your branch that we can fall back on if we start having difficulties in the future. 
+
+Always start from a good known code and only modify those sections of code that pertain to the specific problem that we are attempting to address. Do not enter any changes into the code that will modify the basic functionality of the already fully functional code.
+
+If you enter a modification to the code and it does not solve the problem, go back to the basic code and enter another modification. Do not attempt to modify the modifications because that just gets very messy.
+
+I do not need to see any of the thinking process or explanations of why you are doing something a particular way only confuse me.
+
+
 
