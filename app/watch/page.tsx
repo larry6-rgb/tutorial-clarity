@@ -307,7 +307,11 @@ function WatchPageContent() {
   };
 
   const handleDeleteVideo = (videoId: string) => {
-    setSavedVideos(prev => prev.filter(v => v.id !== videoId));
+    setSavedVideos(prev => {
+      const updated = prev.filter(v => v.id !== videoId);
+      localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(updated));
+      return updated;
+    });
   };
 
   const handleTogglePersistent = (videoId: string) => {
@@ -317,7 +321,8 @@ function WatchPageContent() {
   };
 
   const handleLoadVideo = (videoId: string) => {
-    router.push(`/watch?url=${videoId}`);
+    setMenuOpen(false);
+    window.location.href = `/watch?url=${videoId}`;
   };
 
   const formatDate = (dateString: string) => {
