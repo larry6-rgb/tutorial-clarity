@@ -1,4 +1,5 @@
-'use client';
+# Create the page.tsx file content
+code_content = """'use client';
 
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
@@ -11,12 +12,19 @@ interface SavedVideo {
   isPersistent: boolean;
 }
 
+interface TranscriptSegment {
+  start: number;
+  duration: number;
+  text: string;
+}
+
 function WatchPageContent() {
   const searchParams = useSearchParams();
   const router = useRouter();
   const videoId = searchParams.get('url');
   const iframeRef = useRef<HTMLIFrameElement>(null);
   const containerRef = useRef<HTMLDivElement>(null);
+  const transcriptRef = useRef<HTMLDivElement>(null);
   const [showNudge, setShowNudge] = useState(false);
   const [menuOpen, setMenuOpen] = useState(false);
   const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
@@ -28,9 +36,14 @@ function WatchPageContent() {
   const [duration, setDuration] = useState(0);
   const [savedVideos, setSavedVideos] = useState<SavedVideo[]>([]);
   const [newVideoUrl, setNewVideoUrl] = useState('');
+  const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
+  const [transcriptLoading, setTranscriptLoading] = useState(false);
+  const [transcriptError, setTranscriptError] = useState('');
+  const [transcriptOpacity, setTranscriptOpacity] = useState(90);
+  const [transcriptHeight, setTranscriptHeight] = useState(54);
+  const [isResizingTranscript, setIsResizingTranscript] = useState(false);
   const firstPauseRef = useRef(false);
   const nudgeDismissedRef = useRef(false);
-
   const nudgeTimerRef = useRef<NodeJS.Timeout | null>(null);
 
   // Load saved videos from localStorage
@@ -38,7 +51,6 @@ function WatchPageContent() {
     const stored = localStorage.getItem('tutorialClaritySavedVideos');
     if (stored) {
       const videos: SavedVideo[] = JSON.parse(stored);
-      // Clean up videos older than 7 days (unless persistent)
       const sevenDaysAgo = new Date();
       sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
       
@@ -54,6 +66,50 @@ function WatchPageContent() {
       }
     }
   }, []);
+
+  // Fetch transcript when video loads
+  useEffect(() => {
+    if (!videoId) return;
+    
+    const fetchTranscript = async () => {
+      setTranscriptLoading(true);
+      setTranscriptError('');
+      
+      try {
+        const response = await fetch(`/api/transcript?videoId=${videoId}`);
+        const data = await response.json();
+        
+        if (response.ok) {
+          setTranscript(data.transcript);
+        } else {
+          setTranscriptError(data.error || 'Failed to load transcript');
+        }
+      } catch (error) {
+        setTranscriptError('Failed to load transcript');
+      } finally {
+        setTranscriptLoading(false);
+      }
+    };
+    
+    fetchTranscript();
+  }, [videoId]);
+
+  // Auto-scroll transcript to current time
+  useEffect(() => {
+    if (!transcriptRef.current || transcript.length === 0 || !expandedSections.has('scroll')) return;
+    
+    const currentSegmentIndex = transcript.findIndex((seg, idx) => {
+      const nextSeg = transcript[idx + 1];
+      return currentTime >= seg.start && (!nextSeg || currentTime < nextSeg.start);
+    });
+    
+    if (currentSegmentIndex >= 0) {
+      const segmentElement = transcriptRef.current.querySelector(`[data-index="${currentSegmentIndex}"]`);
+      if (segmentElement) {
+        segmentElement.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
+      }
+    }
+  }, [currentTime, transcript, expandedSections]);
 
   // Save videos to localStorage whenever they change
   useEffect(() => {
@@ -132,6 +188,7 @@ function WatchPageContent() {
     return () => clearInterval(interval);
   }, []);
 
+  // Spacebar handler
   useEffect(() => {
     const handleKeyPress = (e: KeyboardEvent) => {
       if (e.code === 'Space') {
@@ -140,7 +197,6 @@ function WatchPageContent() {
 
         if (iframeRef.current?.contentWindow) {
           if (isPlaying) {
-            console.log('Pausing video');
             iframeRef.current.contentWindow.postMessage(
               JSON.stringify({
                 event: 'command',
@@ -151,13 +207,11 @@ function WatchPageContent() {
             );
             setIsPlaying(false);
 
-            // Show nudge only on first pause and if not previously dismissed
             if (!firstPauseRef.current && !nudgeDismissedRef.current) {
               firstPauseRef.current = true;
               setShowNudge(true);
             }
           } else {
-            console.log('Playing video');
             iframeRef.current.contentWindow.postMessage(
               JSON.stringify({
                 event: 'command',
@@ -177,6 +231,31 @@ function WatchPageContent() {
       window.removeEventListener('keydown', handleKeyPress, true);
     };
   }, [isPlaying]);
+
+  // Transcript resize handler
+  useEffect(() => {
+    const handleMouseMove = (e: MouseEvent) => {
+      if (isResizingTranscript) {
+        const windowHeight = window.innerHeight;
+        const newHeight = windowHeight - e.clientY;
+        setTranscriptHeight(Math.max(54, Math.min(400, newHeight)));
+      }
+    };
+
+    const handleMouseUp = () => {
+      setIsResizingTranscript(false);
+    };
+
+    if (isResizingTranscript) {
+      window.addEventListener('mousemove', handleMouseMove);
+      window.addEventListener('mouseup', handleMouseUp);
+    }
+
+    return () => {
+      window.removeEventListener('mousemove', handleMouseMove);
+      window.removeEventListener('mouseup', handleMouseUp);
+    };
+  }, [isResizingTranscript]);
 
   const toggleSection = (section: string) => {
     setExpandedSections(prev => {
@@ -241,9 +320,18 @@ function WatchPageContent() {
     }
   };
 
+  const handleTranscriptClick = (startTime: number) => {
+    if (iframeRef.current?.contentWindow) {
+      iframeRef.current.contentWindow.postMessage(
+        JSON.stringify({ event: 'command', func: 'seekTo', args: [startTime, true] }),
+        '*'
+      );
+    }
+  };
+
   const extractVideoId = (url: string): string | null => {
     const patterns = [
-      /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\s]+)/,
+      /(?:youtube\\.com\\/watch\\?v=|youtu\\.be\\/)([^&\\s]+)/,
       /^([a-zA-Z0-9_-]{11})$/
     ];
     
@@ -256,7 +344,6 @@ function WatchPageContent() {
 
   const fetchVideoTitle = async (videoId: string): Promise<string> => {
     try {
-      // Using oEmbed API to get video title
       const response = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
       const data = await response.json();
       return data.title || 'Unknown Title';
@@ -275,7 +362,6 @@ function WatchPageContent() {
       return;
     }
 
-    // Check if already saved
     if (savedVideos.some(v => v.id === videoId)) {
       alert('This video is already saved!');
       setNewVideoUrl('');
@@ -292,7 +378,6 @@ function WatchPageContent() {
       isPersistent: false
     };
 
-    // If we have 20 non-persistent videos, remove the oldest non-persistent one
     const nonPersistent = savedVideos.filter(v => !v.isPersistent);
     if (nonPersistent.length >= 20) {
       const oldestNonPersistent = nonPersistent.sort((a, b) => 
@@ -338,6 +423,10 @@ function WatchPageContent() {
 
   const timeRemaining = duration - currentTime;
   const progressPercentage = duration > 0 ? (currentTime / duration) * 100 : 0;
+  const fontSize = Math.max(14, Math.min(20, transcriptHeight / 3));
+
+  // Show transcript bar when scroll section is expanded
+  const showTranscriptBar = expandedSections.has('scroll');
 
   if (!videoId) {
     return (
@@ -374,6 +463,62 @@ function WatchPageContent() {
             allowFullScreen
           />
         </div>
+
+        {/* Transcript Bar - Full Width at Bottom */}
+        {showTranscriptBar && (
+          <div
+            style={{
+              position: 'fixed',
+              bottom: 0,
+              left: 0,
+              right: 0,
+              height: `${transcriptHeight}px`,
+              backgroundColor: `rgba(0, 0, 0, ${transcriptOpacity / 100})`,
+              zIndex: 50
+            }}
+            className="border-t-4 border-blue-500 flex flex-col"
+          >
+            {/* Resize Handle */}
+            <div
+              className="w-full h-2 bg-blue-600 cursor-ns-resize hover:bg-blue-400 transition-colors"
+              onMouseDown={() => setIsResizingTranscript(true)}
+              title="Drag to resize"
+            />
+
+            {/* Transcript Content */}
+            <div
+              ref={transcriptRef}
+              className="flex-1 overflow-x-auto overflow-y-hidden px-4 text-white flex items-center whitespace-nowrap"
+              style={{ fontSize: `${fontSize}px` }}
+            >
+              {transcriptLoading && (
+                <span className="text-gray-400">⏳ Loading transcript...</span>
+              )}
+              {!transcriptLoading && transcript.length === 0 && (
+                <span className="text-gray-400">
+                  {transcriptError || 'No transcript available for this video'}
+                </span>
+              )}
+              {!transcriptLoading && transcript.length > 0 && transcript.map((segment, idx) => {
+                const isActive = currentTime >= segment.start && 
+                  (idx === transcript.length - 1 || currentTime < transcript[idx + 1].start);
+                
+                return (
+                  <span
+                    key={idx}
+                    data-index={idx}
+                    onClick={() => handleTranscriptClick(segment.start)}
+                    className={`cursor-pointer hover:text-blue-300 px-1 transition-colors ${
+                      isActive ? 'bg-blue-600 text-white font-bold' : ''
+                    }`}
+                  >
+                    {segment.text}
+                  </span>
+                );
+              })}
+            </div>
+          </div>
+        )}
 
         {/* Custom Progress Bar */}
         <div className="bg-gray-900 px-4 py-2">
@@ -496,7 +641,6 @@ function WatchPageContent() {
               </h3>
               {expandedSections.has('saved') && (
                 <div className="mt-2">
-                  {/* Add Video Input */}
                   <div className="mb-4">
                     <label className="block text-sm font-medium text-gray-700 mb-2">
                       Add YouTube Video
@@ -519,7 +663,6 @@ function WatchPageContent() {
                     </div>
                   </div>
 
-                  {/* Saved Videos List */}
                   <div className="space-y-2 max-h-96 overflow-y-auto">
                     {savedVideos.length === 0 ? (
                       <p className="text-sm text-gray-500 text-center py-4">
@@ -576,6 +719,44 @@ function WatchPageContent() {
                 </div>
               )}
             </div>
+
+            {/* 5. SCROLL */}
+            <div className="mb-4">
+              <h3 
+                onClick={() => toggleSection('scroll')}
+                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
+              >
+                5. SCROLL {expandedSections.has('scroll') ? '▼' : '▶'}
+              </h3>
+              {expandedSections.has('scroll') && (
+                <div className="mt-2">
+                  {/* Transparency Control */}
+                  <div className="mb-4">
+                    <label className="block text-sm font-medium text-gray-700 mb-2">
+                      Transparency: {transcriptOpacity}%
+                    </label>
+                    <input
+                      type="range"
+                      min="10"
+                      max="100"
+                      value={transcriptOpacity}
+                      onChange={(e) => setTranscriptOpacity(Number(e.target.value))}
+                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                    />
+                  </div>
+
+                  <div className="text-xs text-gray-600 space-y-1">
+                    <p>• Transcript bar appears at bottom of screen</p>
+                    <p>• Drag blue top edge to resize height</p>
+                    <p>• Click any word to jump to that time</p>
+                    <p>• Current word is highlighted in blue</p>
+                    <p>• Adjust transparency to see video behind text</p>
+                    {transcriptLoading && <p className="text-blue-600">⏳ Loading transcript...</p>}
+                    {transcriptError && <p className="text-red-600">❌ {transcriptError}</p>}
+                  </div>
+                </div>
+              )}
+            </div>
           </div>
         )}
       </div>
@@ -590,3 +771,11 @@ export default function WatchPage() {
     </Suspense>
   );
 }
+"""
+
+# Save to file
+with open('/tmp/page.tsx', 'w', encoding='utf-8') as f:
+    f.write(code_content)
+
+print("✅ File created: page.tsx")
+print("📁 Download this file and replace your app/watch/page.tsx with it")
