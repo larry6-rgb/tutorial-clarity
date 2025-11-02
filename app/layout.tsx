@@ -1,30 +1,19 @@
-import type { Metadata } from "next";
-import { Inter } from "next/font/google";
-import "./globals.css";
-
-const inter = Inter({
-  subsets: ["latin"],
-  variable: "--font-inter",
-});
+import type { Metadata } from 'next';
+import './globals.css';
 
 export const metadata: Metadata = {
-  title: "Tutorial Clarity",
-  description: "Enhanced YouTube tutorial viewing experience",
+  title: 'Tutorial Clarity',
+  description: 'Enhanced YouTube video learning experience',
 };
 
 export default function RootLayout({
   children,
-}: Readonly<{
+}: {
   children: React.ReactNode;
-}>) {
+}) {
   return (
     <html lang="en">
-      <body
-        className={`${inter.variable} antialiased`}
-        style={{ background: '#0b0f19' }}
-      >
-        {children}
-      </body>
+      <body>{children}</body>
     </html>
   );
 }

@@ -113,7 +113,3 @@ iframe[src*="youtube.com"] {
   height: 100%;
 }
 
-/* kill-switch */
-.min-h-screen.bg-gradient-to-br {
-  background: transparent !important;
-}

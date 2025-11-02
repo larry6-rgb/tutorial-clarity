@@ -1,781 +1,1 @@
-# Create the page.tsx file content
-code_content = """'use client';
-
-import { useSearchParams, useRouter } from 'next/navigation';
-import { Suspense, useEffect, useRef, useState } from 'react';
-
-interface SavedVideo {
-  id: string;
-  url: string;
-  title: string;
-  dateSaved: string;
-  isPersistent: boolean;
-}
-
-interface TranscriptSegment {
-  start: number;
-  duration: number;
-  text: string;
-}
-
-function WatchPageContent() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const videoId = searchParams.get('url');
-  const iframeRef = useRef<HTMLIFrameElement>(null);
-  const containerRef = useRef<HTMLDivElement>(null);
-  const transcriptRef = useRef<HTMLDivElement>(null);
-  const [showNudge, setShowNudge] = useState(false);
-  const [menuOpen, setMenuOpen] = useState(false);
-  const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
-  const [volume, setVolume] = useState(100);
-  const [isMuted, setIsMuted] = useState(false);
-  const [isPlaying, setIsPlaying] = useState(true);
-  const [playbackSpeed, setPlaybackSpeed] = useState(1);
-  const [currentTime, setCurrentTime] = useState(0);
-  const [duration, setDuration] = useState(0);
-  const [savedVideos, setSavedVideos] = useState<SavedVideo[]>([]);
-  const [newVideoUrl, setNewVideoUrl] = useState('');
-  const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
-  const [transcriptLoading, setTranscriptLoading] = useState(false);
-  const [transcriptError, setTranscriptError] = useState('');
-  const [transcriptOpacity, setTranscriptOpacity] = useState(90);
-  const [transcriptHeight, setTranscriptHeight] = useState(54);
-  const [isResizingTranscript, setIsResizingTranscript] = useState(false);
-  const firstPauseRef = useRef(false);
-  const nudgeDismissedRef = useRef(false);
-  const nudgeTimerRef = useRef<NodeJS.Timeout | null>(null);
-
-  // Load saved videos from localStorage
-  useEffect(() => {
-    const stored = localStorage.getItem('tutorialClaritySavedVideos');
-    if (stored) {
-      const videos: SavedVideo[] = JSON.parse(stored);
-      const sevenDaysAgo = new Date();
-      sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
-      
-      const filtered = videos.filter(video => {
-        if (video.isPersistent) return true;
-        const savedDate = new Date(video.dateSaved);
-        return savedDate > sevenDaysAgo;
-      });
-      
-      setSavedVideos(filtered);
-      if (filtered.length !== videos.length) {
-        localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(filtered));
-      }
-    }
-  }, []);
-
-  // Fetch transcript when video loads
-  useEffect(() => {
-    if (!videoId) return;
-    
-    const fetchTranscript = async () => {
-      setTranscriptLoading(true);
-      setTranscriptError('');
-      
-      try {
-        const response = await fetch(`/api/transcript?videoId=${videoId}`);
-        const data = await response.json();
-        
-        if (response.ok) {
-          setTranscript(data.transcript);
-        } else {
-          setTranscriptError(data.error || 'Failed to load transcript');
-        }
-      } catch (error) {
-        setTranscriptError('Failed to load transcript');
-      } finally {
-        setTranscriptLoading(false);
-      }
-    };
-    
-    fetchTranscript();
-  }, [videoId]);
-
-  // Auto-scroll transcript to current time
-  useEffect(() => {
-    if (!transcriptRef.current || transcript.length === 0 || !expandedSections.has('scroll')) return;
-    
-    const currentSegmentIndex = transcript.findIndex((seg, idx) => {
-      const nextSeg = transcript[idx + 1];
-      return currentTime >= seg.start && (!nextSeg || currentTime < nextSeg.start);
-    });
-    
-    if (currentSegmentIndex >= 0) {
-      const segmentElement = transcriptRef.current.querySelector(`[data-index="${currentSegmentIndex}"]`);
-      if (segmentElement) {
-        segmentElement.scrollIntoView({ behavior: 'smooth', block: 'center', inline: 'center' });
-      }
-    }
-  }, [currentTime, transcript, expandedSections]);
-
-  // Save videos to localStorage whenever they change
-  useEffect(() => {
-    if (savedVideos.length > 0) {
-      localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(savedVideos));
-    }
-  }, [savedVideos]);
-
-  // Auto-hide nudge after 5 seconds
-  useEffect(() => {
-    if (showNudge) {
-      nudgeTimerRef.current = setTimeout(() => {
-        setShowNudge(false);
-        nudgeDismissedRef.current = true;
-      }, 5000);
-    }
-
-    return () => {
-      if (nudgeTimerRef.current) {
-        clearTimeout(nudgeTimerRef.current);
-        nudgeTimerRef.current = null;
-      }
-    };
-  }, [showNudge]);
-
-  // Keep focus on container to capture spacebar
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (containerRef.current && document.activeElement !== containerRef.current) {
-        containerRef.current.focus();
-      }
-    }, 100);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // Listen for YouTube player state updates
-  useEffect(() => {
-    const handleMessage = (event: MessageEvent) => {
-      if (event.origin !== 'https://www.youtube.com') return;
-      
-      try {
-        const data = JSON.parse(event.data);
-        if (data.event === 'infoDelivery' && data.info) {
-          if (data.info.currentTime !== undefined) {
-            setCurrentTime(data.info.currentTime);
-          }
-          if (data.info.duration !== undefined) {
-            setDuration(data.info.duration);
-          }
-        }
-      } catch (e) {
-        // Ignore parsing errors
-      }
-    };
-
-    window.addEventListener('message', handleMessage);
-    return () => window.removeEventListener('message', handleMessage);
-  }, []);
-
-  // Request player info periodically
-  useEffect(() => {
-    const interval = setInterval(() => {
-      if (iframeRef.current?.contentWindow) {
-        iframeRef.current.contentWindow.postMessage(
-          JSON.stringify({
-            event: 'listening',
-            id: 1,
-            channel: 'widget'
-          }),
-          '*'
-        );
-      }
-    }, 1000);
-
-    return () => clearInterval(interval);
-  }, []);
-
-  // Spacebar handler
-  useEffect(() => {
-    const handleKeyPress = (e: KeyboardEvent) => {
-      if (e.code === 'Space') {
-        e.preventDefault();
-        e.stopPropagation();
-
-        if (iframeRef.current?.contentWindow) {
-          if (isPlaying) {
-            iframeRef.current.contentWindow.postMessage(
-              JSON.stringify({
-                event: 'command',
-                func: 'pauseVideo',
-                args: []
-              }),
-              '*'
-            );
-            setIsPlaying(false);
-
-            if (!firstPauseRef.current && !nudgeDismissedRef.current) {
-              firstPauseRef.current = true;
-              setShowNudge(true);
-            }
-          } else {
-            iframeRef.current.contentWindow.postMessage(
-              JSON.stringify({
-                event: 'command',
-                func: 'playVideo',
-                args: []
-              }),
-              '*'
-            );
-            setIsPlaying(true);
-          }
-        }
-      }
-    };
-
-    window.addEventListener('keydown', handleKeyPress, true);
-    return () => {
-      window.removeEventListener('keydown', handleKeyPress, true);
-    };
-  }, [isPlaying]);
-
-  // Transcript resize handler
-  useEffect(() => {
-    const handleMouseMove = (e: MouseEvent) => {
-      if (isResizingTranscript) {
-        const windowHeight = window.innerHeight;
-        const newHeight = windowHeight - e.clientY;
-        setTranscriptHeight(Math.max(54, Math.min(400, newHeight)));
-      }
-    };
-
-    const handleMouseUp = () => {
-      setIsResizingTranscript(false);
-    };
-
-    if (isResizingTranscript) {
-      window.addEventListener('mousemove', handleMouseMove);
-      window.addEventListener('mouseup', handleMouseUp);
-    }
-
-    return () => {
-      window.removeEventListener('mousemove', handleMouseMove);
-      window.removeEventListener('mouseup', handleMouseUp);
-    };
-  }, [isResizingTranscript]);
-
-  const toggleSection = (section: string) => {
-    setExpandedSections(prev => {
-      const newSet = new Set(prev);
-      if (newSet.has(section)) {
-        newSet.delete(section);
-      } else {
-        newSet.add(section);
-      }
-      return newSet;
-    });
-  };
-
-  const toggleMute = () => {
-    if (iframeRef.current?.contentWindow) {
-      if (isMuted) {
-        iframeRef.current.contentWindow.postMessage(
-          JSON.stringify({ event: 'command', func: 'unMute', args: [] }),
-          '*'
-        );
-      } else {
-        iframeRef.current.contentWindow.postMessage(
-          JSON.stringify({ event: 'command', func: 'mute', args: [] }),
-          '*'
-        );
-      }
-      setIsMuted(!isMuted);
-    }
-  };
-
-  const handleVolumeChange = (newVolume: number) => {
-    setVolume(newVolume);
-    if (iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage(
-        JSON.stringify({ event: 'command', func: 'setVolume', args: [newVolume] }),
-        '*'
-      );
-    }
-  };
-
-  const handlePlaybackSpeedChange = (speed: number) => {
-    setPlaybackSpeed(speed);
-    if (iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage(
-        JSON.stringify({ event: 'command', func: 'setPlaybackRate', args: [speed] }),
-        '*'
-      );
-    }
-  };
-
-  const handleProgressBarClick = (e: React.MouseEvent<HTMLDivElement>) => {
-    const rect = e.currentTarget.getBoundingClientRect();
-    const clickX = e.clientX - rect.left;
-    const percentage = clickX / rect.width;
-    const newTime = percentage * duration;
-    
-    if (iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage(
-        JSON.stringify({ event: 'command', func: 'seekTo', args: [newTime, true] }),
-        '*'
-      );
-    }
-  };
-
-  const handleTranscriptClick = (startTime: number) => {
-    if (iframeRef.current?.contentWindow) {
-      iframeRef.current.contentWindow.postMessage(
-        JSON.stringify({ event: 'command', func: 'seekTo', args: [startTime, true] }),
-        '*'
-      );
-    }
-  };
-
-  const extractVideoId = (url: string): string | null => {
-    const patterns = [
-      /(?:youtube\\.com\\/watch\\?v=|youtu\\.be\\/)([^&\\s]+)/,
-      /^([a-zA-Z0-9_-]{11})$/
-    ];
-    
-    for (const pattern of patterns) {
-      const match = url.match(pattern);
-      if (match) return match[1];
-    }
-    return null;
-  };
-
-  const fetchVideoTitle = async (videoId: string): Promise<string> => {
-    try {
-      const response = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
-      const data = await response.json();
-      return data.title || 'Unknown Title';
-    } catch (error) {
-      console.error('Error fetching video title:', error);
-      return 'Unknown Title';
-    }
-  };
-
-  const handleAddVideo = async () => {
-    if (!newVideoUrl.trim()) return;
-    
-    const videoId = extractVideoId(newVideoUrl);
-    if (!videoId) {
-      alert('Invalid YouTube URL. Please enter a valid YouTube video URL or ID.');
-      return;
-    }
-
-    if (savedVideos.some(v => v.id === videoId)) {
-      alert('This video is already saved!');
-      setNewVideoUrl('');
-      return;
-    }
-
-    const title = await fetchVideoTitle(videoId);
-    
-    const newVideo: SavedVideo = {
-      id: videoId,
-      url: `https://www.youtube.com/watch?v=${videoId}`,
-      title,
-      dateSaved: new Date().toISOString(),
-      isPersistent: false
-    };
-
-    const nonPersistent = savedVideos.filter(v => !v.isPersistent);
-    if (nonPersistent.length >= 20) {
-      const oldestNonPersistent = nonPersistent.sort((a, b) => 
-        new Date(a.dateSaved).getTime() - new Date(b.dateSaved).getTime()
-      )[0];
-      setSavedVideos(prev => [...prev.filter(v => v.id !== oldestNonPersistent.id), newVideo]);
-    } else {
-      setSavedVideos(prev => [...prev, newVideo]);
-    }
-
-    setNewVideoUrl('');
-  };
-
-  const handleDeleteVideo = (videoId: string) => {
-    setSavedVideos(prev => {
-      const updated = prev.filter(v => v.id !== videoId);
-      localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(updated));
-      return updated;
-    });
-  };
-
-  const handleTogglePersistent = (videoId: string) => {
-    setSavedVideos(prev => prev.map(v => 
-      v.id === videoId ? { ...v, isPersistent: !v.isPersistent } : v
-    ));
-  };
-
-  const handleLoadVideo = (videoId: string) => {
-    setMenuOpen(false);
-    window.location.href = `/watch?url=${videoId}`;
-  };
-
-  const formatDate = (dateString: string) => {
-    const date = new Date(dateString);
-    return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
-  };
-
-  const formatTime = (seconds: number) => {
-    const mins = Math.floor(seconds / 60);
-    const secs = Math.floor(seconds % 60);
-    return `${mins}:${secs.toString().padStart(2, '0')}`;
-  };
-
-  const timeRemaining = duration - currentTime;
-  const progressPercentage = duration > 0 ? (currentTime / duration) * 100 : 0;
-  const fontSize = Math.max(14, Math.min(20, transcriptHeight / 3));
-
-  // Show transcript bar when scroll section is expanded
-  const showTranscriptBar = expandedSections.has('scroll');
-
-  if (!videoId) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-gray-100">
-        <p className="text-xl text-gray-600">No YouTube URL selected yet</p>
-      </div>
-    );
-  }
-
-  return (
-    <div className="flex w-full h-screen bg-black">
-      {/* Video Section */}
-      <div 
-        ref={containerRef}
-        tabIndex={0}
-        className="relative flex-1 outline-none flex flex-col"
-      >
-        {/* Pink Nudge */}
-        {showNudge && (
-          <div className="absolute bottom-20 right-4 z-40 bg-pink-500 text-white px-4 py-3 rounded-lg shadow-2xl max-w-xs">
-            <p className="text-sm font-semibold">
-              ⚠️ Be sure to click the X within the overlay to ensure it does not reappear when using the spacebar.
-            </p>
-          </div>
-        )}
-
-        {/* YouTube iframe */}
-        <div className="flex-1">
-          <iframe
-            ref={iframeRef}
-            className="w-full h-full pointer-events-auto"
-            src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&disablekb=1&controls=0`}
-            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-            allowFullScreen
-          />
-        </div>
-
-        {/* Transcript Bar - Full Width at Bottom */}
-        {showTranscriptBar && (
-          <div
-            style={{
-              position: 'fixed',
-              bottom: 0,
-              left: 0,
-              right: 0,
-              height: `${transcriptHeight}px`,
-              backgroundColor: `rgba(0, 0, 0, ${transcriptOpacity / 100})`,
-              zIndex: 50
-            }}
-            className="border-t-4 border-blue-500 flex flex-col"
-          >
-            {/* Resize Handle */}
-            <div
-              className="w-full h-2 bg-blue-600 cursor-ns-resize hover:bg-blue-400 transition-colors"
-              onMouseDown={() => setIsResizingTranscript(true)}
-              title="Drag to resize"
-            />
-
-            {/* Transcript Content */}
-            <div
-              ref={transcriptRef}
-              className="flex-1 overflow-x-auto overflow-y-hidden px-4 text-white flex items-center whitespace-nowrap"
-              style={{ fontSize: `${fontSize}px` }}
-            >
-              {transcriptLoading && (
-                <span className="text-gray-400">⏳ Loading transcript...</span>
-              )}
-              {!transcriptLoading && transcript.length === 0 && (
-                <span className="text-gray-400">
-                  {transcriptError || 'No transcript available for this video'}
-                </span>
-              )}
-              {!transcriptLoading && transcript.length > 0 && transcript.map((segment, idx) => {
-                const isActive = currentTime >= segment.start && 
-                  (idx === transcript.length - 1 || currentTime < transcript[idx + 1].start);
-                
-                return (
-                  <span
-                    key={idx}
-                    data-index={idx}
-                    onClick={() => handleTranscriptClick(segment.start)}
-                    className={`cursor-pointer hover:text-blue-300 px-1 transition-colors ${
-                      isActive ? 'bg-blue-600 text-white font-bold' : ''
-                    }`}
-                  >
-                    {segment.text}
-                  </span>
-                );
-              })}
-            </div>
-          </div>
-        )}
-
-        {/* Custom Progress Bar */}
-        <div className="bg-gray-900 px-4 py-2">
-          <div className="flex items-center gap-3 text-white text-sm mb-2">
-            <span className="font-mono">-{formatTime(timeRemaining)}</span>
-            <div 
-              className="flex-1 h-2 bg-gray-700 rounded-full cursor-pointer relative"
-              onClick={handleProgressBarClick}
-            >
-              <div 
-                className="h-full bg-blue-500 rounded-full transition-all"
-                style={{ width: `${progressPercentage}%` }}
-              />
-            </div>
-            <span className="font-mono">{playbackSpeed}x</span>
-          </div>
-        </div>
-      </div>
-
-      {/* Right Sidebar */}
-      <div className="w-80 bg-black flex flex-col">
-        <button
-          onClick={() => setMenuOpen(!menuOpen)}
-          className="m-4 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
-        >
-          Menu
-        </button>
-
-        {menuOpen && (
-          <div className="mx-4 mb-4 bg-white rounded-lg shadow-xl p-6 overflow-y-auto max-h-[calc(100vh-120px)]">
-            {/* 1. SPACEBAR */}
-            <div className="mb-4">
-              <h3 
-                onClick={() => toggleSection('spacebar')}
-                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
-              >
-                1. SPACEBAR {expandedSections.has('spacebar') ? '▼' : '▶'}
-              </h3>
-              {expandedSections.has('spacebar') && (
-                <p className="text-sm text-gray-700 mt-2">
-                  In addition to using the standard YouTube controls, the spacebar can be used to start and pause the video.
-                </p>
-              )}
-            </div>
-
-            {/* 2. AUDIO CONTROLS */}
-            <div className="mb-4">
-              <h3 
-                onClick={() => toggleSection('audio')}
-                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
-              >
-                2. AUDIO CONTROLS {expandedSections.has('audio') ? '▼' : '▶'}
-              </h3>
-              {expandedSections.has('audio') && (
-                <div className="mt-2">
-                  <div className="mb-4">
-                    <button
-                      onClick={toggleMute}
-                      className={`w-full py-2 px-4 rounded-lg font-semibold transition-colors ${
-                        isMuted
-                          ? 'bg-red-500 hover:bg-red-600 text-white'
-                          : 'bg-green-500 hover:bg-green-600 text-white'
-                      }`}
-                    >
-                      {isMuted ? '🔇 Unmute' : '🔊 Mute'}
-                    </button>
-                  </div>
-
-                  <div className="mb-4">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Volume: {volume}%
-                    </label>
-                    <input
-                      type="range"
-                      min="0"
-                      max="100"
-                      value={volume}
-                      onChange={(e) => handleVolumeChange(Number(e.target.value))}
-                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                    />
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* 3. PLAYBACK SPEED CONTROL */}
-            <div className="mb-4">
-              <h3 
-                onClick={() => toggleSection('playback')}
-                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
-              >
-                3. PLAYBACK SPEED CONTROL {expandedSections.has('playback') ? '▼' : '▶'}
-              </h3>
-              {expandedSections.has('playback') && (
-                <div className="mt-2 grid grid-cols-4 gap-2">
-                  {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((speed) => (
-                    <button
-                      key={speed}
-                      onClick={() => handlePlaybackSpeedChange(speed)}
-                      className={`py-2 px-3 rounded-lg font-semibold transition-colors ${
-                        playbackSpeed === speed
-                          ? 'bg-blue-600 text-white'
-                          : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
-                      }`}
-                    >
-                      {speed}x
-                    </button>
-                  ))}
-                </div>
-              )}
-            </div>
-
-            {/* 4. SAVED SURFS */}
-            <div className="mb-4">
-              <h3 
-                onClick={() => toggleSection('saved')}
-                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
-              >
-                4. SAVED SURFS {expandedSections.has('saved') ? '▼' : '▶'}
-              </h3>
-              {expandedSections.has('saved') && (
-                <div className="mt-2">
-                  <div className="mb-4">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Add YouTube Video
-                    </label>
-                    <div className="flex gap-2">
-                      <input
-                        type="text"
-                        value={newVideoUrl}
-                        onChange={(e) => setNewVideoUrl(e.target.value)}
-                        placeholder="Paste YouTube URL or ID"
-                        className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
-                        onKeyPress={(e) => e.key === 'Enter' && handleAddVideo()}
-                      />
-                      <button
-                        onClick={handleAddVideo}
-                        className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold"
-                      >
-                        Add
-                      </button>
-                    </div>
-                  </div>
-
-                  <div className="space-y-2 max-h-96 overflow-y-auto">
-                    {savedVideos.length === 0 ? (
-                      <p className="text-sm text-gray-500 text-center py-4">
-                        No saved videos yet. Add one above!
-                      </p>
-                    ) : (
-                      savedVideos.map((video) => (
-                        <div
-                          key={video.id}
-                          className="bg-gray-50 p-3 rounded-lg border border-gray-200"
-                        >
-                          <div className="flex items-start gap-2">
-                            <img
-                              src={`https://img.youtube.com/vi/${video.id}/default.jpg`}
-                              alt={video.title}
-                              className="w-20 h-15 object-cover rounded cursor-pointer"
-                              onClick={() => handleLoadVideo(video.id)}
-                            />
-                            <div className="flex-1 min-w-0">
-                              <h4
-                                className="text-sm font-semibold text-gray-800 cursor-pointer hover:text-blue-600 line-clamp-2"
-                                onClick={() => handleLoadVideo(video.id)}
-                              >
-                                {video.title}
-                              </h4>
-                              <p className="text-xs text-gray-500 mt-1">
-                                {formatDate(video.dateSaved)}
-                              </p>
-                              <div className="flex gap-2 mt-2">
-                                <button
-                                  onClick={() => handleTogglePersistent(video.id)}
-                                  className={`text-xs px-2 py-1 rounded ${
-                                    video.isPersistent
-                                      ? 'bg-yellow-500 text-white'
-                                      : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
-                                  }`}
-                                  title={video.isPersistent ? 'Persistent' : 'Make Persistent'}
-                                >
-                                  {video.isPersistent ? '📌 Pinned' : '📌 Pin'}
-                                </button>
-                                <button
-                                  onClick={() => handleDeleteVideo(video.id)}
-                                  className="text-xs px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600"
-                                >
-                                  Delete
-                                </button>
-                              </div>
-                            </div>
-                          </div>
-                        </div>
-                      ))
-                    )}
-                  </div>
-                </div>
-              )}
-            </div>
-
-            {/* 5. SCROLL */}
-            <div className="mb-4">
-              <h3 
-                onClick={() => toggleSection('scroll')}
-                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
-              >
-                5. SCROLL {expandedSections.has('scroll') ? '▼' : '▶'}
-              </h3>
-              {expandedSections.has('scroll') && (
-                <div className="mt-2">
-                  {/* Transparency Control */}
-                  <div className="mb-4">
-                    <label className="block text-sm font-medium text-gray-700 mb-2">
-                      Transparency: {transcriptOpacity}%
-                    </label>
-                    <input
-                      type="range"
-                      min="10"
-                      max="100"
-                      value={transcriptOpacity}
-                      onChange={(e) => setTranscriptOpacity(Number(e.target.value))}
-                      className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
-                    />
-                  </div>
-
-                  <div className="text-xs text-gray-600 space-y-1">
-                    <p>• Transcript bar appears at bottom of screen</p>
-                    <p>• Drag blue top edge to resize height</p>
-                    <p>• Click any word to jump to that time</p>
-                    <p>• Current word is highlighted in blue</p>
-                    <p>• Adjust transparency to see video behind text</p>
-                    {transcriptLoading && <p className="text-blue-600">⏳ Loading transcript...</p>}
-                    {transcriptError && <p className="text-red-600">❌ {transcriptError}</p>}
-                  </div>
-                </div>
-              )}
-            </div>
-          </div>
-        )}
-      </div>
-    </div>
-  );
-}
-
-export default function WatchPage() {
-  return (
-    <Suspense fallback={<div>Loading...</div>}>
-      <WatchPageContent />
-    </Suspense>
-  );
-}
-"""
-
-# Save to file
-with open('/tmp/page.tsx', 'w', encoding='utf-8') as f:
-    f.write(code_content)
-
-print("✅ File created: page.tsx")
-print("📁 Download this file and replace your app/watch/page.tsx with it")
+'use client';import { useSearchParams, useRouter } from 'next/navigation';import { Suspense, useEffect, useRef, useState } from 'react';interface SavedVideo {    id: string;    url: string;    title: string;    dateSaved: string;    isPersistent: boolean;}interface TranscriptSegment {    start: number;    duration: number;    text: string;}function WatchPageContent() {    const searchParams = useSearchParams();    const router = useRouter();    const videoId = searchParams.get('url');    const iframeRef = useRef<HTMLIFrameElement>(null);    const containerRef = useRef<HTMLDivElement>(null);    const transcriptRef = useRef<HTMLDivElement>(null);    const [showNudge, setShowNudge] = useState(false);    const [menuOpen, setMenuOpen] = useState(false);    const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());    const [volume, setVolume] = useState(100);    const [isMuted, setIsMuted] = useState(false);    const [isPlaying, setIsPlaying] = useState(true);    const [playbackSpeed, setPlaybackSpeed] = useState(1);    const [currentTime, setCurrentTime] = useState(0);    const [duration, setDuration] = useState(0);    const [savedVideos, setSavedVideos] = useState<SavedVideo[]>([]);    const [newVideoUrl, setNewVideoUrl] = useState('');    const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);    const [transcriptLoading, setTranscriptLoading] = useState(false);    const [transcriptError, setTranscriptError] = useState('');    const [transcriptOpacity, setTranscriptOpacity] = useState(90);    const [transcriptHeight, setTranscriptHeight] = useState(54);    const [transcriptBottom, setTranscriptBottom] = useState(0);    const [transcriptWidth, setTranscriptWidth] = useState(100);    const [isResizingTranscript, setIsResizingTranscript] = useState(false);    const [isDraggingHeight, setIsDraggingHeight] = useState(false);    const [isDraggingPosition, setIsDraggingPosition] = useState(false);    const dragStartY = useRef(0);    const dragStartHeight = useRef(0);    const dragStartBottom = useRef(0);    const lastScrollLeft = useRef(0);    const firstPauseRef = useRef(false);    const nudgeDismissedRef = useRef(false);    const nudgeTimerRef = useRef<NodeJS.Timeout | null>(null);    // Load saved videos from localStorage    useEffect(() => {        const stored = localStorage.getItem('tutorialClaritySavedVideos');        if (stored) {            const videos: SavedVideo[] = JSON.parse(stored);            const sevenDaysAgo = new Date();            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);            const filtered = videos.filter(video => {                if (video.isPersistent) return true;                const savedDate = new Date(video.dateSaved);                return savedDate > sevenDaysAgo;            });            setSavedVideos(filtered);            if (filtered.length !== videos.length) {                localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(filtered));            }        }    }, []);    // Fetch transcript when video loads and scroll section is expanded    useEffect(() => {        if (!videoId || !expandedSections.has('scroll')) return;        const fetchTranscript = async () => {            setTranscriptLoading(true);            setTranscriptError('');            try {                const response = await fetch(`/api/transcript?videoId=${videoId}`);                const data = await response.json();                if (response.ok) {                    setTranscript(data.transcript);                } else {                    setTranscriptError(data.error || 'Failed to load transcript');                }            } catch (error) {                setTranscriptError('Failed to load transcript');            } finally {                setTranscriptLoading(false);            }        };        fetchTranscript();    }, [videoId, expandedSections]);    // Auto-scroll transcript to current time (smooth continuous scrolling)    useEffect(() => {        if (!transcriptRef.current || transcript.length === 0 || !expandedSections.has('scroll')) return;        const currentSegmentIndex = transcript.findIndex((seg, idx) => {            const nextSeg = transcript[idx + 1];            return currentTime >= seg.start && (!nextSeg || currentTime < nextSeg.start);        });        if (currentSegmentIndex >= 0) {            const segmentElement = transcriptRef.current.querySelector(`[data-index="${currentSegmentIndex}"]`) as HTMLElement;            if (segmentElement && transcriptRef.current) {                const container = transcriptRef.current;                const segmentLeft = segmentElement.offsetLeft;                const segmentWidth = segmentElement.offsetWidth;                const containerWidth = container.offsetWidth;                // Center the active segment                const targetScroll = segmentLeft - (containerWidth / 2) + (segmentWidth / 2);                // Only scroll if the difference is significant (prevents chunky scrolling)                const currentScroll = container.scrollLeft;                const scrollDiff = Math.abs(currentScroll - targetScroll);                // Gradually scroll instead of jumping                if (scrollDiff > 5) {                    const newScroll = currentScroll + (targetScroll - currentScroll) * 0.1;                    container.scrollLeft = newScroll;                    lastScrollLeft.current = newScroll;                }            }        }    }, [currentTime, transcript, expandedSections]);    // Save videos to localStorage whenever they change    useEffect(() => {        if (savedVideos.length > 0) {            localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(savedVideos));        }    }, [savedVideos]);    // Auto-hide nudge after 5 seconds    useEffect(() => {        if (showNudge) {            nudgeTimerRef.current = setTimeout(() => {                setShowNudge(false);                nudgeDismissedRef.current = true;            }, 5000);        }        return () => {            if (nudgeTimerRef.current) {                clearTimeout(nudgeTimerRef.current);                nudgeTimerRef.current = null;            }        };    }, [showNudge]);    // Keep focus on container to capture spacebar    useEffect(() => {        const interval = setInterval(() => {            if (containerRef.current && document.activeElement !== containerRef.current) {                containerRef.current.focus();            }        }, 100);        return () => clearInterval(interval);    }, []);    // Listen for YouTube player state updates    useEffect(() => {        const handleMessage = (event: MessageEvent) => {            if (event.origin !== 'https://www.youtube.com') return;            try {                const data = JSON.parse(event.data);                if (data.event === 'infoDelivery' && data.info) {                    if (data.info.currentTime !== undefined) {                        setCurrentTime(data.info.currentTime);                    }                    if (data.info.duration !== undefined) {                        setDuration(data.info.duration);                    }                }            } catch (e) {                // Ignore parsing errors            }        };        window.addEventListener('message', handleMessage);        return () => window.removeEventListener('message', handleMessage);    }, []);    // Request player info periodically    useEffect(() => {        const interval = setInterval(() => {            if (iframeRef.current?.contentWindow) {                iframeRef.current.contentWindow.postMessage(                    JSON.stringify({                        event: 'listening',                        id: 1,                        channel: 'widget'                    }),                    '*'                );            }        }, 1000);        return () => clearInterval(interval);    }, []);    // Spacebar handler    useEffect(() => {        const handleKeyPress = (e: KeyboardEvent) => {            if (e.code === 'Space') {                e.preventDefault();                e.stopPropagation();                if (iframeRef.current?.contentWindow) {                    if (isPlaying) {                        iframeRef.current.contentWindow.postMessage(                            JSON.stringify({                                event: 'command',                                func: 'pauseVideo',                                args: []                            }),                            '*'                        );                        setIsPlaying(false);                        if (!firstPauseRef.current && !nudgeDismissedRef.current) {                            firstPauseRef.current = true;                            setShowNudge(true);                        }                    } else {                        iframeRef.current.contentWindow.postMessage(                            JSON.stringify({                                event: 'command',                                func: 'playVideo',                                args: []                            }),                            '*'                        );                        setIsPlaying(true);                    }                }            }        };        window.addEventListener('keydown', handleKeyPress, true);        return () => {            window.removeEventListener('keydown', handleKeyPress, true);        };    }, [isPlaying]);    // Transcript resize handler    useEffect(() => {        const handleMouseMove = (e: MouseEvent) => {            if (isResizingTranscript) {                const windowHeight = window.innerHeight;                const newHeight = windowHeight - e.clientY;                setTranscriptHeight(Math.max(54, Math.min(400, newHeight)));            }        };        const handleMouseUp = () => {            setIsResizingTranscript(false);        };        if (isResizingTranscript) {            window.addEventListener('mousemove', handleMouseMove);            window.addEventListener('mouseup', handleMouseUp);        }        return () => {            window.removeEventListener('mousemove', handleMouseMove);            window.removeEventListener('mouseup', handleMouseUp);        };    }, [isResizingTranscript]);    const toggleSection = (section: string) => {        setExpandedSections(prev => {            const newSet = new Set(prev);            if (newSet.has(section)) {                newSet.delete(section);            } else {                newSet.add(section);            }            return newSet;        });    };    const toggleMute = () => {        if (iframeRef.current?.contentWindow) {            if (isMuted) {                iframeRef.current.contentWindow.postMessage(                    JSON.stringify({ event: 'command', func: 'unMute', args: [] }),                    '*'                );            } else {                iframeRef.current.contentWindow.postMessage(                    JSON.stringify({ event: 'command', func: 'mute', args: [] }),                    '*'                );            }            setIsMuted(!isMuted);        }    };    const handleVolumeChange = (newVolume: number) => {        setVolume(newVolume);        if (iframeRef.current?.contentWindow) {            iframeRef.current.contentWindow.postMessage(                JSON.stringify({ event: 'command', func: 'setVolume', args: [newVolume] }),                '*'            );        }    };    const handlePlaybackSpeedChange = (speed: number) => {        setPlaybackSpeed(speed);        if (iframeRef.current?.contentWindow) {            iframeRef.current.contentWindow.postMessage(                JSON.stringify({ event: 'command', func: 'setPlaybackRate', args: [speed] }),                '*'            );        }    };    const handleTranscriptClick = (startTime: number) => {        if (iframeRef.current?.contentWindow) {            iframeRef.current.contentWindow.postMessage(                JSON.stringify({ event: 'command', func: 'seekTo', args: [startTime, true] }),                '*'            );        }    };    const extractVideoId = (url: string): string | null => {        const patterns = [            /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\s]+)/,            /^([a-zA-Z0-9_-]{11})$/        ];        for (const pattern of patterns) {            const match = url.match(pattern);            if (match) return match[1];        }        return null;    };    const fetchVideoTitle = async (videoId: string): Promise<string> => {        try {            const response = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);            const data = await response.json();            return data.title || 'Unknown Title';        } catch (error) {            console.error('Error fetching video title:', error);            return 'Unknown Title';        }    };    const handleAddVideo = async () => {        if (!newVideoUrl.trim()) return;        const videoId = extractVideoId(newVideoUrl);        if (!videoId) {            alert('Invalid YouTube URL. Please enter a valid YouTube video URL or ID.');            return;        }        if (savedVideos.some(v => v.id === videoId)) {            alert('This video is already saved!');            setNewVideoUrl('');            return;        }        const title = await fetchVideoTitle(videoId);        const newVideo: SavedVideo = {            id: videoId,            url: `https://www.youtube.com/watch?v=${videoId}`,            title,            dateSaved: new Date().toISOString(),            isPersistent: false        };        const nonPersistent = savedVideos.filter(v => !v.isPersistent);        if (nonPersistent.length >= 20) {            const oldestNonPersistent = nonPersistent.sort((a, b) =>                new Date(a.dateSaved).getTime() - new Date(b.dateSaved).getTime()            )[0];            setSavedVideos(prev => [...prev.filter(v => v.id !== oldestNonPersistent.id), newVideo]);        } else {            setSavedVideos(prev => [...prev, newVideo]);        }        setNewVideoUrl('');    };    const handleDeleteVideo = (videoId: string) => {        setSavedVideos(prev => {            const updated = prev.filter(v => v.id !== videoId);            localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(updated));            return updated;        });    };    const handleTogglePersistent = (videoId: string) => {        setSavedVideos(prev => prev.map(v =>            v.id === videoId ? { ...v, isPersistent: !v.isPersistent } : v        ));    };    const handleLoadVideo = (videoId: string) => {        setMenuOpen(false);        window.location.href = `/watch?url=${videoId}`;    };    const formatDate = (dateString: string) => {        const date = new Date(dateString);        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });    };    // Height control drag handlers    const handleHeightDragStart = (e: React.MouseEvent) => {        e.stopPropagation();        setIsDraggingHeight(true);        dragStartY.current = e.clientY;        dragStartHeight.current = transcriptHeight;    };    // Position control drag handlers    const handlePositionDragStart = (e: React.MouseEvent) => {        e.stopPropagation();        setIsDraggingPosition(true);        dragStartY.current = e.clientY;        dragStartBottom.current = transcriptBottom;    };    // Mouse move handler for dragging    useEffect(() => {        const handleMouseMove = (e: MouseEvent) => {            if (isDraggingHeight) {                const deltaY = dragStartY.current - e.clientY;                const newHeight = Math.max(54, Math.min(400, dragStartHeight.current + deltaY));                setTranscriptHeight(newHeight);            } else if (isDraggingPosition) {                const deltaY = dragStartY.current - e.clientY;                const maxBottom = window.innerHeight - transcriptHeight - 50;                const newBottom = Math.max(0, Math.min(maxBottom, dragStartBottom.current + deltaY));                setTranscriptBottom(newBottom);            }        };        const handleMouseUp = () => {            setIsDraggingHeight(false);            setIsDraggingPosition(false);        };        if (isDraggingHeight || isDraggingPosition) {            window.addEventListener('mousemove', handleMouseMove);            window.addEventListener('mouseup', handleMouseUp);            return () => {                window.removeEventListener('mousemove', handleMouseMove);                window.removeEventListener('mouseup', handleMouseUp);            };        }    }, [isDraggingHeight, isDraggingPosition, transcriptHeight]);    // Font size scales proportionally with height: 54px height = 14px font, 400px height = 32px font    const fontSize = Math.max(14, Math.min(32, (transcriptHeight / 54) * 14));    // Show transcript bar when scroll section is expanded    const showTranscriptBar = expandedSections.has('scroll');    if (!videoId) {        return (            <div className="flex items-center justify-center min-h-screen bg-gray-100">                <p className="text-xl text-gray-600">No YouTube URL selected yet</p>            </div>        );    }    return (        <div className="flex w-full h-screen bg-black">            {/* Video Section */}            <div                ref={containerRef}                tabIndex={0}                className="relative flex-1 outline-none"            >                {/* Pink Nudge */}                {showNudge && (                    <div className="absolute bottom-20 right-4 z-40 bg-pink-500 text-white px-4 py-3 rounded-lg shadow-2xl max-w-xs">                        <p className="text-sm font-semibold">                            👍 Be sure to click the X within the overlay to ensure it does not reappear when using the spacebar.                        </p>                    </div>                )}                {/* YouTube iframe */}                <iframe                    ref={iframeRef}                    className="w-full h-full pointer-events-auto"                    src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&disablekb=1&controls=0`}                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"                    allowFullScreen                />                {/* Transcript Bar - Centered with Width Control */}                {showTranscriptBar && (                    <div                        style={{                            position: 'fixed',                            bottom: `${transcriptBottom}px`,                            left: '50%',                            transform: 'translateX(-50%)',                            width: `${transcriptWidth}%`,                            height: `${transcriptHeight}px`,                            backgroundColor: `rgba(0, 0, 0, ${transcriptOpacity / 100})`,                            zIndex: 50                        }}                        className="border-t-4 border-blue-500 flex flex-col"                    >                        {/* Resize Handle */}                        <div                            className="w-full h-2 bg-blue-600 cursor-ns-resize hover:bg-blue-400 transition-colors"                            onMouseDown={() => setIsResizingTranscript(true)}                            title="Drag to resize"                        />                        {/* Transcript Content Container */}                        <div className="flex-1 relative">                            {/* Scrolling Transcript Content */}                            <div                                ref={transcriptRef}                                className="absolute inset-0 overflow-x-auto overflow-y-hidden px-4 text-white flex items-center whitespace-nowrap"                                style={{ fontSize: `${fontSize}px` }}                            >                                {transcriptLoading && (                                    <span className="text-gray-400">⏳ Loading transcript...</span>                                )}                                {!transcriptLoading && transcript.length === 0 && (                                    <span className="text-gray-400">                                        {transcriptError || 'No transcript available for this video'}                                    </span>                                )}                                {!transcriptLoading && transcript.length > 0 && transcript.map((segment, idx) => {                                    const isActive = currentTime >= segment.start &&                                        (idx === transcript.length - 1 || currentTime < transcript[idx + 1].start);                                    return (                                        <span                                            key={idx}                                            data-index={idx}                                            onClick={() => handleTranscriptClick(segment.start)}                                            className={`cursor-pointer hover:text-blue-300 px-1 transition-colors ${                                                isActive ? 'text-white font-bold' : ''                                            }`}                                            style={isActive ? {                                                backgroundColor: `rgba(37, 99, 235, ${transcriptOpacity / 100})`                                            } : {}}                                        >                                            {segment.text}                                        </span>                                    );                                })}                            </div>                            {/* Fixed Control Arrows - Above Scroll Bar */}                            <div                                className="absolute left-1/2 -translate-x-1/2 flex gap-1 pointer-events-auto"                                style={{                                    zIndex: 100,                                    top: '-40px' // Position above the transcript content, just above the blue resize handle                                }}                            >                                {/* Single Compact Control */}                                <div                                    className="rounded-lg p-1 shadow-lg flex gap-1"                                    style={{                                        backgroundColor: 'rgba(37, 99, 235, 0.9)',                                        backdropFilter: 'blur(4px)'                                    }}                                >                                    {/* Position Up/Down Arrow */}                                    <div                                        className="cursor-move hover:bg-white/20 transition-colors rounded px-2 py-1"                                        onMouseDown={handlePositionDragStart}                                        title="Drag to move transcript bar up/down"                                    >                                        <div className="flex flex-col items-center">                                            <div className="text-white text-lg leading-none">↕</div>                                        </div>                                    </div>                                    {/* Height Control */}                                    <div                                        className="cursor-ns-resize hover:bg-white/20 transition-colors rounded px-2 py-1"                                        onMouseDown={handleHeightDragStart}                                        title="Drag to adjust transcript bar height"                                    >                                        <div className="flex flex-col items-center">                                            <div className="text-white text-lg leading-none">⇕</div>                                        </div>                                    </div>                                </div>                            </div>                        </div>                    </div>                )}            </div>            {/* Right Sidebar */}            <div className="w-80 bg-black flex flex-col">                <button                    onClick={() => setMenuOpen(!menuOpen)}                    className="m-4 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"                >                    Menu                </button>                {menuOpen && (                    <div className="mx-4 mb-4 bg-white rounded-lg shadow-xl p-6 overflow-y-auto max-h-[calc(100vh-120px)]">                        {/* 1. SPACEBAR */}                        <div className="mb-4">                            <h3                                onClick={() => toggleSection('spacebar')}                                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"                            >                                1. SPACEBAR {expandedSections.has('spacebar') ? '▼' : '▶'}                            </h3>                            {expandedSections.has('spacebar') && (                                <p className="text-sm text-gray-700 mt-2">                                    In addition to using the standard YouTube controls, the spacebar can be used to start and pause the video.                                </p>                            )}                        </div>                        {/* 2. AUDIO CONTROLS */}                        <div className="mb-4">                            <h3                                onClick={() => toggleSection('audio')}                                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"                            >                                2. AUDIO CONTROLS {expandedSections.has('audio') ? '▼' : '▶'}                            </h3>                            {expandedSections.has('audio') && (                                <div className="mt-2">                                    <div className="mb-4">                                        <button                                            onClick={toggleMute}                                            className={`w-full py-2 px-4 rounded-lg font-semibold transition-colors ${                                                isMuted                                                    ? 'bg-red-500 hover:bg-red-600 text-white'                                                    : 'bg-green-500 hover:bg-green-600 text-white'                                            }`}                                        >                                            {isMuted ? '🔇 Unmute' : '🔊 Mute'}                                        </button>                                    </div>                                    <div className="mb-4">                                        <label className="block text-sm font-medium text-gray-700 mb-2">                                            Volume: {volume}%                                        </label>                                        <input                                            type="range"                                            min="0"                                            max="100"                                            value={volume}                                            onChange={(e) => handleVolumeChange(Number(e.target.value))}                                            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"                                        />                                    </div>                                </div>                            )}                        </div>                        {/* 3. PLAYBACK SPEED CONTROL */}                        <div className="mb-4">                            <h3                                onClick={() => toggleSection('playback')}                                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"                            >                                3. PLAYBACK SPEED CONTROL {expandedSections.has('playback') ? '▼' : '▶'}                            </h3>                            {expandedSections.has('playback') && (                                <div className="mt-2 grid grid-cols-4 gap-2">                                    {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((speed) => (                                        <button                                            key={speed}                                            onClick={() => handlePlaybackSpeedChange(speed)}                                            className={`py-2 px-3 rounded-lg font-semibold transition-colors ${                                                playbackSpeed === speed                                                    ? 'bg-blue-600 text-white'                                                    : 'bg-gray-200 text-gray-800 hover:bg-gray-300'                                            }`}                                        >                                            {speed}x                                        </button>                                    ))}                                </div>                            )}                        </div>                        {/* 4. SAVED SURFS */}                        <div className="mb-4">                            <h3                                onClick={() => toggleSection('saved')}                                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"                            >                                4. SAVED SURFS {expandedSections.has('saved') ? '▼' : '▶'}                            </h3>                            {expandedSections.has('saved') && (                                <div className="mt-2">                                    <div className="mb-4">                                        <label className="block text-sm font-medium text-gray-700 mb-2">                                            Add YouTube Video                                        </label>                                        <div className="flex gap-2">                                            <input                                                type="text"                                                value={newVideoUrl}                                                onChange={(e) => setNewVideoUrl(e.target.value)}                                                placeholder="Paste YouTube URL or ID"                                                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"                                                onKeyPress={(e) => e.key === 'Enter' && handleAddVideo()}                                            />                                            <button                                                onClick={handleAddVideo}                                                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold"                                            >                                                Add                                            </button>                                        </div>                                    </div>                                    <div className="space-y-2 max-h-96 overflow-y-auto">                                        {savedVideos.length === 0 ? (                                            <p className="text-sm text-gray-500 text-center py-4">                                                No saved videos yet. Add one above!                                            </p>                                        ) : (                                            savedVideos.map((video) => (                                                <div                                                    key={video.id}                                                    className="bg-gray-50 p-3 rounded-lg border border-gray-200"                                                >                                                    <div className="flex items-start gap-2">                                                        <img                                                            src={`https://img.youtube.com/vi/${video.id}/default.jpg`}                                                            alt={video.title}                                                            className="w-20 h-15 object-cover rounded cursor-pointer"                                                            onClick={() => handleLoadVideo(video.id)}                                                        />                                                        <div className="flex-1 min-w-0">                                                            <h4                                                                className="text-sm font-semibold text-gray-800 cursor-pointer hover:text-blue-600 line-clamp-2"                                                                onClick={() => handleLoadVideo(video.id)}                                                            >                                                                {video.title}                                                            </h4>                                                            <p className="text-xs text-gray-500 mt-1">                                                                {formatDate(video.dateSaved)}                                                            </p>                                                            <div className="flex gap-2 mt-2">                                                                <button                                                                    onClick={() => handleTogglePersistent(video.id)}                                                                    className={`text-xs px-2 py-1 rounded ${                                                                        video.isPersistent                                                                            ? 'bg-yellow-500 text-white'                                                                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'                                                                    }`}                                                                    title={video.isPersistent ? 'Persistent' : 'Make Persistent'}                                                                >                                                                    {video.isPersistent ? '📌 Pinned' : '📌 Pin'}                                                                </button>                                                                <button                                                                    onClick={() => handleDeleteVideo(video.id)}                                                                    className="text-xs px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600"                                                                >                                                                    Delete                                                                </button>                                                            </div>                                                        </div>                                                    </div>                                                </div>                                            ))                                        )}                                    </div>                                </div>                            )}                        </div>                        {/* 5. SCROLL */}                        <div className="mb-4">                            <h3                                onClick={() => toggleSection('scroll')}                                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"                            >                                5. SCROLL {expandedSections.has('scroll') ? '▼' : '▶'}                            </h3>                            {expandedSections.has('scroll') && (                                <div className="mt-2">                                    {/* Opacity Control */}                                    <div className="mb-4">                                        <label className="block text-sm font-medium text-gray-700 mb-2">                                            Opacity: {transcriptOpacity}%                                        </label>                                        <input                                            type="range"                                            min="10"                                            max="100"                                            value={transcriptOpacity}                                            onChange={(e) => setTranscriptOpacity(Number(e.target.value))}                                            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"                                        />                                    </div>                                    {/* Width Control */}                                    <div className="mb-4">                                        <label className="block text-sm font-medium text-gray-700 mb-2">                                            Width: {transcriptWidth}%                                        </label>                                        <input                                            type="range"                                            min="30"                                            max="100"                                            value={transcriptWidth}                                            onChange={(e) => setTranscriptWidth(Number(e.target.value))}                                            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"                                        />                                    </div>                                    <div className="text-xs text-gray-600 space-y-1">                                        <p>• Transcript bar appears at bottom of screen</p>                                        <p>• Drag blue top edge to resize height</p>                                        <p>• Click any word to jump to that time</p>                                        <p>• Current word is highlighted in blue</p>                                        <p>• Adjust opacity to see video behind text</p>                                        {transcriptLoading && <p className="text-blue-600">⏳ Loading transcript...</p>}                                        {transcriptError && <p className="text-red-600">• {transcriptError}</p>}                                    </div>                                </div>                            )}                        </div>                    </div>                )}            </div>        </div>    );}export default function WatchPage() {    return (        <Suspense fallback={<div>Loading...</div>}>            <WatchPageContent />        </Suspense>    );}
