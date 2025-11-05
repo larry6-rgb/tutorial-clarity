@@ -1,427 +1,1099 @@
-"use client";
+'use client';
 
-import { useState, useEffect, useRef, useCallback, Suspense } from 'react';
 import { useSearchParams, useRouter } from 'next/navigation';
-import { motion, AnimatePresence } from 'framer-motion';
-import { 
-  ArrowLeft, 
-  Settings, 
-  Volume2,
-  Bookmark as BookmarkIcon,
-  Play,
-  Pause,
-  SkipBack,
-  SkipForward,
-  RotateCcw,
-  Home
-} from 'lucide-react';
-import { Button } from '@/components/ui/button';
-import { useToast } from '@/hooks/use-toast';
-import YouTubePlayerComponent from '@/components/youtube-player';
-import ControlPanel from '@/components/control-panel';
-import BookmarkPanel from '@/components/bookmark-panel';
-import SessionManager from '@/components/session-manager';
-import KeyboardHandler from '@/components/keyboard-handler';
-import { extractVideoId, isValidYouTubeUrl } from '@/lib/youtube-utils';
-import { YouTubePlayerState, TutorialSession, Bookmark } from '@/lib/types';
-import { storage } from '@/lib/storage';
+import { Suspense, useEffect, useRef, useState } from 'react';
+
+interface SavedVideo {
+    id: string;
+    url: string;
+    title: string;
+    dateSaved: string;
+    isPersistent: boolean;
+}
+
+interface TranscriptSegment {
+    start: number;
+    duration: number;
+    text: string;
+}
+
+const DEVELOPMENT_MODE = true;
 
 function WatchPageContent() {
-  const searchParams = useSearchParams();
-  const router = useRouter();
-  const { toast } = useToast();
-  
-  const videoUrl = searchParams.get('url') || '';
-  const [videoId, setVideoId] = useState('');
-  const [player, setPlayer] = useState<any>(null);
-  const [playerState, setPlayerState] = useState<YouTubePlayerState>({
-    isPlaying: false,
-    currentTime: 0,
-    duration: 0,
-    playbackRate: 1
-  });
-  
-  const [session, setSession] = useState<TutorialSession | null>(null);
-  const [showControls, setShowControls] = useState(true);
-  const [showBookmarks, setShowBookmarks] = useState(false);
-  const [isLoaded, setIsLoaded] = useState(false);
-  
-  const hideControlsTimeoutRef = useRef<NodeJS.Timeout>();
+    const searchParams = useSearchParams();
+    const router = useRouter();
+    const videoId = searchParams.get('url');
+    const iframeRef = useRef<HTMLIFrameElement>(null);
+    const containerRef = useRef<HTMLDivElement>(null);
+    const transcriptRef = useRef<HTMLDivElement>(null);
+    const [showNudge, setShowNudge] = useState(false);
+    const [menuOpen, setMenuOpen] = useState(false);
+    const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+    const [volume, setVolume] = useState(100);
+    const [isMuted, setIsMuted] = useState(false);
+    const [isPlaying, setIsPlaying] = useState(true);
+    const [playbackSpeed, setPlaybackSpeed] = useState(1);
+    const [currentTime, setCurrentTime] = useState(0);
+    const [duration, setDuration] = useState(0);
+    const [savedVideos, setSavedVideos] = useState<SavedVideo[]>([]);
+    const [newVideoUrl, setNewVideoUrl] = useState('');
+    const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
+    const [transcriptLoading, setTranscriptLoading] = useState(false);
+    const [transcriptError, setTranscriptError] = useState('');
+    const [transcriptOpacity, setTranscriptOpacity] = useState(90);
+    const [transcriptHeight, setTranscriptHeight] = useState(54);
+    const [transcriptBottom, setTranscriptBottom] = useState(0);
+    const [transcriptWidth, setTranscriptWidth] = useState(100);
+    const [isResizingTranscript, setIsResizingTranscript] = useState(false);
+    const [isDraggingHeight, setIsDraggingHeight] = useState(false);
+    const [isDraggingPosition, setIsDraggingPosition] = useState(false);
+    const [isDraggingTranscriptBar, setIsDraggingTranscriptBar] = useState(false);
+    const [transcriptLeft, setTranscriptLeft] = useState(50);
+    const [scrollbarTop, setScrollbarTop] = useState(100);
+    const [scrollbarHeight, setScrollbarHeight] = useState(200);
+    const dragStartY = useRef(0);
+    const dragStartX = useRef(0);
+    const dragStartHeight = useRef(0);
+    const dragStartBottom = useRef(0);
+    const dragStartLeft = useRef(0);
+    const lastScrollLeft = useRef(0);
+    const firstPauseRef = useRef(false);
+    const nudgeDismissedRef = useRef(false);
+    const nudgeTimerRef = useRef<NodeJS.Timeout | null>(null);
 
-  // Initialize video
-  useEffect(() => {
-    console.log('🎥 Watch page initializing with URL:', videoUrl);
-    
-    if (!videoUrl) {
-      console.log('❌ No video URL provided');
-      return;
-    }
-    
-    const isValid = isValidYouTubeUrl(videoUrl);
-    if (!isValid) {
-      console.log('❌ Invalid YouTube URL:', videoUrl);
-      return;
-    }
+    const [selectedText, setSelectedText] = useState('');
+    const [definitionPopup, setDefinitionPopup] = useState<{
+        text: string;
+        definition: string;
+        x: number;
+        y: number;
+        loading: boolean;
+    } | null>(null);
+    const [userTier] = useState<'free' | 'premium'>('free');
 
-    const id = extractVideoId(videoUrl);
-    if (id) {
-      setVideoId(id);
-      
-      // Load or create session
-      const existingSessions = storage.getSessions();
-      const existingSession = existingSessions.find(s => s.videoId === id);
-      
-      if (existingSession) {
-        setSession(existingSession);
-        console.log('Restored existing session');
-      } else {
-        const newSession: TutorialSession = {
-          id: Date.now().toString(),
-          videoId: id,
-          videoUrl: videoUrl,
-          videoTitle: '',
-          currentTime: 0,
-          playbackRate: 1,
-          bookmarks: [],
-          notes: '',
-          createdAt: new Date(),
-          lastViewed: new Date()
+    useEffect(() => {
+        const stored = localStorage.getItem('tutorialClaritySavedVideos');
+        if (stored) {
+            const videos: SavedVideo[] = JSON.parse(stored);
+            const sevenDaysAgo = new Date();
+            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+
+            const filtered = videos.filter(video => {
+                if (video.isPersistent) return true;
+                const savedDate = new Date(video.dateSaved);
+                return savedDate > sevenDaysAgo;
+            });
+
+            setSavedVideos(filtered);
+            if (filtered.length !== videos.length) {
+                localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(filtered));
+            }
+        }
+    }, []);
+
+    useEffect(() => {
+        if (!videoId || !expandedSections.has('scroll')) return;
+
+        const fetchTranscript = async () => {
+            setTranscriptLoading(true);
+            setTranscriptError('');
+
+            try {
+                const response = await fetch(`/api/transcript?videoId=${videoId}`);
+
+                if (!response.ok) {
+                    throw new Error('Transcript not available');
+                }
+
+                const data = await response.json();
+
+                if (data.transcript && data.transcript.length > 0) {
+                    setTranscript(data.transcript);
+                } else {
+                    setTranscriptError('No transcript available for this video');
+                }
+            } catch (error) {
+                console.error('Transcript error:', error);
+                setTranscriptError('Transcript not available for this video');
+            } finally {
+                setTranscriptLoading(false);
+            }
         };
-        setSession(newSession);
-        storage.saveSession(newSession);
-        console.log('Created new session');
-      }
-    } else {
-      console.log('Could not extract video ID from URL');
-    }
-  }, [videoUrl]);
 
-  // Auto-hide controls
-  const resetHideControlsTimer = useCallback(() => {
-    if (hideControlsTimeoutRef.current) {
-      clearTimeout(hideControlsTimeoutRef.current);
-    }
-    
-    setShowControls(true);
-    hideControlsTimeoutRef.current = setTimeout(() => {
-      setShowControls(false);
-    }, 3000);
-  }, []); // Remove dependencies to prevent infinite loops
+        fetchTranscript();
+    }, [videoId, expandedSections]);
 
-  // Show controls on mouse movement
-  useEffect(() => {
-    const handleMouseMove = () => {
-      if (hideControlsTimeoutRef.current) {
-        clearTimeout(hideControlsTimeoutRef.current);
-      }
-      
-      setShowControls(true);
-      hideControlsTimeoutRef.current = setTimeout(() => {
-        setShowControls(false);
-      }, 3000);
+    useEffect(() => {
+        if (!transcriptRef.current || transcript.length === 0 || !expandedSections.has('scroll')) return;
+
+        const currentSegmentIndex = transcript.findIndex((seg, idx) => {
+            const nextSeg = transcript[idx + 1];
+            return currentTime >= seg.start && (!nextSeg || currentTime < nextSeg.start);
+        });
+
+        if (currentSegmentIndex >= 0) {
+            const segmentElement = transcriptRef.current.querySelector(`[data-index="${currentSegmentIndex}"]`) as HTMLElement;
+            if (segmentElement && transcriptRef.current) {
+                const container = transcriptRef.current;
+                const segmentLeft = segmentElement.offsetLeft;
+                const segmentWidth = segmentElement.offsetWidth;
+                const containerWidth = container.offsetWidth;
+
+                const targetScroll = segmentLeft - (containerWidth / 2) + (segmentWidth / 2);
+                const currentScroll = container.scrollLeft;
+                const scrollDiff = Math.abs(currentScroll - targetScroll);
+
+                if (scrollDiff > 5) {
+                    const newScroll = currentScroll + (targetScroll - currentScroll) * 0.1;
+                    container.scrollLeft = newScroll;
+                    lastScrollLeft.current = newScroll;
+                }
+            }
+        }
+    }, [currentTime, transcript, expandedSections]);
+
+    useEffect(() => {
+        if (savedVideos.length > 0) {
+            localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(savedVideos));
+        }
+    }, [savedVideos]);
+
+    useEffect(() => {
+        if (showNudge) {
+            nudgeTimerRef.current = setTimeout(() => {
+                setShowNudge(false);
+                nudgeDismissedRef.current = true;
+            }, 5000);
+        }
+
+        return () => {
+            if (nudgeTimerRef.current) {
+                clearTimeout(nudgeTimerRef.current);
+                nudgeTimerRef.current = null;
+            }
+        };
+    }, [showNudge]);
+
+    useEffect(() => {
+        const interval = setInterval(() => {
+            if (containerRef.current && document.activeElement !== containerRef.current) {
+                containerRef.current.focus();
+            }
+        }, 100);
+
+        return () => clearInterval(interval);
+    }, []);
+
+    useEffect(() => {
+        const handleMessage = (event: MessageEvent) => {
+            if (event.origin !== 'https://www.youtube.com') return;
+
+            try {
+                const data = JSON.parse(event.data);
+                if (data.event === 'infoDelivery' && data.info) {
+                    if (data.info.currentTime !== undefined) {
+                        setCurrentTime(data.info.currentTime);
+                    }
+                    if (data.info.duration !== undefined) {
+                        setDuration(data.info.duration);
+                    }
+                }
+            } catch (e) {
+                // Ignore parsing errors
+            }
+        };
+
+        window.addEventListener('message', handleMessage);
+        return () => window.removeEventListener('message', handleMessage);
+    }, []);
+
+    useEffect(() => {
+        const interval = setInterval(() => {
+            if (iframeRef.current?.contentWindow) {
+                iframeRef.current.contentWindow.postMessage(
+                    JSON.stringify({
+                        event: 'listening',
+                        id: 1,
+                        channel: 'widget'
+                    }),
+                    '*'
+                );
+            }
+        }, 1000);
+
+        return () => clearInterval(interval);
+    }, []);
+
+    useEffect(() => {
+        const handleKeyPress = (e: KeyboardEvent) => {
+            if (e.code === 'Space') {
+                e.preventDefault();
+                e.stopPropagation();
+
+                if (iframeRef.current?.contentWindow) {
+                    if (isPlaying) {
+                        iframeRef.current.contentWindow.postMessage(
+                            JSON.stringify({
+                                event: 'command',
+                                func: 'pauseVideo',
+                                args: []
+                            }),
+                            '*'
+                        );
+                        setIsPlaying(false);
+
+                        if (!firstPauseRef.current && !nudgeDismissedRef.current) {
+                            firstPauseRef.current = true;
+                            setShowNudge(true);
+                        }
+                    } else {
+                        iframeRef.current.contentWindow.postMessage(
+                            JSON.stringify({
+                                event: 'command',
+                                func: 'playVideo',
+                                args: []
+                            }),
+                            '*'
+                        );
+                        setIsPlaying(true);
+                    }
+                }
+            }
+        };
+
+        window.addEventListener('keydown', handleKeyPress, true);
+        return () => {
+            window.removeEventListener('keydown', handleKeyPress, true);
+        };
+    }, [isPlaying]);
+
+    useEffect(() => {
+        const handleMouseMove = (e: MouseEvent) => {
+            if (isResizingTranscript) {
+                const windowHeight = window.innerHeight;
+                const newHeight = windowHeight - e.clientY;
+                setTranscriptHeight(Math.max(54, Math.min(400, newHeight)));
+            }
+        };
+
+        const handleMouseUp = () => {
+            setIsResizingTranscript(false);
+        };
+
+        if (isResizingTranscript) {
+            window.addEventListener('mousemove', handleMouseMove);
+            window.addEventListener('mouseup', handleMouseUp);
+        }
+
+        return () => {
+            window.removeEventListener('mousemove', handleMouseMove);
+            window.removeEventListener('mouseup', handleMouseUp);
+        };
+    }, [isResizingTranscript]);
+
+    useEffect(() => {
+        const handleClickOutside = (e: MouseEvent) => {
+            if (definitionPopup && !(e.target as HTMLElement).closest('.definition-popup')) {
+                setDefinitionPopup(null);
+            }
+        };
+
+        document.addEventListener('mousedown', handleClickOutside);
+        return () => document.removeEventListener('mousedown', handleClickOutside);
+    }, [definitionPopup]);
+
+    const toggleSection = (section: string) => {
+        setExpandedSections(prev => {
+            const newSet = new Set(prev);
+            if (newSet.has(section)) {
+                newSet.delete(section);
+            } else {
+                newSet.add(section);
+            }
+            return newSet;
+        });
     };
-    
-    document.addEventListener('mousemove', handleMouseMove);
-    return () => {
-      document.removeEventListener('mousemove', handleMouseMove);
-      if (hideControlsTimeoutRef.current) {
-        clearTimeout(hideControlsTimeoutRef.current);
-      }
+
+    const toggleMute = () => {
+        if (iframeRef.current?.contentWindow) {
+            if (isMuted) {
+                iframeRef.current.contentWindow.postMessage(
+                    JSON.stringify({ event: 'command', func: 'unMute', args: [] }),
+                    '*'
+                );
+            } else {
+                iframeRef.current.contentWindow.postMessage(
+                    JSON.stringify({ event: 'command', func: 'mute', args: [] }),
+                    '*'
+                );
+            }
+            setIsMuted(!isMuted);
+        }
     };
-  }, []);
 
-  // YouTube player event handlers
-  const handlePlayerReady = useCallback((playerInstance: any) => {
-    setPlayer(playerInstance);
-    setIsLoaded(true);
-    console.log('Player ready');
-  }, []);
-
-  const handlePlayerStateChange = useCallback((state: YouTubePlayerState) => {
-    setPlayerState(state);
-    
-    if (session) {
-      const updatedSession: TutorialSession = {
-        ...session,
-        currentTime: state.currentTime,
-        playbackRate: state.playbackRate,
-        lastViewed: new Date()
-      };
-      setSession(updatedSession);
-      
-      // Save session periodically (every 5 seconds when playing)
-      if (state.isPlaying && Math.floor(state.currentTime) % 5 === 0) {
-        storage.saveSession(updatedSession);
-      }
-    }
-  }, [session]);
-
-  // Keyboard handlers
-  const handleSpaceBar = useCallback(() => {
-    if (!player) return;
-    
-    try {
-      if (playerState.isPlaying) {
-        player.pauseVideo();
-      } else {
-        player.playVideo();
-      }
-      setShowControls(true);
-    } catch (error) {
-      console.error('Error controlling playback:', error);
-    }
-  }, [player, playerState.isPlaying]);
-
-  const handleSeek = useCallback((seconds: number) => {
-    if (!player) return;
-    
-    try {
-      const newTime = Math.max(0, Math.min(playerState.duration, playerState.currentTime + seconds));
-      player.seekTo(newTime, true);
-      setShowControls(true);
-    } catch (error) {
-      console.error('Error seeking:', error);
-    }
-  }, [player, playerState.currentTime, playerState.duration]);
-
-  const handleSpeedChange = useCallback((speed: number) => {
-    if (!player) return;
-    
-    try {
-      player.setPlaybackRate(speed);
-      setShowControls(true);
-    } catch (error) {
-      console.error('Error changing speed:', error);
-    }
-  }, [player]);
-
-  const handleBookmark = useCallback(() => {
-    if (!session) return;
-    
-    const bookmark: Bookmark = {
-      id: Date.now().toString(),
-      timestamp: playerState.currentTime,
-      title: `Bookmark at ${Math.floor(playerState.currentTime / 60)}:${String(Math.floor(playerState.currentTime % 60)).padStart(2, '0')}`,
-      notes: '',
-      createdAt: new Date()
+    const handleVolumeChange = (newVolume: number) => {
+        setVolume(newVolume);
+        if (iframeRef.current?.contentWindow) {
+            iframeRef.current.contentWindow.postMessage(
+                JSON.stringify({ event: 'command', func: 'setVolume', args: [newVolume] }),
+                '*'
+            );
+        }
     };
-    
-    const updatedSession: TutorialSession = {
-      ...session,
-      bookmarks: [...session.bookmarks, bookmark]
+
+    const handlePlaybackSpeedChange = (speed: number) => {
+        setPlaybackSpeed(speed);
+        if (iframeRef.current?.contentWindow) {
+            iframeRef.current.contentWindow.postMessage(
+                JSON.stringify({ event: 'command', func: 'setPlaybackRate', args: [speed] }),
+                '*'
+            );
+        }
     };
-    
-    setSession(updatedSession);
-    storage.saveSession(updatedSession);
-    
-    setShowControls(true);
-  }, [session, playerState.currentTime]);
 
-  const handleJumpToBookmark = useCallback((time: number) => {
-    if (!player) return;
-    
-    try {
-      player.seekTo(time, true);
-      setShowControls(true);
-    } catch (error) {
-      console.error('Error jumping to bookmark:', error);
-    }
-  }, [player]);
+    const handleTranscriptClick = (startTime: number) => {
+        if (iframeRef.current?.contentWindow) {
+            iframeRef.current.contentWindow.postMessage(
+                JSON.stringify({ event: 'command', func: 'seekTo', args: [startTime, true] }),
+                '*'
+            );
+        }
+    };
 
-  if (!videoId) {
-    console.log('No video ID available, current videoUrl:', videoUrl);
-    return (
-      <div className="min-h-screen bg-gradient-to-br from-gray-900 to-gray-800 flex items-center justify-center">
-        <div className="text-center text-white">
-          <div className="animate-spin w-8 h-8 border-2 border-white border-t-transparent rounded-full mx-auto mb-4"></div>
-          <p>Loading video...</p>
-          <p className="text-sm text-gray-400 mt-2">URL: {videoUrl || 'No URL provided'}</p>
-          <p className="text-sm text-gray-400">Check console for details</p>
-        </div>
-      </div>
-    );
-  }
+    const handleTextSelection = async (e: React.MouseEvent) => {
+        // Don't trigger definitions if dragging or clicking on control elements
+        if (isDraggingTranscriptBar || isDraggingHeight || isDraggingPosition || isResizingTranscript) {
+            return;
+        }
 
-  return (
-    <div className="min-h-screen bg-black flex flex-col">
-      {/* Keyboard Handler */}
-      <KeyboardHandler
-        onSpaceBar={handleSpaceBar}
-        onLeftArrow={() => handleSeek(-10)}
-        onRightArrow={() => handleSeek(10)}
-        onShiftLeftArrow={() => handleSeek(-30)}
-        onShiftRightArrow={() => handleSeek(30)}
-        onUpArrow={() => handleSpeedChange(Math.min(2, playerState.playbackRate + 0.25))}
-        onDownArrow={() => handleSpeedChange(Math.max(0.25, playerState.playbackRate - 0.25))}
-        onBookmark={handleBookmark}
-        isEnabled={isLoaded && !showBookmarks}
-      />
+        const target = e.target as HTMLElement;
+        if (target.closest('.cursor-move') || target.closest('.cursor-ns-resize') || target.closest('.bg-blue-600') || target.closest('button')) {
+            return;
+        }
 
-      {/* Header */}
-      <AnimatePresence>
-        {showControls && (
-          <motion.header
-            initial={{ y: -100, opacity: 0 }}
-            animate={{ y: 0, opacity: 1 }}
-            exit={{ y: -100, opacity: 0 }}
-            className="absolute top-0 left-0 right-0 z-30 bg-gradient-to-b from-black/80 to-transparent p-6"
-          >
-            <div className="flex items-center justify-between max-w-6xl mx-auto">
-              <div className="flex items-center gap-4">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => router.push('/')}
-                  className="text-white hover:bg-white/20"
-                >
-                  <Home size={20} />
-                </Button>
-                <div>
-                  <h1 className="text-white font-semibold text-lg line-clamp-1">
-                    {session?.videoTitle || 'Tutorial Video'}
-                  </h1>
-                  <p className="text-gray-300 text-sm">
-                    Tutorial Clarity Enhanced Player
-                  </p>
-                </div>
-              </div>
-              
-              <div className="flex items-center gap-2">
-                <Button
-                  variant="ghost"
-                  size="sm"
-                  onClick={() => setShowBookmarks(!showBookmarks)}
-                  className="text-white hover:bg-white/20"
-                >
-                  <BookmarkIcon size={20} />
-                  <span className="ml-2">{session?.bookmarks.length || 0}</span>
-                </Button>
-              </div>
+        const selection = window.getSelection();
+        const text = selection?.toString().trim();
+
+        if (!text || text.length < 2) {
+            setDefinitionPopup(null);
+            return;
+        }
+
+        setDefinitionPopup({
+            text,
+            definition: '',
+            x: e.clientX,
+            y: e.clientY,
+            loading: true
+        });
+
+        try {
+            const context = transcript.map(seg => seg.text).join(' ').slice(0, 500);
+            const videoTitle = document.title || 'Tutorial Video';
+
+            const response = await fetch('/api/define', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    term: text,
+                    context,
+                    videoTitle,
+                    userTier,
+                    developmentMode: DEVELOPMENT_MODE
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.requiresUpgrade) {
+                setDefinitionPopup({
+                    text,
+                    definition: `🔒 ${data.message}`,
+                    x: e.clientX,
+                    y: e.clientY,
+                    loading: false
+                });
+            } else {
+                setDefinitionPopup({
+                    text,
+                    definition: data.definition,
+                    x: e.clientX,
+                    y: e.clientY,
+                    loading: false
+                });
+            }
+        } catch (error) {
+            console.error('Definition error:', error);
+            setDefinitionPopup({
+                text,
+                definition: '❌ Definition not available. Please try again.',
+                x: e.clientX,
+                y: e.clientY,
+                loading: false
+            });
+        }
+    };
+
+    const extractVideoId = (url: string): string | null => {
+        const patterns = [
+            /(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\s]+)/,
+            /^([a-zA-Z0-9_-]{11})$/
+        ];
+
+        for (const pattern of patterns) {
+            const match = url.match(pattern);
+            if (match) return match[1];
+        }
+        return null;
+    };
+
+    const fetchVideoTitle = async (videoId: string): Promise<string> => {
+        try {
+            const response = await fetch(`https://www.youtube.com/oembed?url=https://www.youtube.com/watch?v=${videoId}&format=json`);
+            const data = await response.json();
+            return data.title || 'Unknown Title';
+        } catch (error) {
+            console.error('Error fetching video title:', error);
+            return 'Unknown Title';
+        }
+    };
+
+    const handleAddVideo = async () => {
+        if (!newVideoUrl.trim()) return;
+
+        const videoId = extractVideoId(newVideoUrl);
+        if (!videoId) {
+            alert('Invalid YouTube URL. Please enter a valid YouTube video URL or ID.');
+            return;
+        }
+
+        if (savedVideos.some(v => v.id === videoId)) {
+            alert('This video is already saved!');
+            setNewVideoUrl('');
+            return;
+        }
+
+        const title = await fetchVideoTitle(videoId);
+
+        const newVideo: SavedVideo = {
+            id: videoId,
+            url: `https://www.youtube.com/watch?v=${videoId}`,
+            title,
+            dateSaved: new Date().toISOString(),
+            isPersistent: false
+        };
+
+        const nonPersistent = savedVideos.filter(v => !v.isPersistent);
+        if (nonPersistent.length >= 20) {
+            const oldestNonPersistent = nonPersistent.sort((a, b) =>
+                new Date(a.dateSaved).getTime() - new Date(b.dateSaved).getTime()
+            )[0];
+            setSavedVideos(prev => [...prev.filter(v => v.id !== oldestNonPersistent.id), newVideo]);
+        } else {
+            setSavedVideos(prev => [...prev, newVideo]);
+        }
+
+        setNewVideoUrl('');
+    };
+
+    const handleDeleteVideo = (videoId: string) => {
+        setSavedVideos(prev => {
+            const updated = prev.filter(v => v.id !== videoId);
+            localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(updated));
+            return updated;
+        });
+    };
+
+    const handleTogglePersistent = (videoId: string) => {
+        setSavedVideos(prev => prev.map(v =>
+            v.id === videoId ? { ...v, isPersistent: !v.isPersistent } : v
+        ));
+    };
+
+    const handleLoadVideo = (videoId: string) => {
+        setMenuOpen(false);
+        window.location.href = `/watch?url=${videoId}`;
+    };
+
+    const formatDate = (dateString: string) => {
+        const date = new Date(dateString);
+        return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
+    };
+
+    const handleHeightDragStart = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        setIsDraggingHeight(true);
+        dragStartY.current = e.clientY;
+        dragStartHeight.current = transcriptHeight;
+    };
+
+    const handlePositionDragStart = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        setIsDraggingPosition(true);
+        dragStartY.current = e.clientY;
+        dragStartBottom.current = transcriptBottom;
+    };
+
+    const handleTranscriptBarDragStart = (e: React.MouseEvent) => {
+        e.stopPropagation();
+        e.preventDefault();
+        setIsDraggingTranscriptBar(true);
+        dragStartX.current = e.clientX;
+        dragStartY.current = e.clientY;
+        dragStartLeft.current = transcriptLeft;
+        dragStartBottom.current = transcriptBottom;
+    };
+
+    useEffect(() => {
+        const handleMouseMove = (e: MouseEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+
+            if (isDraggingHeight) {
+                const deltaY = dragStartY.current - e.clientY;
+                const newHeight = Math.max(54, Math.min(400, dragStartHeight.current + deltaY));
+                setTranscriptHeight(newHeight);
+            } else if (isDraggingPosition) {
+                const deltaY = dragStartY.current - e.clientY;
+                const maxBottom = window.innerHeight - transcriptHeight - 50;
+                const newBottom = Math.max(0, Math.min(maxBottom, dragStartBottom.current + deltaY));
+                setTranscriptBottom(newBottom);
+            } else if (isDraggingTranscriptBar) {
+                const deltaX = e.clientX - dragStartX.current;
+                const deltaY = dragStartY.current - e.clientY;
+
+                // Calculate new left position (percentage)
+                const windowWidth = window.innerWidth;
+                const deltaPercent = (deltaX / windowWidth) * 100;
+                const newLeft = Math.max(0, Math.min(100, dragStartLeft.current + deltaPercent));
+                setTranscriptLeft(newLeft);
+
+                // Calculate new bottom position
+                const maxBottom = window.innerHeight - transcriptHeight - 50;
+                const newBottom = Math.max(0, Math.min(maxBottom, dragStartBottom.current + deltaY));
+                setTranscriptBottom(newBottom);
+            }
+        };
+
+        const handleMouseUp = (e: MouseEvent) => {
+            e.preventDefault();
+            e.stopPropagation();
+            setIsDraggingHeight(false);
+            setIsDraggingPosition(false);
+            setIsDraggingTranscriptBar(false);
+            document.body.style.cursor = '';
+        };
+
+        if (isDraggingHeight || isDraggingPosition || isDraggingTranscriptBar) {
+            document.body.style.cursor = isDraggingTranscriptBar ? 'move' : (isDraggingHeight ? 'ns-resize' : 'ns-resize');
+            window.addEventListener('mousemove', handleMouseMove);
+            window.addEventListener('mouseup', handleMouseUp);
+            return () => {
+                window.removeEventListener('mousemove', handleMouseMove);
+                window.removeEventListener('mouseup', handleMouseUp);
+                document.body.style.cursor = '';
+            };
+        }
+    }, [isDraggingHeight, isDraggingPosition, isDraggingTranscriptBar, transcriptHeight]);
+
+    const fontSize = Math.max(14, Math.min(32, (transcriptHeight / 54) * 14));
+    const showTranscriptBar = expandedSections.has('scroll');
+
+    if (!videoId) {
+        return (
+            <div className="flex items-center justify-center min-h-screen bg-gray-100">
+                <p className="text-xl text-gray-600">No YouTube URL selected yet</p>
             </div>
-          </motion.header>
-        )}
-      </AnimatePresence>
+        );
+    }
 
-      {/* Main Video Area */}
-      <div className="flex-1 relative">
-        <YouTubePlayerComponent
-          videoId={videoId}
-          onStateChange={handlePlayerStateChange}
-          onReady={handlePlayerReady}
-          className="w-full h-full"
-        />
-
-        {/* Control Panel */}
-        <AnimatePresence>
-          {showControls && isLoaded && (
-            <motion.div
-              initial={{ y: 100, opacity: 0 }}
-              animate={{ y: 0, opacity: 1 }}
-              exit={{ y: 100, opacity: 0 }}
-              className="absolute bottom-6 left-6 right-6 z-20"
+    return (
+        <div className="flex w-full h-screen bg-black">
+            <div
+                ref={containerRef}
+                tabIndex={0}
+                className="relative flex-1 outline-none"
             >
-              <ControlPanel
-                playerState={playerState}
-                onPlayPause={() => handleSpaceBar()}
-                onSpeedChange={handleSpeedChange}
-                onSeek={handleSeek}
-                onBookmark={handleBookmark}
-                className="mx-auto max-w-4xl"
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
+                {showNudge && (
+                    <div className="absolute bottom-20 right-4 z-40 bg-pink-500 text-white px-4 py-3 rounded-lg shadow-2xl max-w-xs">
+                        <p className="text-sm font-semibold">
+                            👍 Be sure to click the X within the overlay to ensure it does not reappear when using the spacebar.
+                        </p>
+                    </div>
+                )}
 
-        {/* Bookmark Panel */}
-        <AnimatePresence>
-          {showBookmarks && session && (
-            <motion.div
-              initial={{ x: 300, opacity: 0 }}
-              animate={{ x: 0, opacity: 1 }}
-              exit={{ x: 300, opacity: 0 }}
-              className="absolute top-0 right-0 bottom-0 z-40 w-80"
-            >
-              <BookmarkPanel
-                bookmarks={session.bookmarks}
-                currentTime={playerState.currentTime}
-                onSeekTo={handleJumpToBookmark}
-                onAddBookmark={(title: string, notes: string) => {
-                  const bookmark: Bookmark = {
-                    id: Date.now().toString(),
-                    timestamp: playerState.currentTime,
-                    title,
-                    notes,
-                    createdAt: new Date()
-                  };
-                  
-                  const updatedSession: TutorialSession = {
-                    ...session,
-                    bookmarks: [...session.bookmarks, bookmark]
-                  };
-                  
-                  setSession(updatedSession);
-                  storage.saveSession(updatedSession);
-                }}
-                onEditBookmark={(bookmark: Bookmark) => {
-                  if (!session) return;
-                  
-                  const updatedBookmarks = session.bookmarks.map(b =>
-                    b.id === bookmark.id ? bookmark : b
-                  );
-                  
-                  const updatedSession: TutorialSession = {
-                    ...session,
-                    bookmarks: updatedBookmarks
-                  };
-                  
-                  setSession(updatedSession);
-                  storage.saveSession(updatedSession);
-                }}
-                onDeleteBookmark={(bookmarkId: string) => {
-                  if (!session) return;
-                  
-                  const updatedBookmarks = session.bookmarks.filter(b => b.id !== bookmarkId);
-                  const updatedSession: TutorialSession = {
-                    ...session,
-                    bookmarks: updatedBookmarks
-                  };
-                  
-                  setSession(updatedSession);
-                  storage.saveSession(updatedSession);
-                  
-                  toast({
-                    title: "Bookmark deleted",
-                    description: "Bookmark removed successfully"
-                  });
-                }}
-              />
-            </motion.div>
-          )}
-        </AnimatePresence>
+                <iframe
+                    ref={iframeRef}
+                    className="w-full h-full pointer-events-auto"
+                    src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&disablekb=1&controls=0`}
+                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                    allowFullScreen
+                />
 
-        {/* Click to show controls overlay */}
-        {!showControls && isLoaded && (
-          <div 
-            className="absolute inset-0 z-10 cursor-none"
-            onClick={resetHideControlsTimer}
-          />
-        )}
-      </div>
-    </div>
-  );
+                {definitionPopup && (
+                    <div
+                        className="definition-popup fixed bg-white/80 backdrop-blur-md rounded-lg shadow-2xl p-4 max-w-md border-2 border-blue-500 z-[9999]"
+                        style={{
+                            left: `${Math.min(definitionPopup.x, window.innerWidth - 400)}px`,
+                            top: `${Math.max(10, definitionPopup.y - 100)}px`
+                        }}
+                    >
+                        <div className="flex justify-between items-start mb-2">
+                            <h4 className="font-bold text-gray-800 text-lg">{definitionPopup.text}</h4>
+                            <button
+                                onClick={() => setDefinitionPopup(null)}
+                                className="text-gray-500 hover:text-gray-700 text-2xl leading-none ml-2"
+                            >
+                                ×
+                            </button>
+                        </div>
+                        {definitionPopup.loading ? (
+                            <p className="text-gray-600 text-sm">⏳ Loading definition...</p>
+                        ) : (
+                            <p className="text-gray-700 text-sm whitespace-pre-line">{definitionPopup.definition}</p>
+                        )}
+                    </div>
+                )}
+
+                {showTranscriptBar && (
+                    <div
+                        style={{
+                            position: 'fixed',
+                            bottom: `${transcriptBottom}px`,
+                            left: `${transcriptLeft}%`,
+                            transform: 'translateX(-50%)',
+                            width: `${transcriptWidth}%`,
+                            height: `${transcriptHeight}px`,
+                            backgroundColor: `rgba(0, 0, 0, ${transcriptOpacity / 100})`,
+                            zIndex: 50,
+                            cursor: transcriptWidth < 100 ? 'move' : 'default'
+                        }}
+                        className="border-t-4 border-blue-500 flex flex-col"
+                        onMouseDown={(e) => {
+                            // Allow dragging the entire bar when width is reduced
+                            const target = e.target as HTMLElement;
+                            // Don't drag if clicking on text content or control buttons
+                            if (target.closest('.select-text') ||
+                                target.closest('button') ||
+                                target.closest('.cursor-move') ||
+                                target.closest('.cursor-ns-resize')) {
+                                return;
+                            }
+                            // If clicking on the bar background or border, allow drag
+                            if (target === e.currentTarget || target.closest('.bg-blue-600')) {
+                                handleTranscriptBarDragStart(e);
+                            }
+                        }}
+                    >
+                        <div
+                            className="w-full h-2 bg-blue-600 cursor-ns-resize hover:bg-blue-400 transition-colors"
+                            onMouseDown={(e) => {
+                                e.stopPropagation();
+                                e.preventDefault();
+                                setIsResizingTranscript(true);
+                            }}
+                            onMouseUp={(e) => e.stopPropagation()}
+                            onClick={(e) => e.stopPropagation()}
+                            title="Drag to resize"
+                        />
+
+                        <div className="flex-1 relative">
+                            <div
+                                ref={transcriptRef}
+                                className="absolute inset-0 overflow-x-auto overflow-y-hidden px-4 text-white flex items-center whitespace-nowrap"
+                                style={{ fontSize: `${fontSize}px` }}
+                                onMouseUp={handleTextSelection}
+                            >
+                                {transcriptLoading && (
+                                    <span className="text-gray-400">⏳ Loading transcript...</span>
+                                )}
+                                {!transcriptLoading && transcript.length === 0 && (
+                                    <span className="text-gray-400">
+                                        {transcriptError || 'No transcript available for this video'}
+                                    </span>
+                                )}
+                                {!transcriptLoading && transcript.length > 0 && transcript.map((segment, idx) => {
+                                    const isActive = currentTime >= segment.start &&
+                                        (idx === transcript.length - 1 || currentTime < transcript[idx + 1].start);
+
+                                    return (
+                                        <span
+                                            key={idx}
+                                            data-index={idx}
+                                            onClick={() => handleTranscriptClick(segment.start)}
+                                            className={`cursor-pointer hover:text-blue-300 px-1 transition-colors select-text ${
+                                                isActive ? 'text-white font-bold' : ''
+                                            }`}
+                                            style={isActive ? {
+                                                backgroundColor: `rgba(37, 99, 235, ${transcriptOpacity / 100})`
+                                            } : {}}
+                                        >
+                                            {segment.text}
+                                        </span>
+                                    );
+                                })}
+                            </div>
+
+                            <div
+                                className="absolute left-1/2 -translate-x-1/2 flex gap-1 pointer-events-auto"
+                                style={{
+                                    zIndex: 100,
+                                    top: '-40px'
+                                }}
+                                onMouseUp={(e) => e.stopPropagation()}
+                                onClick={(e) => e.stopPropagation()}
+                            >
+                                <div
+                                    className="rounded-lg p-1 shadow-lg flex gap-1"
+                                    style={{
+                                        backgroundColor: 'rgba(37, 99, 235, 0.9)',
+                                        backdropFilter: 'blur(4px)'
+                                    }}
+                                    onMouseUp={(e) => e.stopPropagation()}
+                                    onClick={(e) => e.stopPropagation()}
+                                >
+                                    <div
+                                        className="cursor-move hover:bg-white/20 transition-colors rounded px-2 py-1"
+                                        onMouseDown={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            handlePositionDragStart(e);
+                                        }}
+                                        onMouseUp={(e) => e.stopPropagation()}
+                                        onClick={(e) => e.stopPropagation()}
+                                        title="Drag to move transcript bar up/down"
+                                    >
+                                        <div className="flex flex-col items-center">
+                                            <div className="text-white text-lg leading-none">↕</div>
+                                        </div>
+                                    </div>
+
+                                    <div
+                                        className="cursor-ns-resize hover:bg-white/20 transition-colors rounded px-2 py-1"
+                                        onMouseDown={(e) => {
+                                            e.stopPropagation();
+                                            e.preventDefault();
+                                            handleHeightDragStart(e);
+                                        }}
+                                        onMouseUp={(e) => e.stopPropagation()}
+                                        onClick={(e) => e.stopPropagation()}
+                                        title="Drag to adjust transcript bar height"
+                                    >
+                                        <div className="flex flex-col items-center">
+                                            <div className="text-white text-lg leading-none">⇕</div>
+                                        </div>
+                                    </div>
+
+                                    {/* Top arrow - Move scrollbar up */}
+                                    <button
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setTranscriptBottom(prev => Math.min(window.innerHeight - transcriptHeight - 50, prev + 10));
+                                        }}
+                                        onMouseUp={(e) => e.stopPropagation()}
+                                        className="w-6 h-6 bg-blue-500 rounded-full flex items-center justify-center hover:bg-blue-600 cursor-pointer"
+                                        title="Move scrollbar up"
+                                    >
+                                        <div className="text-white text-sm leading-none">▲</div>
+                                    </button>
+
+                                    {/* Bottom arrow - Increase height */}
+                                    <button
+                                        onMouseDown={(e) => e.stopPropagation()}
+                                        onClick={(e) => {
+                                            e.stopPropagation();
+                                            setTranscriptHeight(prev => Math.min(400, prev + 10));
+                                        }}
+                                        onMouseUp={(e) => e.stopPropagation()}
+                                        className="w-6 h-6 bg-green-500 rounded-full flex items-center justify-center hover:bg-green-600 cursor-pointer"
+                                        title="Increase height"
+                                    >
+                                        <div className="text-white text-sm leading-none">▼</div>
+                                    </button>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                )}
+            </div>
+
+            <div className="w-80 bg-black flex flex-col">
+                <button
+                    onClick={() => setMenuOpen(!menuOpen)}
+                    className="m-4 bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors"
+                >
+                    Menu
+                </button>
+
+                {menuOpen && (
+                    <div className="mx-4 mb-4 bg-white rounded-lg shadow-xl p-6 overflow-y-auto max-h-[calc(100vh-120px)]">
+                        {/* 1. SPACEBAR */}
+                        <div className="mb-4">
+                            <h3
+                                onClick={() => toggleSection('spacebar')}
+                                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
+                            >
+                                1. SPACEBAR {expandedSections.has('spacebar') ? '▼' : '▶'}
+                            </h3>
+                            {expandedSections.has('spacebar') && (
+                                <p className="text-sm text-gray-700 mt-2">
+                                    In addition to using the standard YouTube controls, the spacebar can be used to start and pause the video.
+                                </p>
+                            )}
+                        </div>
+
+                        {/* 2. AUDIO CONTROLS */}
+                        <div className="mb-4">
+                            <h3
+                                onClick={() => toggleSection('audio')}
+                                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
+                            >
+                                2. AUDIO CONTROLS {expandedSections.has('audio') ? '▼' : '▶'}
+                            </h3>
+                            {expandedSections.has('audio') && (
+                                <div className="mt-2">
+                                    <div className="mb-4">
+                                        <button
+                                            onClick={toggleMute}
+                                            className={`w-full py-2 px-4 rounded-lg font-semibold transition-colors ${
+                                                isMuted
+                                                    ? 'bg-red-500 hover:bg-red-600 text-white'
+                                                    : 'bg-green-500 hover:bg-green-600 text-white'
+                                            }`}
+                                        >
+                                            {isMuted ? '🔇 Unmute' : '🔊 Mute'}
+                                        </button>
+                                    </div>
+
+                                    <div className="mb-4">
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Volume: {volume}%
+                                        </label>
+                                        <input
+                                            type="range"
+                                            min="0"
+                                            max="100"
+                                            value={volume}
+                                            onChange={(e) => handleVolumeChange(Number(e.target.value))}
+                                            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                                        />
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 3. PLAYBACK SPEED CONTROL */}
+                        <div className="mb-4">
+                            <h3
+                                onClick={() => toggleSection('playback')}
+                                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
+                            >
+                                3. PLAYBACK SPEED CONTROL {expandedSections.has('playback') ? '▼' : '▶'}
+                            </h3>
+                            {expandedSections.has('playback') && (
+                                <div className="mt-2 grid grid-cols-4 gap-2">
+                                    {[0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map((speed) => (
+                                        <button
+                                            key={speed}
+                                            onClick={() => handlePlaybackSpeedChange(speed)}
+                                            className={`py-2 px-3 rounded-lg font-semibold transition-colors ${
+                                                playbackSpeed === speed
+                                                    ? 'bg-blue-600 text-white'
+                                                    : 'bg-gray-200 text-gray-800 hover:bg-gray-300'
+                                            }`}
+                                        >
+                                            {speed}x
+                                        </button>
+                                    ))}
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 4. SAVED SURFS */}
+                        <div className="mb-4">
+                            <h3
+                                onClick={() => toggleSection('saved')}
+                                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
+                            >
+                                4. SAVED SURFS {expandedSections.has('saved') ? '▼' : '▶'}
+                            </h3>
+                            {expandedSections.has('saved') && (
+                                <div className="mt-2">
+                                    <div className="mb-4">
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Add YouTube Video
+                                        </label>
+                                        <div className="flex gap-2">
+                                            <input
+                                                type="text"
+                                                value={newVideoUrl}
+                                                onChange={(e) => setNewVideoUrl(e.target.value)}
+                                                placeholder="Paste YouTube URL or ID"
+                                                className="flex-1 px-3 py-2 border border-gray-300 rounded-lg text-sm focus:outline-none focus:ring-2 focus:ring-blue-500"
+                                                onKeyPress={(e) => e.key === 'Enter' && handleAddVideo()}
+                                            />
+                                            <button
+                                                onClick={handleAddVideo}
+                                                className="bg-blue-600 text-white px-4 py-2 rounded-lg hover:bg-blue-700 transition-colors text-sm font-semibold"
+                                            >
+                                                Add
+                                            </button>
+                                        </div>
+                                    </div>
+
+                                    <div className="space-y-2 max-h-96 overflow-y-auto">
+                                        {savedVideos.length === 0 ? (
+                                            <p className="text-sm text-gray-500 text-center py-4">
+                                                No saved videos yet. Add one above!
+                                            </p>
+                                        ) : (
+                                            savedVideos.map((video) => (
+                                                <div
+                                                    key={video.id}
+                                                    className="bg-gray-50 p-3 rounded-lg border border-gray-200"
+                                                >
+                                                    <div className="flex items-start gap-2">
+                                                        <img
+                                                            src={`https://img.youtube.com/vi/${video.id}/default.jpg`}
+                                                            alt={video.title}
+                                                            className="w-20 h-15 object-cover rounded cursor-pointer"
+                                                            onClick={() => handleLoadVideo(video.id)}
+                                                        />
+                                                        <div className="flex-1 min-w-0">
+                                                            <h4
+                                                                className="text-sm font-semibold text-gray-800 cursor-pointer hover:text-blue-600 line-clamp-2"
+                                                                onClick={() => handleLoadVideo(video.id)}
+                                                            >
+                                                                {video.title}
+                                                            </h4>
+                                                            <p className="text-xs text-gray-500 mt-1">
+                                                                {formatDate(video.dateSaved)}
+                                                            </p>
+                                                            <div className="flex gap-2 mt-2">
+                                                                <button
+                                                                    onClick={() => handleTogglePersistent(video.id)}
+                                                                    className={`text-xs px-2 py-1 rounded ${
+                                                                        video.isPersistent
+                                                                            ? 'bg-yellow-500 text-white'
+                                                                            : 'bg-gray-200 text-gray-700 hover:bg-gray-300'
+                                                                    }`}
+                                                                    title={video.isPersistent ? 'Persistent' : 'Make Persistent'}
+                                                                >
+                                                                    {video.isPersistent ? '📌 Pinned' : '📌 Pin'}
+                                                                </button>
+                                                                <button
+                                                                    onClick={() => handleDeleteVideo(video.id)}
+                                                                    className="text-xs px-2 py-1 bg-red-500 text-white rounded hover:bg-red-600"
+                                                                >
+                                                                    Delete
+                                                                </button>
+                                                            </div>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 5. SCROLL */}
+                        <div className="mb-4">
+                            <h3
+                                onClick={() => toggleSection('scroll')}
+                                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
+                            >
+                                5. SCROLL {expandedSections.has('scroll') ? '▼' : '▶'}
+                            </h3>
+                            {expandedSections.has('scroll') && (
+                                <div className="mt-2">
+                                    <div className="mb-4">
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Opacity: {transcriptOpacity}%
+                                        </label>
+                                        <input
+                                            type="range"
+                                            min="10"
+                                            max="100"
+                                            value={transcriptOpacity}
+                                            onChange={(e) => setTranscriptOpacity(Number(e.target.value))}
+                                            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                                        />
+                                    </div>
+
+                                    <div className="mb-4">
+                                        <label className="block text-sm font-medium text-gray-700 mb-2">
+                                            Width: {transcriptWidth}%
+                                        </label>
+                                        <input
+                                            type="range"
+                                            min="30"
+                                            max="100"
+                                            value={transcriptWidth}
+                                            onChange={(e) => setTranscriptWidth(Number(e.target.value))}
+                                            className="w-full h-2 bg-gray-200 rounded-lg appearance-none cursor-pointer"
+                                        />
+                                    </div>
+
+                                    <div className="text-xs text-gray-600 space-y-1">
+                                        <p>• Transcript bar appears at bottom of screen</p>
+                                        <p>• Drag blue top edge to resize height</p>
+                                        <p>• Click any word to jump to that time</p>
+                                        <p>• <strong>Select text to see definitions</strong></p>
+                                        <p>• Current word is highlighted in blue</p>
+                                        <p>• Adjust opacity to see video behind text</p>
+                                        {transcriptLoading && <p className="text-blue-600">⏳ Loading transcript...</p>}
+                                        {transcriptError && <p className="text-red-600">• {transcriptError}</p>}
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+
+                        {/* 6. DEFINITIONS */}
+                        <div className="mb-4">
+                            <h3
+                                onClick={() => toggleSection('definitions')}
+                                className="text-lg font-bold mb-2 text-gray-800 cursor-pointer hover:text-blue-600 transition-colors"
+                            >
+                                6. DEFINITIONS {expandedSections.has('definitions') ? '▼' : '▶'}
+                            </h3>
+                            {expandedSections.has('definitions') && (
+                                <div className="mt-2">
+                                    <div className="bg-blue-50 p-3 rounded-lg border border-blue-200 mb-3">
+                                        <h4 className="font-bold text-gray-800 mb-2">📖 How to Use</h4>
+                                        <ol className="text-xs text-gray-700 space-y-1 list-decimal list-inside">
+                                            <li>Pause the video (spacebar)</li>
+                                            <li>Select any word or phrase in the transcript OR on the paused video</li>
+                                            <li>Definition appears in a popup overlay</li>
+                                            <li>Click X to close the definition</li>
+                                        </ol>
+                                    </div>
+
+                                    <div className="bg-green-50 p-3 rounded-lg border border-green-200">
+                                        <h4 className="font-bold text-gray-800 mb-2">✨ Features</h4>
+                                        <ul className="text-xs text-gray-700 space-y-1">
+                                            <li>• Dictionary definitions (free)</li>
+                                            <li>• Wikipedia summaries (free)</li>
+                                            <li>• AI-powered technical definitions</li>
+                                            <li>• Context-aware explanations</li>
+                                        </ul>
+                                    </div>
+                                </div>
+                            )}
+                        </div>
+                    </div>
+                )}
+            </div>
+        </div>
+    );
 }
 
 export default function WatchPage() {
-  return (
-    <Suspense fallback={
-      <div className="min-h-screen bg-black flex items-center justify-center">
-        <div className="text-white text-center">
-          <div className="animate-spin w-8 h-8 border-2 border-white border-t-transparent rounded-full mx-auto mb-4"></div>
-          <p>Loading video player...</p>
-        </div>
-      </div>
-    }>
-      <WatchPageContent />
-    </Suspense>
-  );
+    return (
+        <Suspense fallback={<div>Loading...</div>}>
+            <WatchPageContent />
+        </Suspense>
+    );
 }

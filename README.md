@@ -120,7 +120,7 @@ A complete written transcript of everything said in the video shall be created a
 
 
 
-18.TRANSLATION.  Many users don't speak English as their native language, so this appshould have the ability to intercept the audio, and translate it into many foreign languages. Ideally, when as foreign language is selected from a drop down list, all written output from the app should also be translated if possible.
+18.TRANSLATION.  Many users don't speak English as their native language, so this app should have the ability to intercept the audio, and translate it into many foreign languages. Ideally, when as foreign language is selected from a drop down list, all written output from the app should also be translated if possible.
 
 
 
@@ -132,23 +132,27 @@ A complete written transcript of everything said in the video shall be created a
 
 
 
-Directives for AI coding. 
+Directives for AI coding.
 
 
 
-I know nothing about coding. So when you write new code to solve the problem that we're working on, only present me with full page file replacements that I can copy and paste into Windows 11. 
+I know nothing about coding. So when you write new code to solve the problem that we're working on, only present me with full page file replacements that I can copy and paste into Windows 11.When you provide me with new code, always label it with the path name, so that I won't get confused and place it in the wrong location. For example: Don't say page.tsx. Say instead app/page.tsx or watch/ page.tsx.
 
-Do not provide me with snippets or portions and ask me to locate where to insert them within the code. 
+Do not provide me with snippets or portions and ask me to locate where to insert them within the code.
 
-I have a limited knowledge of computer functions, so you will need to guide me step-by-step through any procedures that we need to implement. 
+I have a limited knowledge of computer functions, so you will need to guide me step-by-step through any procedures that we need to implement.
 
-Whenever we develop the app to a stage where all functions are working properly and we push it to GIT, create a reference point in your branch that we can fall back on if we start having difficulties in the future. 
+Whenever we develop the app to a stage where all functions are working properly and we push it to GIT, create a reference point in your branch that we can fall back on if we start having difficulties in the future.
 
 Always start from a good known code and only modify those sections of code that pertain to the specific problem that we are attempting to address. Do not enter any changes into the code that will modify the basic functionality of the already fully functional code.
 
 If you enter a modification to the code and it does not solve the problem, go back to the basic code and enter another modification. Do not attempt to modify the modifications because that just gets very messy.
 
-I do not need to see any of the thinking process or explanations of why you are doing something a particular way only confuse me.
+I do not need to see any of the thinking process or explanations of why you are doing something a particular way. They only confuse me.
 
+Remember, when we are committing to git that we have renamed the local repository to feature/tutorial-clarity-wip using all lower case letters. If I say commit this to Git, I only mean to the working branch. Do not push it to the main branch until I specifically say to do so.
 
+Each time that you have new3 code to provide, refer back to these instructions and make sure that you are following them.
+
+I have only provided the full list of features to give you an overview of what I want to accomplish. We will only work on developing one feature at a time. I may re-arrange the order, add or subtract features as we go along. Bear in mind that I am always looking for simplicity and clarity by looking at each operation from the point of view of the elderly.
 
