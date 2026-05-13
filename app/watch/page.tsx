@@ -22,7 +22,16 @@ const DEVELOPMENT_MODE = true;
 function WatchPageContent() {
     const searchParams = useSearchParams();
     const router = useRouter();
-    const videoId = searchParams.get('url');
+    const rawUrl = searchParams.get('url');
+    const extractId = (url: string | null): string | null => {
+        if (!url) return null;
+        const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\s]+)/);
+        if (match) return match[1];
+        const idMatch = url.match(/^([a-zA-Z0-9_-]{11})$/);
+        if (idMatch) return idMatch[1];
+        return url;
+    };
+    const videoId = extractId(rawUrl);
     const iframeRef = useRef<HTMLIFrameElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const transcriptRef = useRef<HTMLDivElement>(null);
@@ -645,9 +654,8 @@ function WatchPageContent() {
 
     const fontSize = Math.max(14, Math.min(32, (transcriptHeight / 54) * 14));
     const showTranscriptBar = expandedSections.has('scroll');
-
-    const windowHeight = window.innerHeight;
-    const windowWidth = window.innerWidth - 240;
+const windowHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
+const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 1200;
     const transcriptTopPosition = windowHeight - transcriptBottom - transcriptHeight;
     const controlHandleHeight = 40;
     const shouldShowControlsBelow = transcriptTopPosition < controlHandleHeight;
