@@ -1,5 +1,4 @@
 const electron = require('electron');
-const { spawn } = require('child_process');
 
 const app = electron.app;
 const BrowserWindow = electron.BrowserWindow;
@@ -25,7 +24,6 @@ function createWindow() {
 function createPinkPanel(message, isPurple, onClickAction) {
   const display = screen.getPrimaryDisplay();
   
-  // Second panel appears lower and in purple
   const yPosition = isPurple ? 160 : 20;
   const gradient = isPurple 
     ? 'linear-gradient(135deg, #9d4edd, #c77dff)' 
@@ -70,7 +68,7 @@ function createPinkPanel(message, isPurple, onClickAction) {
     if (!panel.isDestroyed()) {
       panel.close();
     }
-  }, 15000);
+  }, 10000);
 }
 
 function checkClipboard() {
@@ -83,12 +81,10 @@ function checkClipboard() {
     const videoUrl = currentClipboard;
     console.log('YouTube URL detected!');
     
-    // First panel: Pink, top position
     createPinkPanel('Click here to open in Tutorial Clarity', false, function() {
-      // Second panel: Purple, lower position
       createPinkPanel('Click when you have paused the YouTube video', true, function() {
-        // Open Tutorial Clarity with video URL - goes directly to watch page
-        spawn('cmd', ['/c', 'start', 'http://localhost:3000/watch?url=' + encodeURIComponent(videoUrl)]);
+        const { spawn } = require('child_process');
+        spawn('C:\\Program Files\\Google\\Chrome\\Application\\chrome.exe', ['http://localhost:3000/watch?url=' + encodeURIComponent(videoUrl)]);
       });
     });
   }

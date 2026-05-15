@@ -277,6 +277,7 @@ function WatchPageContent() {
         const handleClickOutside = (e: MouseEvent) => {
             if (definitionPopup && !(e.target as HTMLElement).closest('.definition-popup')) {
                 setDefinitionPopup(null);
+                window.getSelection()?.removeAllRanges();
             }
         };
 
@@ -423,6 +424,7 @@ function WatchPageContent() {
 
         if (!text || text.length < 2) {
             setDefinitionPopup(null);
+            window.getSelection()?.removeAllRanges();
             return;
         }
 
@@ -852,7 +854,10 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                         <div className="flex justify-between items-start mb-2">
                             <h4 className="font-bold text-gray-800 text-lg">{definitionPopup.text}</h4>
                             <button
-                                onClick={() => setDefinitionPopup(null)}
+                                onClick={() => {
+                                    setDefinitionPopup(null);
+                                    window.getSelection()?.removeAllRanges();
+                                }}
                                 className="text-gray-500 hover:text-gray-700 text-2xl leading-none ml-2"
                             >
                                 ×
@@ -1333,7 +1338,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             <p>• Use ↕ control to move up/down and left/right</p>
                                             <p>• Use ⇕ control to adjust height</p>
                                             <p>• Click any word to jump to that time</p>
-                                            <p>• <strong>Select text to see definitions</strong></p>
+                                            <p>• <strong>Drag across words/phrases in the transcript to see definitions</strong></p>
                                             <p>• Current word is highlighted in blue</p>
                                             <p>• Adjust opacity to see video behind text</p>
                                             {transcriptLoading && <p style={{ color: '#60a5fa' }}>⏳ Loading transcript...</p>}

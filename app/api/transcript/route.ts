@@ -1,87 +1,36 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { YoutubeTranscript } from 'youtube-transcript';
 
 export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams;
-  const videoId = searchParams.get('videoId');
-
-  if (!videoId) {
-    return NextResponse.json({ error: 'Video ID is required' }, { status: 400 });
-  }
-
   try {
-    const { Innertube } = await import('youtubei.js');
-<<<<<<< HEAD
-    
-    console.log('Fetching transcript for:', videoId);
-    
-    const youtube = await Innertube.create();
-    const info = await youtube.getInfo(videoId);
-    
-    const transcriptData = await info.getTranscript();
-    
-    if (!transcriptData || !transcriptData.transcript) {
-      console.log('No transcript available');
-      return NextResponse.json({ 
-=======
+    const searchParams = request.nextUrl.searchParams;
+    const videoId = searchParams.get('videoId');
 
-    console.log('Fetching transcript for:', videoId);
-
-    const youtube = await Innertube.create();
-    const info = await youtube.getInfo(videoId);
-
-    const transcriptData = await info.getTranscript();
-
-    console.log('Transcript data:', JSON.stringify(transcriptData, null, 2));
-
-    if (!transcriptData || !transcriptData.transcript) {
-      console.log('No transcript available');
-      return NextResponse.json({
->>>>>>> origin/feature/tutorial-clarity-wip
-        error: 'No captions available for this video',
-        transcript: []
-      }, { status: 200 });
+    if (!videoId) {
+      return NextResponse.json({ error: 'Video ID is required' }, { status: 400 });
     }
 
-<<<<<<< HEAD
-    console.log('Transcript content:', transcriptData.transcript.content);
-    
-    const segments = transcriptData.transcript.content.body.initial_segments.map((segment: any) => ({
-      start: segment.start_ms / 1000,
-      duration: segment.end_ms / 1000 - segment.start_ms / 1000,
-      text: segment.snippet.runs.map((run: any) => run.text).join('')
-    }));
+    console.log('Fetching transcript for:', videoId);
 
-    console.log('Parsed segments:', segments.length);
+    const transcriptData = await YoutubeTranscript.fetchTranscript(videoId);
+    
+    if (!transcriptData || transcriptData.length === 0) {
+      return NextResponse.json({ error: 'No transcript available' }, { status: 404 });
+    }
+
+    const segments = transcriptData.map((item: any) => ({
+      start: item.offset / 1000,
+      duration: item.duration / 1000,
+      text: item.text
+    }));
 
     return NextResponse.json({ transcript: segments });
 
-  } catch (error: any) {
-    console.error('Transcript fetch error:', error);
-    
-    return NextResponse.json({ 
-      error: 'Failed to fetch transcript',
-      transcript: [],
-      details: error.message || 'Unknown error'
-=======
-    console.log('Transcript content structure:', Object.keys(transcriptData.transcript.content));
-    console.log('Body structure:', Object.keys(transcriptData.transcript.content.body));
-
-    const segments = transcriptData.transcript.content.body.initial_segments.map((segment: any) => ({
-      start: segment.start_ms / 1000,
-      duration: (segment.end_ms - segment.start_ms) / 1000,
-      text: segment.snippet.text
-    }));
-
-    console.log(`Returning ${segments.length} segments`);
-
-    return NextResponse.json({ transcript: segments });
-  } catch (error: any) {
-    console.error('Transcript fetch error:', error);
-    console.error('Error stack:', error.stack);
-    return NextResponse.json({
-      error: 'Transcript not available for this video',
-      transcript: []
->>>>>>> origin/feature/tutorial-clarity-wip
-    }, { status: 200 });
+  } catch (error) {
+    console.error('Transcript error:', error);
+    return NextResponse.json(
+      { error: 'Failed to fetch transcript' },
+      { status: 500 }
+    );
   }
 }
