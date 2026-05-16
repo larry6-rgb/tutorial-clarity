@@ -49,6 +49,7 @@ function WatchPageContent() {
     const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
     const [transcriptLoading, setTranscriptLoading] = useState(false);
     const [transcriptError, setTranscriptError] = useState('');
+    const [transcriptLanguage, setTranscriptLanguage] = useState('de');
     const [transcriptOpacity, setTranscriptOpacity] = useState(90);
     const [transcriptHeight, setTranscriptHeight] = useState(54);
     const [transcriptBottom, setTranscriptBottom] = useState(0);
@@ -108,7 +109,7 @@ function WatchPageContent() {
             setTranscriptError('');
 
             try {
-                const response = await fetch(`/api/transcript?videoId=${videoId}`);
+                const response = await fetch(`/api/transcript?videoId=${videoId}&lang=${transcriptLanguage}`);
 
                 if (!response.ok) {
                     throw new Error('Transcript not available');
@@ -130,7 +131,7 @@ function WatchPageContent() {
         };
 
         fetchTranscript();
-    }, [videoId, expandedSections]);
+    }, [videoId, expandedSections, transcriptLanguage]);
 
     useEffect(() => {
         if (!transcriptRef.current || transcript.length === 0 || (!expandedSections.has('scroll') && !expandedSections.has('definitions'))) return;
@@ -1511,6 +1512,41 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                 <li>• AI-powered technical definitions</li>
                                                 <li>• Context-aware explanations</li>
                                             </ul>
+                                        </div>
+
+                                        {/* Language Selector */}
+                                        <div style={{
+                                            backgroundColor: 'rgba(124, 58, 237, 0.2)',
+                                            padding: '8px',
+                                            borderRadius: '5px',
+                                            border: '1px solid #7c3aed',
+                                            marginBottom: '8px'
+                                        }}>
+                                            <h4 style={{ fontWeight: 'bold', marginBottom: '6px' }}>🌐 Transcript Language</h4>
+                                            <select
+                                                value={transcriptLanguage}
+                                                onChange={(e) => setTranscriptLanguage(e.target.value)}
+                                                style={{
+                                                    width: '100%',
+                                                    padding: '6px 8px',
+                                                    backgroundColor: '#1f2937',
+                                                    border: '1px solid #374151',
+                                                    borderRadius: '5px',
+                                                    color: 'white',
+                                                    fontSize: '12px',
+                                                    cursor: 'pointer'
+                                                }}
+                                            >
+                                                <option value="de">🇩🇪 German (Deutsch)</option>
+                                                <option value="en">🇬🇧 English</option>
+                                                <option value="es">🇪🇸 Spanish (Español)</option>
+                                                <option value="fr">🇫🇷 French (Français)</option>
+                                                <option value="it">🇮🇹 Italian (Italiano)</option>
+                                                <option value="pt">🇵🇹 Portuguese (Português)</option>
+                                            </select>
+                                            <p style={{ fontSize: '10px', color: '#a78bfa', marginTop: '4px' }}>
+                                                Select the language for the transcript captions. Availability depends on the video.
+                                            </p>
                                         </div>
 
                                         <div style={{
