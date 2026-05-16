@@ -74,11 +74,11 @@ function WatchPageContent() {
         y: number;
         loading: boolean;
     } | null>(null);
+    const [popupDragOffset, setPopupDragOffset] = useState<{ x: number; y: number } | null>(null);
+    const [isDraggingPopup, setIsDraggingPopup] = useState(false);
+    const popupDragStart = useRef<{ mouseX: number; mouseY: number; popupX: number; popupY: number } | null>(null);
     const [userTier] = useState<'free' | 'premium'>('free');
     const [definitionInput, setDefinitionInput] = useState('');
-    const [popupDragOffset, setPopupDragOffset] = useState<{x: number; y: number} | null>(null);
-    const [isPopupDragging, setIsPopupDragging] = useState(false);
-    const popupDragStart = useRef<{mouseX: number; mouseY: number; popupX: number; popupY: number} | null>(null);
 
     useEffect(() => {
         const stored = localStorage.getItem('tutorialClaritySavedVideos');
@@ -187,8 +187,8 @@ function WatchPageContent() {
         const interval = setInterval(() => {
             const active = document.activeElement;
             const tag = active?.tagName?.toLowerCase();
-            // Don't steal focus from input, textarea, or contenteditable elements
-            if (tag === 'input' || tag === 'textarea' || (active as HTMLElement)?.isContentEditable) {
+            // Don't steal focus from INPUT or TEXTAREA elements
+            if (tag === 'input' || tag === 'textarea' || tag === 'select') {
                 return;
             }
             if (containerRef.current && active !== containerRef.current) {
@@ -241,9 +241,9 @@ function WatchPageContent() {
 
     useEffect(() => {
         const handleKeyPress = (e: KeyboardEvent) => {
-            // Don't intercept keys when user is typing in an input or textarea
-            const tag = (e.target as HTMLElement)?.tagName?.toLowerCase();
-            if (tag === 'input' || tag === 'textarea' || (e.target as HTMLElement)?.isContentEditable) {
+            // Don't intercept keyboard events when user is typing in input fields
+            const activeTag = (document.activeElement?.tagName || '').toLowerCase();
+            if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
                 return;
             }
             if (e.code === 'Space') {
@@ -289,22 +289,25 @@ function WatchPageContent() {
 
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
+            if (isDraggingPopup) return; // Don't close while dragging
             if (definitionPopup && !(e.target as HTMLElement).closest('.definition-popup')) {
                 setDefinitionPopup(null);
+                setPopupDragOffset(null);
                 window.getSelection()?.removeAllRanges();
             }
         };
 
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, [definitionPopup]);
+    }, [definitionPopup, isDraggingPopup]);
 
-    // Popup drag handler
+    // Popup drag handlers
     useEffect(() => {
-        if (!isPopupDragging) return;
+        if (!isDraggingPopup) return;
 
         const handleMouseMove = (e: MouseEvent) => {
             if (!popupDragStart.current) return;
+            e.preventDefault();
             const dx = e.clientX - popupDragStart.current.mouseX;
             const dy = e.clientY - popupDragStart.current.mouseY;
             setPopupDragOffset({
@@ -314,31 +317,23 @@ function WatchPageContent() {
         };
 
         const handleMouseUp = () => {
-            setIsPopupDragging(false);
+            setIsDraggingPopup(false);
             popupDragStart.current = null;
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
         };
 
-        window.addEventListener('mousemove', handleMouseMove);
-        window.addEventListener('mouseup', handleMouseUp);
+        document.body.style.cursor = 'move';
+        document.body.style.userSelect = 'none';
+        window.addEventListener('mousemove', handleMouseMove, true);
+        window.addEventListener('mouseup', handleMouseUp, true);
         return () => {
-            window.removeEventListener('mousemove', handleMouseMove);
-            window.removeEventListener('mouseup', handleMouseUp);
+            window.removeEventListener('mousemove', handleMouseMove, true);
+            window.removeEventListener('mouseup', handleMouseUp, true);
+            document.body.style.cursor = '';
+            document.body.style.userSelect = '';
         };
-    }, [isPopupDragging]);
-
-    const handlePopupDragStart = (e: React.MouseEvent) => {
-        e.preventDefault();
-        e.stopPropagation();
-        const currentX = popupDragOffset?.x ?? (definitionPopup ? Math.min(definitionPopup.x, window.innerWidth - 400) : 0);
-        const currentY = popupDragOffset?.y ?? (definitionPopup ? Math.max(10, definitionPopup.y - 100) : 0);
-        popupDragStart.current = {
-            mouseX: e.clientX,
-            mouseY: e.clientY,
-            popupX: currentX,
-            popupY: currentY
-        };
-        setIsPopupDragging(true);
-    };
+    }, [isDraggingPopup]);
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
@@ -464,6 +459,11 @@ function WatchPageContent() {
         }
     };
 
+    const showDefinition = (popup: typeof definitionPopup) => {
+        setDefinitionPopup(popup);
+        if (popup) setPopupDragOffset(null); // Reset drag position for new popups
+    };
+
     const handleTextSelection = async (e: React.MouseEvent) => {
         if (isDraggingHeight || isDraggingPosition) {
             return;
@@ -478,13 +478,12 @@ function WatchPageContent() {
         const text = selection?.toString().trim();
 
         if (!text || text.length < 2) {
-            setDefinitionPopup(null);
+            showDefinition(null);
             window.getSelection()?.removeAllRanges();
             return;
         }
 
-        setPopupDragOffset(null);
-        setDefinitionPopup({
+        showDefinition({
             text,
             definition: '',
             x: e.clientX,
@@ -544,7 +543,6 @@ function WatchPageContent() {
 
         const text = definitionInput.trim();
 
-        setPopupDragOffset(null);
         setDefinitionPopup({
             text,
             definition: '',
@@ -900,20 +898,32 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                   </div>
                 )}
 
-                {definitionPopup && (
+                {definitionPopup && (() => {
+                    const popupX = popupDragOffset ? popupDragOffset.x : Math.min(definitionPopup.x, window.innerWidth - 400);
+                    const popupY = popupDragOffset ? popupDragOffset.y : Math.max(10, definitionPopup.y - 100);
+                    return (
                     <div
                         className="definition-popup fixed bg-white/80 backdrop-blur-md rounded-lg shadow-2xl max-w-md border-2 border-blue-500 z-[9999]"
                         style={{
-                            left: `${popupDragOffset ? popupDragOffset.x : Math.min(definitionPopup.x, window.innerWidth - 400)}px`,
-                            top: `${popupDragOffset ? popupDragOffset.y : Math.max(10, definitionPopup.y - 100)}px`,
-                            userSelect: isPopupDragging ? 'none' : 'auto'
+                            left: `${popupX}px`,
+                            top: `${popupY}px`
                         }}
                     >
-                        {/* Draggable header */}
+                        {/* Draggable header area */}
                         <div
-                            className="flex justify-between items-start p-3 pb-0"
-                            style={{ cursor: 'move' }}
-                            onMouseDown={handlePopupDragStart}
+                            className="flex justify-between items-start px-4 pt-3 pb-1 cursor-move select-none"
+                            style={{ borderBottom: '1px solid rgba(59,130,246,0.3)' }}
+                            onMouseDown={(e) => {
+                                e.preventDefault();
+                                e.stopPropagation();
+                                setIsDraggingPopup(true);
+                                popupDragStart.current = {
+                                    mouseX: e.clientX,
+                                    mouseY: e.clientY,
+                                    popupX: popupX,
+                                    popupY: popupY
+                                };
+                            }}
                         >
                             <h4 className="font-bold text-gray-800 text-lg">{definitionPopup.text}</h4>
                             <button
@@ -923,12 +933,12 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                     setPopupDragOffset(null);
                                     window.getSelection()?.removeAllRanges();
                                 }}
-                                className="text-gray-500 hover:text-gray-700 text-2xl leading-none ml-2"
+                                className="text-gray-500 hover:text-gray-700 text-2xl leading-none ml-2 cursor-pointer"
                             >
                                 ×
                             </button>
                         </div>
-                        <div className="p-3 pt-2">
+                        <div className="px-4 pb-3 pt-2">
                             {definitionPopup.loading ? (
                                 <p className="text-gray-600 text-sm">⏳ Loading definition...</p>
                             ) : (
@@ -936,7 +946,8 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                             )}
                         </div>
                     </div>
-                )}
+                    );
+                })()}
 
                 {showTranscriptBar && (
                     <>
