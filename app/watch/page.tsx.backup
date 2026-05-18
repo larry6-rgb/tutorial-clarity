@@ -49,7 +49,6 @@ function WatchPageContent() {
     const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
     const [transcriptLoading, setTranscriptLoading] = useState(false);
     const [transcriptError, setTranscriptError] = useState('');
-    // Language selection removed - just fetch the default transcript
     const [transcriptOpacity, setTranscriptOpacity] = useState(90);
     const [transcriptHeight, setTranscriptHeight] = useState(54);
     const [transcriptBottom, setTranscriptBottom] = useState(0);
@@ -75,21 +74,8 @@ function WatchPageContent() {
         y: number;
         loading: boolean;
     } | null>(null);
-    const [popupDragOffset, setPopupDragOffset] = useState<{ x: number; y: number } | null>(null);
-    const [isDraggingPopup, setIsDraggingPopup] = useState(false);
-    const popupDragStart = useRef<{ mouseX: number; mouseY: number; popupX: number; popupY: number } | null>(null);
     const [userTier] = useState<'free' | 'premium'>('free');
-
-    // Resizable popup state
-    const [popupSize, setPopupSize] = useState<{ width: number; height: number }>({ width: 400, height: 300 });
-    const [isResizingPopup, setIsResizingPopup] = useState(false);
-    const resizeStart = useRef<{
-        mouseX: number; mouseY: number;
-        width: number; height: number;
-        popupX: number; popupY: number;
-        handle: string;
-    } | null>(null);
-
+    const [definitionInput, setDefinitionInput] = useState('');
 
     useEffect(() => {
         const stored = localStorage.getItem('tutorialClaritySavedVideos');
@@ -111,44 +97,29 @@ function WatchPageContent() {
         }
     }, []);
 
-    // Derive a primitive boolean so React can reliably detect changes
-    const transcriptSectionOpen = expandedSections.has('scroll') || expandedSections.has('definitions');
-
     useEffect(() => {
-        if (!videoId || !transcriptSectionOpen) return;
+        if (!videoId || (!expandedSections.has('scroll') && !expandedSections.has('definitions'))) return;
 
         const fetchTranscript = async () => {
             setTranscriptLoading(true);
             setTranscriptError('');
-            setTranscript([]); // Clear old transcript immediately for visual feedback
 
             try {
-                // Add cache-busting timestamp to prevent browser/Next.js from serving stale responses
-                const cacheBust = Date.now();
-                console.log(`[watch] Fetching transcript: videoId=${videoId}, t=${cacheBust}`);
-                const response = await fetch(
-                    `/api/transcript?videoId=${videoId}&_t=${cacheBust}`,
-                    {
-                        cache: 'no-store',
-                        headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
-                    }
-                );
+                const response = await fetch(`/api/transcript?videoId=${videoId}`);
 
                 if (!response.ok) {
                     throw new Error('Transcript not available');
                 }
 
                 const data = await response.json();
-                console.log(`[watch] Transcript response: lang=${data.language}, segments=${data.count}`);
 
                 if (data.transcript && data.transcript.length > 0) {
                     setTranscript(data.transcript);
-                    setTranscriptError('');
                 } else {
                     setTranscriptError('No transcript available for this video');
                 }
             } catch (error) {
-                console.error('[watch] Transcript error:', error);
+                console.error('Transcript error:', error);
                 setTranscriptError('Transcript not available for this video');
             } finally {
                 setTranscriptLoading(false);
@@ -156,10 +127,10 @@ function WatchPageContent() {
         };
 
         fetchTranscript();
-    }, [videoId, transcriptSectionOpen]);
+    }, [videoId, expandedSections]);
 
     useEffect(() => {
-        if (!transcriptRef.current || transcript.length === 0 || (!expandedSections.has('scroll') && !expandedSections.has('definitions'))) return;
+        if (!transcriptRef.current || transcript.length === 0 || !expandedSections.has('scroll')) return;
 
         const currentSegmentIndex = transcript.findIndex((seg, idx) => {
             const nextSeg = transcript[idx + 1];
@@ -211,13 +182,7 @@ function WatchPageContent() {
 
     useEffect(() => {
         const interval = setInterval(() => {
-            const active = document.activeElement;
-            const tag = active?.tagName?.toLowerCase();
-            // Don't steal focus from INPUT or TEXTAREA elements
-            if (tag === 'input' || tag === 'textarea' || tag === 'select') {
-                return;
-            }
-            if (containerRef.current && active !== containerRef.current) {
+            if (containerRef.current && document.activeElement !== containerRef.current) {
                 containerRef.current.focus();
             }
         }, 100);
@@ -267,11 +232,6 @@ function WatchPageContent() {
 
     useEffect(() => {
         const handleKeyPress = (e: KeyboardEvent) => {
-            // Don't intercept keyboard events when user is typing in input fields
-            const activeTag = (document.activeElement?.tagName || '').toLowerCase();
-            if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
-                return;
-            }
             if (e.code === 'Space') {
                 e.preventDefault();
                 e.stopPropagation();
@@ -315,106 +275,15 @@ function WatchPageContent() {
 
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
-            if (isDraggingPopup || isResizingPopup) return; // Don't close while dragging or resizing
             if (definitionPopup && !(e.target as HTMLElement).closest('.definition-popup')) {
                 setDefinitionPopup(null);
-                setPopupDragOffset(null);
                 window.getSelection()?.removeAllRanges();
             }
         };
 
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, [definitionPopup, isDraggingPopup, isResizingPopup]);
-
-    // Popup drag handlers
-    useEffect(() => {
-        if (!isDraggingPopup) return;
-
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!popupDragStart.current) return;
-            e.preventDefault();
-            const dx = e.clientX - popupDragStart.current.mouseX;
-            const dy = e.clientY - popupDragStart.current.mouseY;
-            setPopupDragOffset({
-                x: popupDragStart.current.popupX + dx,
-                y: popupDragStart.current.popupY + dy
-            });
-        };
-
-        const handleMouseUp = () => {
-            setIsDraggingPopup(false);
-            popupDragStart.current = null;
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-        };
-
-        document.body.style.cursor = 'move';
-        document.body.style.userSelect = 'none';
-        window.addEventListener('mousemove', handleMouseMove, true);
-        window.addEventListener('mouseup', handleMouseUp, true);
-        return () => {
-            window.removeEventListener('mousemove', handleMouseMove, true);
-            window.removeEventListener('mouseup', handleMouseUp, true);
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-        };
-    }, [isDraggingPopup]);
-
-    // Resize popup effect
-    useEffect(() => {
-        if (!isResizingPopup) return;
-
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!resizeStart.current) return;
-            e.preventDefault();
-            const dx = e.clientX - resizeStart.current.mouseX;
-            const dy = e.clientY - resizeStart.current.mouseY;
-            const handle = resizeStart.current.handle;
-            const minW = 300, minH = 200;
-            const maxW = window.innerWidth * 0.8, maxH = window.innerHeight * 0.8;
-
-            let newW = resizeStart.current.width;
-            let newH = resizeStart.current.height;
-            let newX = resizeStart.current.popupX;
-            let newY = resizeStart.current.popupY;
-
-            if (handle.includes('e')) { newW = Math.max(minW, Math.min(maxW, resizeStart.current.width + dx)); }
-            if (handle.includes('w')) {
-                const delta = Math.min(dx, resizeStart.current.width - minW);
-                const clampedDelta = Math.max(delta, resizeStart.current.width - maxW);
-                newW = resizeStart.current.width - clampedDelta;
-                newX = resizeStart.current.popupX + clampedDelta;
-            }
-            if (handle.includes('s')) { newH = Math.max(minH, Math.min(maxH, resizeStart.current.height + dy)); }
-            if (handle.includes('n')) {
-                const delta = Math.min(dy, resizeStart.current.height - minH);
-                const clampedDelta = Math.max(delta, resizeStart.current.height - maxH);
-                newH = resizeStart.current.height - clampedDelta;
-                newY = resizeStart.current.popupY + clampedDelta;
-            }
-
-            setPopupSize({ width: newW, height: newH });
-            setPopupDragOffset({ x: newX, y: newY });
-        };
-
-        const handleMouseUp = () => {
-            setIsResizingPopup(false);
-            resizeStart.current = null;
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-        };
-
-        document.body.style.userSelect = 'none';
-        window.addEventListener('mousemove', handleMouseMove, true);
-        window.addEventListener('mouseup', handleMouseUp, true);
-        return () => {
-            window.removeEventListener('mousemove', handleMouseMove, true);
-            window.removeEventListener('mouseup', handleMouseUp, true);
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-        };
-    }, [isResizingPopup]);
+    }, [definitionPopup]);
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
@@ -540,29 +409,6 @@ function WatchPageContent() {
         }
     };
 
-    const showDefinition = (popup: typeof definitionPopup) => {
-        setDefinitionPopup(popup);
-        if (popup) {
-            setPopupDragOffset(null); // Reset drag position for new popups
-            setPopupSize({ width: 400, height: 300 }); // Reset size for new popups
-        }
-    };
-
-    const handleResizeStart = (handle: string, e: React.MouseEvent, popupX: number, popupY: number) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsResizingPopup(true);
-        resizeStart.current = {
-            mouseX: e.clientX,
-            mouseY: e.clientY,
-            width: popupSize.width,
-            height: popupSize.height,
-            popupX,
-            popupY,
-            handle
-        };
-    };
-
     const handleTextSelection = async (e: React.MouseEvent) => {
         if (isDraggingHeight || isDraggingPosition) {
             return;
@@ -577,12 +423,12 @@ function WatchPageContent() {
         const text = selection?.toString().trim();
 
         if (!text || text.length < 2) {
-            showDefinition(null);
+            setDefinitionPopup(null);
             window.getSelection()?.removeAllRanges();
             return;
         }
 
-        showDefinition({
+        setDefinitionPopup({
             text,
             definition: '',
             x: e.clientX,
@@ -635,6 +481,68 @@ function WatchPageContent() {
                 loading: false
             });
         }
+    };
+
+    const handleDefinitionInputSubmit = async () => {
+        if (!definitionInput.trim()) return;
+
+        const text = definitionInput.trim();
+
+        setDefinitionPopup({
+            text,
+            definition: '',
+            x: window.innerWidth / 2,
+            y: window.innerHeight / 2,
+            loading: true
+        });
+
+        try {
+            const context = transcript.map(seg => seg.text).join(' ').slice(0, 500);
+            const videoTitle = document.title || 'Tutorial Video';
+
+            const response = await fetch('/api/define', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    term: text,
+                    context,
+                    videoTitle,
+                    userTier,
+                    developmentMode: DEVELOPMENT_MODE
+                })
+            });
+
+            const data = await response.json();
+
+            if (data.requiresUpgrade) {
+                setDefinitionPopup({
+                    text,
+                    definition: `🔒 ${data.message}`,
+                    x: window.innerWidth / 2,
+                    y: window.innerHeight / 2,
+                    loading: false
+                });
+            } else {
+                setDefinitionPopup({
+                    text,
+                    definition: data.definition,
+                    x: window.innerWidth / 2,
+                    y: window.innerHeight / 2,
+                    loading: false
+                });
+            }
+        } catch (error) {
+            console.error('Definition error:', error);
+            setDefinitionPopup({
+                text,
+                definition: '❌ Definition not available. Please try again.',
+                x: window.innerWidth / 2,
+                y: window.innerHeight / 2,
+                loading: false
+            });
+        }
+
+        setDefinitionInput('');
     };
 
     const extractVideoId = (url: string): string | null => {
@@ -935,87 +843,33 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                   </div>
                 )}
 
-                {definitionPopup && (() => {
-                    const popupX = popupDragOffset ? popupDragOffset.x : Math.min(definitionPopup.x, window.innerWidth - popupSize.width);
-                    const popupY = popupDragOffset ? popupDragOffset.y : Math.max(10, definitionPopup.y - 100);
-                    const resizeHandleBase: React.CSSProperties = { position: 'absolute', zIndex: 10 };
-                    const cornerSize = 12;
-                    const edgeThickness = 6;
-                    const handles: { key: string; style: React.CSSProperties; cursor: string }[] = [
-                        { key: 'nw', cursor: 'nw-resize', style: { top: -cornerSize/2, left: -cornerSize/2, width: cornerSize, height: cornerSize } },
-                        { key: 'ne', cursor: 'ne-resize', style: { top: -cornerSize/2, right: -cornerSize/2, width: cornerSize, height: cornerSize } },
-                        { key: 'sw', cursor: 'sw-resize', style: { bottom: -cornerSize/2, left: -cornerSize/2, width: cornerSize, height: cornerSize } },
-                        { key: 'se', cursor: 'se-resize', style: { bottom: -cornerSize/2, right: -cornerSize/2, width: cornerSize, height: cornerSize } },
-                        { key: 'n', cursor: 'n-resize', style: { top: -edgeThickness/2, left: cornerSize, right: cornerSize, height: edgeThickness } },
-                        { key: 's', cursor: 's-resize', style: { bottom: -edgeThickness/2, left: cornerSize, right: cornerSize, height: edgeThickness } },
-                        { key: 'w', cursor: 'w-resize', style: { left: -edgeThickness/2, top: cornerSize, bottom: cornerSize, width: edgeThickness } },
-                        { key: 'e', cursor: 'e-resize', style: { right: -edgeThickness/2, top: cornerSize, bottom: cornerSize, width: edgeThickness } },
-                    ];
-                    return (
+                {definitionPopup && (
                     <div
-                        className="definition-popup fixed rounded-lg border-2 border-blue-500 z-[9999]"
+                        className="definition-popup fixed bg-white/80 backdrop-blur-md rounded-lg shadow-2xl p-4 max-w-md border-2 border-blue-500 z-[9999]"
                         style={{
-                            left: `${popupX}px`,
-                            top: `${popupY}px`,
-                            width: `${popupSize.width}px`,
-                            height: `${popupSize.height}px`,
-                            backgroundColor: 'rgba(255, 255, 255, 0.75)',
-                            backdropFilter: 'blur(12px)',
-                            WebkitBackdropFilter: 'blur(12px)',
-                            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.2)',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            overflow: 'hidden'
+                            left: `${Math.min(definitionPopup.x, window.innerWidth - 400)}px`,
+                            top: `${Math.max(10, definitionPopup.y - 100)}px`
                         }}
                     >
-                        {/* Resize handles */}
-                        {handles.map(h => (
-                            <div
-                                key={h.key}
-                                style={{ ...resizeHandleBase, ...h.style, cursor: h.cursor }}
-                                onMouseDown={(e) => handleResizeStart(h.key, e, popupX, popupY)}
-                            />
-                        ))}
-
-                        {/* Draggable header area */}
-                        <div
-                            className="flex justify-between items-start px-4 pt-3 pb-1 cursor-move select-none"
-                            style={{ borderBottom: '1px solid rgba(59,130,246,0.3)', flexShrink: 0 }}
-                            onMouseDown={(e) => {
-                                e.preventDefault();
-                                e.stopPropagation();
-                                setIsDraggingPopup(true);
-                                popupDragStart.current = {
-                                    mouseX: e.clientX,
-                                    mouseY: e.clientY,
-                                    popupX: popupX,
-                                    popupY: popupY
-                                };
-                            }}
-                        >
+                        <div className="flex justify-between items-start mb-2">
                             <h4 className="font-bold text-gray-800 text-lg">{definitionPopup.text}</h4>
                             <button
-                                onClick={(e) => {
-                                    e.stopPropagation();
+                                onClick={() => {
                                     setDefinitionPopup(null);
-                                    setPopupDragOffset(null);
                                     window.getSelection()?.removeAllRanges();
                                 }}
-                                className="text-gray-500 hover:text-gray-700 text-2xl leading-none ml-2 cursor-pointer"
+                                className="text-gray-500 hover:text-gray-700 text-2xl leading-none ml-2"
                             >
                                 ×
                             </button>
                         </div>
-                        <div className="px-4 pb-3 pt-2" style={{ overflowY: 'auto', flex: 1 }}>
-                            {definitionPopup.loading ? (
-                                <p className="text-gray-600 text-sm">⏳ Loading definition...</p>
-                            ) : (
-                                <p className="text-gray-700 text-sm whitespace-pre-line">{definitionPopup.definition}</p>
-                            )}
-                        </div>
+                        {definitionPopup.loading ? (
+                            <p className="text-gray-600 text-sm">⏳ Loading definition...</p>
+                        ) : (
+                            <p className="text-gray-700 text-sm whitespace-pre-line">{definitionPopup.definition}</p>
+                        )}
                     </div>
-                    );
-                })()}
+                )}
 
                 {showTranscriptBar && (
                     <>
@@ -1521,23 +1375,55 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             marginBottom: '8px'
                                         }}>
                                             <h4 style={{ fontWeight: 'bold', marginBottom: '6px' }}>📖 How to Get a Definition</h4>
-                                            <p style={{ marginBottom: '6px', fontSize: '12px', color: '#93c5fd' }}>
-                                                Drag across words/phrases in the transcript below to see definitions
-                                            </p>
-                                            <ol style={{ paddingLeft: '16px' }}>
+                                            <ol style={{ paddingLeft: '16px', marginBottom: '8px' }}>
                                                 <li>Pause the video (spacebar)</li>
-                                                <li><strong>Drag across any word or phrase in the transcript below</strong></li>
+                                                <li>Select any word or phrase in the transcript</li>
                                                 <li>Definition appears in a popup overlay</li>
                                                 <li>Click X to close the definition</li>
                                             </ol>
+                                            <p style={{ marginBottom: '8px', fontSize: '12px', color: '#93c5fd' }}>
+                                                If you see a word or phrase on the video screen that you would like to have defined, type it into this text window.
+                                            </p>
+                                            <div style={{ display: 'flex', gap: '4px' }}>
+                                                <input
+                                                    type="text"
+                                                    value={definitionInput}
+                                                    onChange={(e) => setDefinitionInput(e.target.value)}
+                                                    placeholder="Enter word or phrase"
+                                                    style={{
+                                                        flex: 1,
+                                                        padding: '6px',
+                                                        backgroundColor: '#1f2937',
+                                                        border: '1px solid #374151',
+                                                        borderRadius: '5px',
+                                                        color: 'white',
+                                                        fontSize: '11px'
+                                                    }}
+                                                    onKeyDown={(e) => e.key === 'Enter' && handleDefinitionInputSubmit()}
+                                                />
+                                                <button
+                                                    onClick={handleDefinitionInputSubmit}
+                                                    style={{
+                                                        padding: '6px 12px',
+                                                        backgroundColor: '#2563eb',
+                                                        color: 'white',
+                                                        border: 'none',
+                                                        borderRadius: '5px',
+                                                        cursor: 'pointer',
+                                                        fontSize: '11px',
+                                                        fontWeight: 'bold'
+                                                    }}
+                                                >
+                                                    Define
+                                                </button>
+                                            </div>
                                         </div>
 
                                         <div style={{
                                             backgroundColor: 'rgba(20, 83, 45, 0.3)',
                                             padding: '8px',
                                             borderRadius: '5px',
-                                            border: '1px solid #15803d',
-                                            marginBottom: '12px'
+                                            border: '1px solid #15803d'
                                         }}>
                                             <h4 style={{ fontWeight: 'bold', marginBottom: '6px' }}>✨ Features</h4>
                                             <ul style={{ paddingLeft: '16px' }}>
@@ -1546,25 +1432,6 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                 <li>• AI-powered technical definitions</li>
                                                 <li>• Context-aware explanations</li>
                                             </ul>
-                                        </div>
-
-                                        <div style={{
-                                            backgroundColor: 'rgba(59, 130, 246, 0.2)',
-                                            padding: '8px',
-                                            borderRadius: '5px',
-                                            border: '1px solid #3b82f6'
-                                        }}>
-                                            <h4 style={{ fontWeight: 'bold', marginBottom: '6px' }}>📝 Transcript</h4>
-                                            <p style={{ marginBottom: '6px', fontSize: '10px', color: '#93c5fd' }}>
-                                                The scrolling transcript bar appears at the bottom of the video. Drag across any words or phrases to get instant definitions.
-                                            </p>
-                                            <p style={{ fontSize: '10px', color: '#9ca3af' }}>
-                                                • Use ↕ and ⇕ controls to adjust position and height<br/>
-                                                • Click words to jump to that timestamp<br/>
-                                                • Current word is highlighted in bold
-                                            </p>
-                                            {transcriptLoading && <p style={{ color: '#60a5fa', marginTop: '6px' }}>⏳ Loading transcript...</p>}
-                                            {transcriptError && <p style={{ color: '#f87171', marginTop: '6px' }}>• {transcriptError}</p>}
                                         </div>
                                     </div>
                                 )}
