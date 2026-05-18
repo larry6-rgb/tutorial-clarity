@@ -55,10 +55,15 @@ async function trySelectLanguage(
   availableLangs: string[]
 ): Promise<any | null> {
   const variants = LANGUAGE_MAP[langCode];
-  if (!variants) return null;
+  if (!variants) {
+    console.log(`[transcript-api] No variants defined for lang code: "${langCode}"`);
+    return null;
+  }
 
   // Check if already selected
   const currentLang = transcriptData?.selectedLanguage ?? '';
+  console.log(`[transcript-api] Current language: "${currentLang}", requested: "${langCode}", variants: [${variants.join(', ')}]`);
+  
   const isAlreadySelected = variants.some(
     (v) => currentLang.toLowerCase().includes(v.toLowerCase())
   );
@@ -67,23 +72,53 @@ async function trySelectLanguage(
     return transcriptData;
   }
 
-  // Find matching language in available list
-  const matchingLang = availableLangs.find((lang: string) =>
-    variants.some((v) => lang.toLowerCase().includes(v.toLowerCase()))
+  // Find matching language in available list — try exact match first, then partial
+  let matchingLang = availableLangs.find((lang: string) =>
+    variants.some((v) => lang.toLowerCase() === v.toLowerCase())
   );
+  if (!matchingLang) {
+    matchingLang = availableLangs.find((lang: string) =>
+      variants.some((v) => lang.toLowerCase().includes(v.toLowerCase()))
+    );
+  }
 
   if (!matchingLang) {
-    console.log(`[transcript-api] Language "${langCode}" not found in available: [${availableLangs.join(', ')}]`);
+    console.log(`[transcript-api] ❌ Language "${langCode}" not found in available: [${availableLangs.join(', ')}]`);
     return null;
   }
 
   try {
-    console.log(`[transcript-api] Switching to "${matchingLang}" (${langCode})...`);
+    console.log(`[transcript-api] 🔄 Switching to "${matchingLang}" (${langCode})...`);
     const switched = await transcriptData.selectLanguage(matchingLang);
-    console.log(`[transcript-api] ✅ Switched to "${matchingLang}"`);
+    
+    // Verify the switch actually worked
+    const newLang = switched?.selectedLanguage ?? '(unknown)';
+    console.log(`[transcript-api] ✅ Switched to "${matchingLang}", new selectedLanguage: "${newLang}"`);
+    
+    // Double-check it has segments
+    const segments = switched?.transcript?.content?.body?.initial_segments;
+    if (!segments || !Array.isArray(segments) || segments.length === 0) {
+      console.warn(`[transcript-api] ⚠️ Language switched but no segments found — may be empty transcript`);
+    } else {
+      console.log(`[transcript-api] ✅ Got ${segments.length} segments after language switch`);
+    }
+    
     return switched;
   } catch (err: any) {
     console.warn(`[transcript-api] ⚠️ Failed to select "${matchingLang}":`, err?.message);
+    
+    // Some versions of youtubei.js use different method names — try alternatives
+    if (typeof transcriptData.setLanguage === 'function') {
+      try {
+        console.log(`[transcript-api] Trying .setLanguage("${matchingLang}") as fallback...`);
+        const switched = await transcriptData.setLanguage(matchingLang);
+        console.log(`[transcript-api] ✅ .setLanguage() succeeded`);
+        return switched;
+      } catch (err2: any) {
+        console.warn(`[transcript-api] ⚠️ .setLanguage() also failed:`, err2?.message);
+      }
+    }
+    
     return null;
   }
 }
@@ -106,10 +141,26 @@ export async function GET(request: NextRequest) {
     const info = await youtube.getInfo(videoId);
     let transcriptData: any = await info.getTranscript();
 
-    const availableLangs: string[] = transcriptData?.languages ?? [];
+    // Debug: explore what properties the transcript data object has
+    const tdKeys = transcriptData ? Object.keys(transcriptData) : [];
+    console.log(`[transcript-api] TranscriptData keys: [${tdKeys.join(', ')}]`);
+    console.log(`[transcript-api] TranscriptData.languages type: ${typeof transcriptData?.languages}`);
+    console.log(`[transcript-api] TranscriptData.selectedLanguage: "${transcriptData?.selectedLanguage}"`);
+    
+    // Try multiple possible property names for available languages
+    const availableLangs: string[] = transcriptData?.languages 
+      ?? transcriptData?.availableLanguages 
+      ?? [];
     const defaultLang = transcriptData?.selectedLanguage ?? '(unknown)';
     console.log(`[transcript-api] Available languages: [${availableLangs.join(', ')}]`);
     console.log(`[transcript-api] Default selected: "${defaultLang}"`);
+    
+    // Log available methods on transcriptData for debugging
+    if (transcriptData) {
+      const methods = Object.getOwnPropertyNames(Object.getPrototypeOf(transcriptData) || {})
+        .filter(name => typeof transcriptData[name] === 'function');
+      console.log(`[transcript-api] Available methods: [${methods.join(', ')}]`);
+    }
 
     // Try the requested language first (no fallback — give the frontend an honest answer)
     let selectedLangCode = requestedLang;

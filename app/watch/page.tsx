@@ -101,8 +101,11 @@ function WatchPageContent() {
         }
     }, []);
 
+    // Derive a primitive boolean so React can reliably detect changes
+    const transcriptSectionOpen = expandedSections.has('scroll') || expandedSections.has('definitions');
+
     useEffect(() => {
-        if (!videoId || (!expandedSections.has('scroll') && !expandedSections.has('definitions'))) return;
+        if (!videoId || !transcriptSectionOpen) return;
 
         const fetchTranscript = async () => {
             setTranscriptLoading(true);
@@ -112,9 +115,13 @@ function WatchPageContent() {
             try {
                 // Add cache-busting timestamp to prevent browser/Next.js from serving stale responses
                 const cacheBust = Date.now();
+                console.log(`[watch] Fetching transcript: videoId=${videoId}, lang=${transcriptLanguage}, t=${cacheBust}`);
                 const response = await fetch(
                     `/api/transcript?videoId=${videoId}&lang=${transcriptLanguage}&_t=${cacheBust}`,
-                    { cache: 'no-store' }
+                    {
+                        cache: 'no-store',
+                        headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
+                    }
                 );
 
                 if (!response.ok) {
@@ -128,13 +135,18 @@ function WatchPageContent() {
                     setTranscript(data.transcript);
                     // If the requested language wasn't available, show a note
                     if (data.languageSwitched === false && data.language !== transcriptLanguage) {
-                        setTranscriptError(`Language "${transcriptLanguage}" not available for this video. Showing ${data.language} instead.`);
+                        const langNames: Record<string, string> = { de: 'German', en: 'English', es: 'Spanish', fr: 'French', it: 'Italian', pt: 'Portuguese' };
+                        const requestedName = langNames[transcriptLanguage] || transcriptLanguage;
+                        const availableStr = (data.availableLanguages || []).join(', ');
+                        setTranscriptError(`"${requestedName}" not available for this video. Available: ${availableStr || 'unknown'}. Showing default.`);
+                    } else {
+                        setTranscriptError('');
                     }
                 } else {
                     setTranscriptError('No transcript available for this video');
                 }
             } catch (error) {
-                console.error('Transcript error:', error);
+                console.error('[watch] Transcript error:', error);
                 setTranscriptError('Transcript not available for this video');
             } finally {
                 setTranscriptLoading(false);
@@ -142,7 +154,7 @@ function WatchPageContent() {
         };
 
         fetchTranscript();
-    }, [videoId, expandedSections, transcriptLanguage]);
+    }, [videoId, transcriptSectionOpen, transcriptLanguage]);
 
     useEffect(() => {
         if (!transcriptRef.current || transcript.length === 0 || (!expandedSections.has('scroll') && !expandedSections.has('definitions'))) return;
@@ -853,10 +865,14 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                     const popupY = popupDragOffset ? popupDragOffset.y : Math.max(10, definitionPopup.y - 100);
                     return (
                     <div
-                        className="definition-popup fixed bg-white/80 backdrop-blur-md rounded-lg shadow-2xl max-w-md border-2 border-blue-500 z-[9999]"
+                        className="definition-popup fixed rounded-lg max-w-md border-2 border-blue-500 z-[9999]"
                         style={{
                             left: `${popupX}px`,
-                            top: `${popupY}px`
+                            top: `${popupY}px`,
+                            backgroundColor: 'rgba(255, 255, 255, 0.75)',
+                            backdropFilter: 'blur(12px)',
+                            WebkitBackdropFilter: 'blur(12px)',
+                            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.2)'
                         }}
                     >
                         {/* Draggable header area */}
