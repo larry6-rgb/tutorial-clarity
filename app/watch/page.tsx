@@ -79,7 +79,7 @@ function WatchPageContent() {
     const [isDraggingPopup, setIsDraggingPopup] = useState(false);
     const popupDragStart = useRef<{ mouseX: number; mouseY: number; popupX: number; popupY: number } | null>(null);
     const [userTier] = useState<'free' | 'premium'>('free');
-    const [definitionInput, setDefinitionInput] = useState('');
+
 
     useEffect(() => {
         const stored = localStorage.getItem('tutorialClaritySavedVideos');
@@ -107,18 +107,29 @@ function WatchPageContent() {
         const fetchTranscript = async () => {
             setTranscriptLoading(true);
             setTranscriptError('');
+            setTranscript([]); // Clear old transcript immediately for visual feedback
 
             try {
-                const response = await fetch(`/api/transcript?videoId=${videoId}&lang=${transcriptLanguage}`);
+                // Add cache-busting timestamp to prevent browser/Next.js from serving stale responses
+                const cacheBust = Date.now();
+                const response = await fetch(
+                    `/api/transcript?videoId=${videoId}&lang=${transcriptLanguage}&_t=${cacheBust}`,
+                    { cache: 'no-store' }
+                );
 
                 if (!response.ok) {
                     throw new Error('Transcript not available');
                 }
 
                 const data = await response.json();
+                console.log(`[watch] Transcript response: lang=${data.language}, switched=${data.languageSwitched}, segments=${data.count}, available=[${(data.availableLanguages || []).join(', ')}]`);
 
                 if (data.transcript && data.transcript.length > 0) {
                     setTranscript(data.transcript);
+                    // If the requested language wasn't available, show a note
+                    if (data.languageSwitched === false && data.language !== transcriptLanguage) {
+                        setTranscriptError(`Language "${transcriptLanguage}" not available for this video. Showing ${data.language} instead.`);
+                    }
                 } else {
                     setTranscriptError('No transcript available for this video');
                 }
@@ -537,68 +548,6 @@ function WatchPageContent() {
                 loading: false
             });
         }
-    };
-
-    const handleDefinitionInputSubmit = async () => {
-        if (!definitionInput.trim()) return;
-
-        const text = definitionInput.trim();
-
-        setDefinitionPopup({
-            text,
-            definition: '',
-            x: window.innerWidth / 2,
-            y: window.innerHeight / 2,
-            loading: true
-        });
-
-        try {
-            const context = transcript.map(seg => seg.text).join(' ').slice(0, 500);
-            const videoTitle = document.title || 'Tutorial Video';
-
-            const response = await fetch('/api/define', {
-                method: 'POST',
-                headers: { 'Content-Type': 'application/json' },
-                body: JSON.stringify({
-                    term: text,
-                    context,
-                    videoTitle,
-                    userTier,
-                    developmentMode: DEVELOPMENT_MODE
-                })
-            });
-
-            const data = await response.json();
-
-            if (data.requiresUpgrade) {
-                setDefinitionPopup({
-                    text,
-                    definition: `🔒 ${data.message}`,
-                    x: window.innerWidth / 2,
-                    y: window.innerHeight / 2,
-                    loading: false
-                });
-            } else {
-                setDefinitionPopup({
-                    text,
-                    definition: data.definition,
-                    x: window.innerWidth / 2,
-                    y: window.innerHeight / 2,
-                    loading: false
-                });
-            }
-        } catch (error) {
-            console.error('Definition error:', error);
-            setDefinitionPopup({
-                text,
-                definition: '❌ Definition not available. Please try again.',
-                x: window.innerWidth / 2,
-                y: window.innerHeight / 2,
-                loading: false
-            });
-        }
-
-        setDefinitionInput('');
     };
 
     const extractVideoId = (url: string): string | null => {
@@ -1454,48 +1403,15 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             marginBottom: '8px'
                                         }}>
                                             <h4 style={{ fontWeight: 'bold', marginBottom: '6px' }}>📖 How to Get a Definition</h4>
-                                            <ol style={{ paddingLeft: '16px', marginBottom: '8px' }}>
+                                            <p style={{ marginBottom: '6px', fontSize: '12px', color: '#93c5fd' }}>
+                                                Drag across words/phrases in the transcript below to see definitions
+                                            </p>
+                                            <ol style={{ paddingLeft: '16px' }}>
                                                 <li>Pause the video (spacebar)</li>
                                                 <li><strong>Drag across any word or phrase in the transcript below</strong></li>
                                                 <li>Definition appears in a popup overlay</li>
                                                 <li>Click X to close the definition</li>
                                             </ol>
-                                            <p style={{ marginBottom: '8px', fontSize: '12px', color: '#93c5fd' }}>
-                                                If you see a word or phrase on the video screen that you would like to have defined, type it into this text window.
-                                            </p>
-                                            <div style={{ display: 'flex', gap: '4px' }}>
-                                                <input
-                                                    type="text"
-                                                    value={definitionInput}
-                                                    onChange={(e) => setDefinitionInput(e.target.value)}
-                                                    placeholder="Enter word or phrase"
-                                                    style={{
-                                                        flex: 1,
-                                                        padding: '6px',
-                                                        backgroundColor: '#1f2937',
-                                                        border: '1px solid #374151',
-                                                        borderRadius: '5px',
-                                                        color: 'white',
-                                                        fontSize: '11px'
-                                                    }}
-                                                    onKeyDown={(e) => e.key === 'Enter' && handleDefinitionInputSubmit()}
-                                                />
-                                                <button
-                                                    onClick={handleDefinitionInputSubmit}
-                                                    style={{
-                                                        padding: '6px 12px',
-                                                        backgroundColor: '#2563eb',
-                                                        color: 'white',
-                                                        border: 'none',
-                                                        borderRadius: '5px',
-                                                        cursor: 'pointer',
-                                                        fontSize: '11px',
-                                                        fontWeight: 'bold'
-                                                    }}
-                                                >
-                                                    Define
-                                                </button>
-                                            </div>
                                         </div>
 
                                         <div style={{
