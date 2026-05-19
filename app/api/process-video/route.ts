@@ -169,22 +169,23 @@ export async function GET(request: NextRequest) {
     }
 
     // Try to find the job (check all language variants)
-    let job: { transcript: TranscriptSegment[]; isStreaming: boolean; startedAt: number; targetLanguage: string } | null = null;
-    let found = false;
+    let matchedJob: { transcript: TranscriptSegment[]; isStreaming: boolean; startedAt: number; targetLanguage: string } | null = null;
     activeJobs.forEach((value, key) => {
-      if (!found && key.startsWith(`${videoId}_`)) {
-        job = value;
-        found = true;
+      if (!matchedJob && key.startsWith(`${videoId}_`)) {
+        matchedJob = value;
       }
     });
 
-    if (!job) {
+    if (!matchedJob) {
       // No active job — processing is complete
       return NextResponse.json({
         newSegments: [],
         isStreaming: false,
       });
     }
+
+    // TypeScript workaround: assign to a const after null check
+    const job = matchedJob as { transcript: TranscriptSegment[]; isStreaming: boolean; startedAt: number; targetLanguage: string };
 
     // Return segments after the given count
     const newSegments = job.transcript.slice(afterCount);

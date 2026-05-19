@@ -2,6 +2,7 @@
 
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
+import { ClarifyAudioPanel } from '../components/ClarifyAudioPanel';
 
 interface SavedVideo {
     id: string;
@@ -1499,6 +1500,39 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             {transcriptLoading && <p style={{ color: '#60a5fa', marginTop: '6px' }}>⏳ Loading transcript...</p>}
                                             {transcriptError && <p style={{ color: '#f87171', marginTop: '6px' }}>• {transcriptError}</p>}
                                         </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 7. CLARIFY AUDIO */}
+                            <div style={{ borderTop: '1px solid #374151' }}>
+                                <h3
+                                    onClick={() => toggleSection('clarify')}
+                                    style={{
+                                        fontSize: '16px',
+                                        fontWeight: 'bold',
+                                        padding: '12px',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center'
+                                    }}
+                                >
+                                    <span>7. CLARIFY AUDIO 🔊</span>
+                                    <span>{expandedSections.has('clarify') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('clarify') && (
+                                    <div style={{ padding: '0', backgroundColor: '#111827' }}>
+                                        <ClarifyAudioPanel
+                                            videoId={videoId}
+                                            currentTime={currentTime}
+                                            onSubtitleChange={(subtitle) => {
+                                                // Subtitle overlay could be displayed here if desired
+                                                if (DEVELOPMENT_MODE && subtitle) {
+                                                    console.log('[watch] Clarify subtitle:', subtitle);
+                                                }
+                                            }}
+                                        />
                                     </div>
                                 )}
                             </div>
