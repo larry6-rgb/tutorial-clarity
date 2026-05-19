@@ -5,39 +5,42 @@ export const dynamic = 'force-dynamic';
 
 /**
  * =============================================================================
- * TRANSCRIPT API ROUTE — DEBUGGED & TESTED
+ * TRANSCRIPT API — V17 COMPATIBLE (youtubei.js 17.0.1)
  * =============================================================================
  *
- * ROOT CAUSE OF FAILURES (discovered via testing 2026-05-18):
+ * This version is specifically written and tested for youtubei.js v17.0.1.
  *
- * 1. YouTube aggressively blocks server/datacenter IPs with "LOGIN_REQUIRED:
- *    Sign in to confirm you're not a bot." This affects ALL server-side
- *    transcript fetching methods:
- *    - youtube-transcript library (InnerTube API + web scraping)
- *    - youtubei.js (get_transcript endpoint returns HTTP 400)
- *    - youtube-caption-extractor (same IP block)
- *    - Direct InnerTube API calls (ANDROID, IOS, WEB, MWEB clients — all blocked)
- *    - yt-dlp (same block)
- *    - Invidious/Piped instances (most down or also blocked)
+ * KEY V17 DIFFERENCES FROM V12-V16:
+ * ─────────────────────────────────
+ * 1. Segments are PARSED objects (TranscriptSegment class instances),
+ *    NOT raw JSON — they have:
+ *      • .start_ms (string from raw data, needs Number() conversion)
+ *      • .end_ms   (string, needs conversion)
+ *      • .snippet  (Text object — use .text or .toString() for plain text)
+ *      • NO .duration_ms — must compute: end_ms - start_ms
  *
- * 2. The block is IP-selective: mega-popular videos (e.g. Rick Roll dQw4w9WgXcQ)
- *    may still work, but most videos (including Easy German) get blocked.
+ * 2. The path to segments is:
+ *      transcriptInfo.transcript.content.body.initial_segments
+ *    Where .body is a TranscriptSegmentList, and .initial_segments is
+ *    an ObservedArray of TranscriptSegment | TranscriptSectionHeader
  *
- * 3. This is NOT a code bug — the same code works fine from residential IPs
- *    (like Larry's home network). The issue is cloud/datacenter IP reputation.
+ * 3. Language selection uses transcriptInfo.selectLanguage(langName)
+ *    which returns a NEW TranscriptInfo instance
  *
- * SOLUTION STRATEGY:
- * - Method 1: youtube-transcript (simpler, faster, works on residential IPs)
- * - Method 2: youtubei.js (fallback, more complex but different request pattern)
- * - Method 3: Direct InnerTube API call (raw fetch, different client contexts)
- * - Clear error reporting so the frontend can inform the user
+ * 4. Available languages: transcriptInfo.languages (string[])
+ *    Selected language: transcriptInfo.selectedLanguage (string)
  *
- * On Larry's home network (Windows + localhost:3000), Methods 1-2 should work
- * for all Easy German videos since residential IPs aren't flagged.
+ * THREE-METHOD FALLBACK:
+ * ─────────────────────
+ * Method 1: youtube-transcript (npm) — fastest, simplest
+ * Method 2: youtubei.js v17 — more detailed, language switching
+ * Method 3: Direct InnerTube API fetch — last resort
+ *
+ * If ALL fail, it's YouTube blocking the IP (datacenter vs residential).
  * =============================================================================
  */
 
-// Language display names for youtube-transcript's lang parameter
+// Language code variants for youtube-transcript library
 const LANG_CODES: Record<string, string[]> = {
   de: ['de', 'de-DE'],
   en: ['en', 'en-US', 'en-GB'],
@@ -47,7 +50,7 @@ const LANG_CODES: Record<string, string[]> = {
   pt: ['pt', 'pt-BR', 'pt-PT'],
 };
 
-// Language names for youtubei.js selectLanguage matching
+// Language name variants for youtubei.js selectLanguage matching
 const LANGUAGE_NAMES: Record<string, string[]> = {
   de: ['German', 'Deutsch', 'de'],
   en: ['English', 'en'],
@@ -63,7 +66,54 @@ interface TranscriptSegment {
   duration: number;
 }
 
-// ─── Method 1: youtube-transcript library ────────────────────────────────────
+// ─── Helper: safe number parsing ──────────────────────────────────────────────
+
+function toSeconds(msValue: any): number {
+  if (msValue === null || msValue === undefined) return 0;
+  const n = Number(msValue);
+  return Number.isFinite(n) ? n / 1000 : 0;
+}
+
+// ─── Helper: extract text from v17 segment ────────────────────────────────────
+
+function getSegmentText(seg: any): string {
+  // v17: snippet is a Text object with .text property and .runs array
+  if (seg?.snippet) {
+    // Try .text first (most reliable)
+    if (typeof seg.snippet.text === 'string' && seg.snippet.text.trim()) {
+      return seg.snippet.text.trim();
+    }
+    // Try .toString()
+    if (typeof seg.snippet.toString === 'function') {
+      const str = seg.snippet.toString();
+      if (str && str.trim()) return str.trim();
+    }
+    // Try .runs array
+    if (Array.isArray(seg.snippet.runs)) {
+      const text = seg.snippet.runs.map((r: any) => r?.text ?? '').join('');
+      if (text.trim()) return text.trim();
+    }
+  }
+  // Fallback for raw/untyped data
+  if (typeof seg?.text === 'string') return seg.text.trim();
+  return '';
+}
+
+// ─── Helper: decode HTML entities ─────────────────────────────────────────────
+
+function decodeHtmlEntities(str: string): string {
+  return str
+    .replace(/&amp;/g, '&')
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&#x27;/g, "'")
+    .replace(/&#x2F;/g, '/')
+    .replace(/&apos;/g, "'");
+}
+
+// ─── Method 1: youtube-transcript library ─────────────────────────────────────
 
 async function fetchWithYoutubeTranscript(
   videoId: string,
@@ -72,64 +122,69 @@ async function fetchWithYoutubeTranscript(
   try {
     const { YoutubeTranscript } = await import('youtube-transcript');
 
-    // Try requested language variants first
     const variants = LANG_CODES[lang] || [lang];
 
+    // Try each language variant
     for (const variant of variants) {
       try {
-        console.log(`[transcript] Method 1: trying youtube-transcript with lang="${variant}"`);
+        console.log(`[v17] Method 1: youtube-transcript lang="${variant}"`);
         const result = await YoutubeTranscript.fetchTranscript(videoId, { lang: variant });
+
         if (result && result.length > 0) {
-          const segments = result.map((item: any) => ({
-            text: (item.text || '').trim(),
-            start: (item.offset || 0) / 1000,   // offset is in ms
-            duration: (item.duration || 0) / 1000, // duration is in ms
-          })).filter((s: TranscriptSegment) => s.text.length > 0);
+          const segments = result
+            .map((item: any) => ({
+              text: (item.text || '').trim(),
+              start: (item.offset || 0) / 1000,
+              duration: (item.duration || 0) / 1000,
+            }))
+            .filter((s: TranscriptSegment) => s.text.length > 0);
 
           if (segments.length > 0) {
-            console.log(`[transcript] Method 1 SUCCESS: ${segments.length} segments, lang="${variant}"`);
+            console.log(`[v17] Method 1 ✅ ${segments.length} segments, lang="${variant}"`);
             return { segments, language: variant };
           }
         }
-      } catch (langErr: any) {
-        console.log(`[transcript] Method 1: lang="${variant}" failed:`, langErr.message?.substring(0, 120));
-        // If it's "not available in this language", try the next variant
-        // If it's "disabled" or "too many requests", break out entirely
-        if (langErr.message?.includes('disabled') || langErr.message?.includes('too many')) {
+      } catch (err: any) {
+        const msg = err.message?.substring(0, 150) || 'unknown';
+        console.log(`[v17] Method 1: lang="${variant}" failed: ${msg}`);
+        if (msg.includes('disabled') || msg.includes('too many') || msg.includes('captcha')) {
           break;
         }
       }
     }
 
-    // Fallback: try without specifying language (gets default transcript)
+    // Try without language (default transcript)
     try {
-      console.log(`[transcript] Method 1: trying without lang parameter (default transcript)`);
+      console.log(`[v17] Method 1: trying default (no lang)`);
       const result = await YoutubeTranscript.fetchTranscript(videoId);
+
       if (result && result.length > 0) {
-        const segments = result.map((item: any) => ({
-          text: (item.text || '').trim(),
-          start: (item.offset || 0) / 1000,
-          duration: (item.duration || 0) / 1000,
-        })).filter((s: TranscriptSegment) => s.text.length > 0);
+        const segments = result
+          .map((item: any) => ({
+            text: (item.text || '').trim(),
+            start: (item.offset || 0) / 1000,
+            duration: (item.duration || 0) / 1000,
+          }))
+          .filter((s: TranscriptSegment) => s.text.length > 0);
 
         if (segments.length > 0) {
           const detectedLang = result[0]?.lang || 'unknown';
-          console.log(`[transcript] Method 1 SUCCESS (default): ${segments.length} segments, detected lang="${detectedLang}"`);
+          console.log(`[v17] Method 1 ✅ (default) ${segments.length} segments, detected="${detectedLang}"`);
           return { segments, language: detectedLang };
         }
       }
-    } catch (defaultErr: any) {
-      console.log(`[transcript] Method 1: default fetch failed:`, defaultErr.message?.substring(0, 120));
+    } catch (err: any) {
+      console.log(`[v17] Method 1: default failed: ${err.message?.substring(0, 150)}`);
     }
 
     return null;
   } catch (importErr: any) {
-    console.error(`[transcript] Method 1: import error:`, importErr.message);
+    console.error(`[v17] Method 1: import error: ${importErr.message}`);
     return null;
   }
 }
 
-// ─── Method 2: youtubei.js library ───────────────────────────────────────────
+// ─── Method 2: youtubei.js v17 ────────────────────────────────────────────────
 
 async function fetchWithYoutubei(
   videoId: string,
@@ -138,32 +193,44 @@ async function fetchWithYoutubei(
   try {
     const { Innertube } = await import('youtubei.js');
 
-    console.log(`[transcript] Method 2: trying youtubei.js for videoId="${videoId}"`);
+    console.log(`[v17] Method 2: youtubei.js v17 for videoId="${videoId}"`);
 
     const youtube = await Innertube.create();
-    const info = await youtube.getInfo(videoId);
-    let transcriptData: any = await info.getTranscript();
+    console.log(`[v17] Method 2: Innertube created`);
 
-    if (!transcriptData) {
-      console.log(`[transcript] Method 2: getTranscript() returned null/undefined`);
+    const info = await youtube.getInfo(videoId);
+    console.log(`[v17] Method 2: getInfo() done`);
+
+    let transcriptInfo: any;
+    try {
+      transcriptInfo = await info.getTranscript();
+    } catch (transcriptErr: any) {
+      console.log(`[v17] Method 2: getTranscript() failed: ${transcriptErr.message?.substring(0, 200)}`);
       return null;
     }
 
-    const availableLangs: string[] = transcriptData?.languages ?? transcriptData?.availableLanguages ?? [];
-    const defaultLang = transcriptData?.selectedLanguage ?? '(unknown)';
-    console.log(`[transcript] Method 2: default="${defaultLang}", available=[${availableLangs.join(', ')}]`);
+    if (!transcriptInfo) {
+      console.log(`[v17] Method 2: getTranscript() returned null`);
+      return null;
+    }
 
-    // Try to switch language if needed
-    let actualLang = defaultLang;
+    // ── v17 API: get languages and selected language ──
+    const availableLangs: string[] = transcriptInfo.languages ?? [];
+    const currentLang = transcriptInfo.selectedLanguage ?? '(unknown)';
+    console.log(`[v17] Method 2: current="${currentLang}", available=[${availableLangs.join(', ')}]`);
+
+    // ── Try to switch language if needed ──
+    let actualLang = currentLang;
     const nameVariants = LANGUAGE_NAMES[lang];
-    if (nameVariants) {
+
+    if (nameVariants && availableLangs.length > 0) {
       const isAlreadyCorrect = nameVariants.some(
-        (v) => defaultLang.toLowerCase().includes(v.toLowerCase())
+        (v) => currentLang.toLowerCase().includes(v.toLowerCase())
       );
 
-      if (!isAlreadyCorrect && availableLangs.length > 0) {
-        // Find matching language name
-        let matchingLang = availableLangs.find((l: string) =>
+      if (!isAlreadyCorrect) {
+        // Find a matching language name in the available list
+        const matchingLang = availableLangs.find((l: string) =>
           nameVariants.some((v) => l.toLowerCase() === v.toLowerCase())
         ) || availableLangs.find((l: string) =>
           nameVariants.some((v) => l.toLowerCase().includes(v.toLowerCase()))
@@ -171,62 +238,82 @@ async function fetchWithYoutubei(
 
         if (matchingLang) {
           try {
-            console.log(`[transcript] Method 2: switching to "${matchingLang}"`);
-            transcriptData = await transcriptData.selectLanguage(matchingLang);
+            console.log(`[v17] Method 2: switching language to "${matchingLang}"...`);
+            transcriptInfo = await transcriptInfo.selectLanguage(matchingLang);
             actualLang = matchingLang;
+            console.log(`[v17] Method 2: language switched successfully`);
           } catch (switchErr: any) {
-            console.log(`[transcript] Method 2: selectLanguage failed:`, switchErr.message?.substring(0, 80));
-            // Try setLanguage as fallback
-            if (typeof transcriptData.setLanguage === 'function') {
-              try {
-                transcriptData = await transcriptData.setLanguage(matchingLang);
-                actualLang = matchingLang;
-              } catch {}
-            }
+            console.log(`[v17] Method 2: selectLanguage("${matchingLang}") failed: ${switchErr.message?.substring(0, 100)}`);
           }
+        } else {
+          console.log(`[v17] Method 2: no matching language found for "${lang}" in available languages`);
         }
+      } else {
+        console.log(`[v17] Method 2: already in correct language "${currentLang}"`);
       }
     }
 
-    // Extract segments
-    const rawSegments = transcriptData?.transcript?.content?.body?.initial_segments;
-    if (!rawSegments || !Array.isArray(rawSegments) || rawSegments.length === 0) {
-      console.log(`[transcript] Method 2: no initial_segments found`);
+    // ── v17 segment path: transcriptInfo.transcript.content.body.initial_segments ──
+    const body = transcriptInfo?.transcript?.content?.body;
+    const rawSegments = body?.initial_segments;
+
+    if (!rawSegments || !Array.isArray(rawSegments)) {
+      console.log(`[v17] Method 2: no initial_segments found`);
+      console.log(`[v17] Method 2: transcript exists: ${!!transcriptInfo.transcript}`);
+      console.log(`[v17] Method 2: content exists: ${!!transcriptInfo.transcript?.content}`);
+      console.log(`[v17] Method 2: body exists: ${!!body}`);
+      if (body) {
+        console.log(`[v17] Method 2: body type: ${body.constructor?.name}`);
+        console.log(`[v17] Method 2: body keys: ${Object.keys(body).join(', ')}`);
+      }
       return null;
     }
 
+    console.log(`[v17] Method 2: found ${rawSegments.length} raw segments`);
+
+    // ── v17: segments are TranscriptSegment class instances ──
+    // They have: start_ms, end_ms, snippet (Text object)
+    // NO duration_ms — compute from end_ms - start_ms
     const segments: TranscriptSegment[] = rawSegments
       .map((seg: any) => {
-        const startMs = parseNum(seg.start_ms, seg.startMs);
-        const endMs = parseNum(seg.end_ms, seg.endMs);
-        const durationMs = parseNum(seg.duration_ms, seg.durationMs);
-        const text = extractText(seg);
-
+        const text = getSegmentText(seg);
+        const startMs = Number(seg.start_ms) || 0;
+        const endMs = Number(seg.end_ms) || 0;
         const start = startMs / 1000;
-        const dur = durationMs > 0 ? durationMs / 1000 : Math.max((endMs - startMs) / 1000, 1);
-
-        return { text, start, duration: dur };
+        const duration = endMs > startMs ? (endMs - startMs) / 1000 : 1;
+        return { text, start, duration };
       })
       .filter((s: TranscriptSegment) => s.text.length > 0);
 
-    console.log(`[transcript] Method 2 SUCCESS: ${segments.length} segments, lang="${actualLang}"`);
+    if (segments.length === 0) {
+      console.log(`[v17] Method 2: all segments filtered out (empty text)`);
+      // Debug: show first 3 raw segments
+      rawSegments.slice(0, 3).forEach((seg: any, i: number) => {
+        console.log(`[v17] Method 2: raw[${i}]: start_ms=${seg.start_ms}, end_ms=${seg.end_ms}, type=${seg.constructor?.name}, text="${getSegmentText(seg)}"`);
+      });
+      return null;
+    }
+
+    console.log(`[v17] Method 2 ✅ ${segments.length} segments, lang="${actualLang}"`);
+    console.log(`[v17] Method 2: first segment: "${segments[0].text}" @ ${segments[0].start}s`);
+
     return { segments, language: actualLang, availableLanguages: availableLangs };
   } catch (err: any) {
-    console.error(`[transcript] Method 2 FAILED:`, err.message?.substring(0, 200));
+    console.error(`[v17] Method 2 FAILED: ${err.message?.substring(0, 200)}`);
     return null;
   }
 }
 
-// ─── Method 3: Direct InnerTube API (raw fetch) ─────────────────────────────
+// ─── Method 3: Direct InnerTube API (raw fetch) ──────────────────────────────
 
 async function fetchWithDirectAPI(
   videoId: string,
   lang: string
 ): Promise<{ segments: TranscriptSegment[]; language: string } | null> {
   try {
-    console.log(`[transcript] Method 3: trying direct InnerTube API for videoId="${videoId}"`);
+    console.log(`[v17] Method 3: direct InnerTube API for videoId="${videoId}"`);
 
-    // Step 1: Get caption tracks via player API
+    // Step 1: Get player data (for caption track URLs)
     const playerResp = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
       method: 'POST',
       headers: {
@@ -245,48 +332,50 @@ async function fetchWithDirectAPI(
     });
 
     if (!playerResp.ok) {
-      console.log(`[transcript] Method 3: player API returned ${playerResp.status}`);
+      console.log(`[v17] Method 3: player API returned ${playerResp.status}`);
       return null;
     }
 
     const playerData = await playerResp.json();
     const playStatus = playerData?.playabilityStatus?.status;
+    console.log(`[v17] Method 3: playability status="${playStatus}"`);
 
     if (playStatus === 'LOGIN_REQUIRED') {
-      console.log(`[transcript] Method 3: LOGIN_REQUIRED — YouTube is blocking this server IP`);
+      console.log(`[v17] Method 3: LOGIN_REQUIRED — YouTube blocking this IP`);
       return null;
     }
 
     const tracks = playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
     if (!Array.isArray(tracks) || tracks.length === 0) {
-      console.log(`[transcript] Method 3: no caption tracks found (status=${playStatus})`);
+      console.log(`[v17] Method 3: no caption tracks`);
       return null;
     }
 
-    console.log(`[transcript] Method 3: found ${tracks.length} caption tracks`);
+    console.log(`[v17] Method 3: ${tracks.length} caption tracks: [${tracks.map((t: any) => t.languageCode).join(', ')}]`);
 
-    // Step 2: Find the best matching track
+    // Step 2: Pick the best track
     const langVariants = LANG_CODES[lang] || [lang];
-    let selectedTrack = tracks.find((t: any) =>
-      langVariants.some((v) => t.languageCode === v)
-    ) || tracks[0]; // Fall back to first track
+    const selectedTrack = tracks.find((t: any) =>
+      langVariants.some((v: string) => t.languageCode === v)
+    ) || tracks[0];
 
-    const captionUrl = selectedTrack.baseUrl;
+    const captionUrl = selectedTrack?.baseUrl;
     if (!captionUrl) {
-      console.log(`[transcript] Method 3: no baseUrl on selected track`);
+      console.log(`[v17] Method 3: no baseUrl on selected track`);
       return null;
     }
 
     // Step 3: Fetch caption XML
+    console.log(`[v17] Method 3: fetching captions for lang="${selectedTrack.languageCode}"...`);
     const captionResp = await fetch(captionUrl);
     const captionText = await captionResp.text();
 
-    if (!captionText || captionText.length === 0) {
-      console.log(`[transcript] Method 3: empty caption response`);
+    if (!captionText) {
+      console.log(`[v17] Method 3: empty caption response`);
       return null;
     }
 
-    // Step 4: Parse XML captions
+    // Step 4: Parse XML
     const RE_XML = /<text start="([^"]*)" dur="([^"]*)">([^<]*)<\/text>/g;
     const segments: TranscriptSegment[] = [];
     let match;
@@ -301,51 +390,19 @@ async function fetchWithDirectAPI(
     }
 
     if (segments.length > 0) {
-      console.log(`[transcript] Method 3 SUCCESS: ${segments.length} segments, lang="${selectedTrack.languageCode}"`);
+      console.log(`[v17] Method 3 ✅ ${segments.length} segments, lang="${selectedTrack.languageCode}"`);
       return { segments, language: selectedTrack.languageCode };
     }
 
-    console.log(`[transcript] Method 3: parsed 0 segments from XML`);
+    console.log(`[v17] Method 3: parsed 0 segments from XML`);
     return null;
   } catch (err: any) {
-    console.error(`[transcript] Method 3 FAILED:`, err.message?.substring(0, 200));
+    console.error(`[v17] Method 3 FAILED: ${err.message?.substring(0, 200)}`);
     return null;
   }
 }
 
-// ─── Helpers ─────────────────────────────────────────────────────────────────
-
-function parseNum(...values: any[]): number {
-  for (const v of values) {
-    if (typeof v === 'number' && Number.isFinite(v)) return v;
-    if (typeof v === 'string' && v.trim() !== '') {
-      const n = Number(v);
-      if (Number.isFinite(n)) return n;
-    }
-  }
-  return 0;
-}
-
-function extractText(seg: any): string {
-  const runText = Array.isArray(seg?.snippet?.runs)
-    ? seg.snippet.runs.map((r: any) => r?.text ?? '').join('')
-    : '';
-  return (runText || seg?.snippet?.text || seg?.text || '').trim();
-}
-
-function decodeHtmlEntities(str: string): string {
-  return str
-    .replace(/&amp;/g, '&')
-    .replace(/&lt;/g, '<')
-    .replace(/&gt;/g, '>')
-    .replace(/&quot;/g, '"')
-    .replace(/&#39;/g, "'")
-    .replace(/&#x27;/g, "'")
-    .replace(/&#x2F;/g, '/')
-    .replace(/&apos;/g, "'");
-}
-
-// ─── Main GET handler ────────────────────────────────────────────────────────
+// ─── Main GET handler ─────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
@@ -359,52 +416,54 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  console.log(`\n========================================`);
-  console.log(`[transcript] Request: videoId="${videoId}", lang="${requestedLang}"`);
-  console.log(`========================================`);
+  console.log(`\n${'='.repeat(60)}`);
+  console.log(`[v17] TRANSCRIPT REQUEST: videoId="${videoId}", lang="${requestedLang}"`);
+  console.log(`[v17] Time: ${new Date().toISOString()}`);
+  console.log(`${'='.repeat(60)}`);
 
   let result: { segments: TranscriptSegment[]; language: string; availableLanguages?: string[] } | null = null;
   let source = '';
-  let lastError = '';
 
-  // Method 1: youtube-transcript (fastest, simplest)
+  // ── Method 1: youtube-transcript ──
   result = await fetchWithYoutubeTranscript(videoId, requestedLang);
   if (result) {
     source = 'youtube-transcript';
   }
 
-  // Method 2: youtubei.js (more complex, different request pattern)
+  // ── Method 2: youtubei.js v17 ──
   if (!result) {
+    console.log(`[v17] Method 1 failed, trying Method 2...`);
     const ytResult = await fetchWithYoutubei(videoId, requestedLang);
     if (ytResult) {
       result = ytResult;
-      source = 'youtubei.js';
+      source = 'youtubei.js-v17';
     }
   }
 
-  // Method 3: Direct InnerTube API (raw fetch)
+  // ── Method 3: Direct InnerTube API ──
   if (!result) {
+    console.log(`[v17] Method 2 failed, trying Method 3...`);
     result = await fetchWithDirectAPI(videoId, requestedLang);
     if (result) {
       source = 'direct-innertube';
     }
   }
 
-  // All methods failed
+  // ── All methods failed ──
   if (!result || result.segments.length === 0) {
-    console.log(`[transcript] ALL METHODS FAILED for videoId="${videoId}"`);
-    console.log(`[transcript] This is likely YouTube blocking this server's IP.`);
-    console.log(`[transcript] The same code works from residential IPs (like a home network).`);
+    console.log(`[v17] ❌ ALL METHODS FAILED for videoId="${videoId}"`);
+    console.log(`[v17] If on home network: check that the video actually has captions on YouTube`);
+    console.log(`[v17] If on datacenter: YouTube is likely blocking the IP`);
 
     return NextResponse.json(
       {
-        error: 'Could not fetch transcript. YouTube may be blocking server requests. Try refreshing or check if captions are available for this video.',
+        error: 'Could not fetch transcript. YouTube may be blocking server requests, or this video has no captions.',
         transcript: [],
         source: 'none',
         videoId,
         language: requestedLang,
-        blocked: true,  // Flag so frontend knows it's an IP/bot block
-        details: 'All 3 methods failed: youtube-transcript, youtubei.js, direct InnerTube API. This typically happens when YouTube blocks the server IP. On a home network (localhost), this should work fine.',
+        blocked: true,
+        details: 'All 3 methods failed. On a home network this usually means the video has no captions. On a cloud server it means YouTube is blocking the IP.',
       },
       {
         status: 200,
@@ -416,11 +475,11 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  // Success!
+  // ── Success ──
   const languageSwitched = requestedLang !== result.language &&
     !result.language.toLowerCase().startsWith(requestedLang);
 
-  console.log(`[transcript] ✅ Returning ${result.segments.length} segments via ${source}`);
+  console.log(`[v17] ✅ SUCCESS: ${result.segments.length} segments via ${source}, lang="${result.language}"`);
 
   return NextResponse.json(
     {
@@ -428,7 +487,7 @@ export async function GET(request: NextRequest) {
       source,
       videoId,
       language: result.language,
-      languageSwitched: !languageSwitched, // true = we got the requested language
+      languageSwitched: !languageSwitched,
       availableLanguages: result.availableLanguages || [],
       count: result.segments.length,
     },
