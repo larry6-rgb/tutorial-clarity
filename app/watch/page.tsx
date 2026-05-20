@@ -60,10 +60,28 @@ function WatchPageContent() {
     const [isDraggingPosition, setIsDraggingPosition] = useState(false);
 
     // Clarify Audio transcript bar (rendered below video)
-    // Uses {text, start, end} shape from ClarifyAudioPanel (different from main transcript's {text, start, duration})
     const [clarifyTranscript, setClarifyTranscript] = useState<{text: string; start: number; end: number}[]>([]);
     const [clarifySegmentIndex, setClarifySegmentIndex] = useState(-1);
     const clarifyScrollRef = useRef<HTMLDivElement>(null);
+
+    // Clarify bar position/size — persisted to localStorage
+    const CLARIFY_BAR_KEY = 'clarifyBarLayout';
+    const getInitialClarifyLayout = () => {
+        if (typeof window === 'undefined') return { bottom: 60, height: 44 };
+        try {
+            const saved = localStorage.getItem(CLARIFY_BAR_KEY);
+            if (saved) return JSON.parse(saved);
+        } catch {}
+        return { bottom: 60, height: 44 };
+    };
+    const [clarifyBarBottom, setClarifyBarBottom] = useState(() => getInitialClarifyLayout().bottom);
+    const [clarifyBarHeight, setClarifyBarHeight] = useState(() => getInitialClarifyLayout().height);
+    const [isDraggingClarifyBar, setIsDraggingClarifyBar] = useState(false);
+    const [isResizingClarifyBar, setIsResizingClarifyBar] = useState(false);
+    const clarifyDragStartY = useRef(0);
+    const clarifyDragStartBottom = useRef(0);
+    const clarifyResizeStartY = useRef(0);
+    const clarifyResizeStartHeight = useRef(0);
     const dragStartY = useRef(0);
     const dragStartX = useRef(0);
     const dragStartHeight = useRef(0);
@@ -687,6 +705,40 @@ function WatchPageContent() {
         }
     }, [clarifySegmentIndex]);
 
+    // Save clarify bar layout to localStorage
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try { localStorage.setItem('clarifyBarLayout', JSON.stringify({ bottom: clarifyBarBottom, height: clarifyBarHeight })); } catch {}
+    }, [clarifyBarBottom, clarifyBarHeight]);
+
+    // Clarify bar drag handler
+    useEffect(() => {
+        if (!isDraggingClarifyBar) return;
+        const handleMove = (e: MouseEvent) => {
+            const delta = clarifyDragStartY.current - e.clientY;
+            const newBottom = Math.max(0, Math.min(window.innerHeight - 80, clarifyDragStartBottom.current + delta));
+            setClarifyBarBottom(newBottom);
+        };
+        const handleUp = () => setIsDraggingClarifyBar(false);
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('mouseup', handleUp);
+        return () => { window.removeEventListener('mousemove', handleMove); window.removeEventListener('mouseup', handleUp); };
+    }, [isDraggingClarifyBar]);
+
+    // Clarify bar resize handler
+    useEffect(() => {
+        if (!isResizingClarifyBar) return;
+        const handleMove = (e: MouseEvent) => {
+            const delta = clarifyResizeStartY.current - e.clientY;
+            const newHeight = Math.max(30, Math.min(200, clarifyResizeStartHeight.current + delta));
+            setClarifyBarHeight(newHeight);
+        };
+        const handleUp = () => setIsResizingClarifyBar(false);
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('mouseup', handleUp);
+        return () => { window.removeEventListener('mousemove', handleMove); window.removeEventListener('mouseup', handleUp); };
+    }, [isResizingClarifyBar]);
+
     const fontSize = Math.max(14, Math.min(32, (transcriptHeight / 54) * 14));
     const showTranscriptBar = expandedSections.has('scroll') || expandedSections.has('definitions');
 const windowHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -1034,72 +1086,108 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                     </>
                 )}
 
-                {/* Clarify Audio Transcript Bar — below video */}
+                {/* Clarify Audio Transcript Bar — fixed position, draggable & resizable */}
                 {clarifyTranscript.length > 0 && (
                     <div style={{
-                        position: 'absolute',
-                        bottom: 0,
+                        position: 'fixed',
+                        bottom: `${clarifyBarBottom}px`,
                         left: 0,
-                        right: 0,
-                        zIndex: 55,
-                        backgroundColor: 'rgba(0, 0, 0, 0.85)',
-                        borderTop: '2px solid #3b82f6',
-                        padding: '6px 12px',
+                        right: '240px', /* don't overlap sidebar */
+                        height: `${clarifyBarHeight}px`,
+                        zIndex: 60,
+                        backgroundColor: 'rgba(0, 0, 0, 0.88)',
+                        borderTop: '3px solid #3b82f6',
+                        display: 'flex',
+                        flexDirection: 'column',
                     }}>
+                        {/* Resize handle (top edge) */}
                         <div
-                            ref={clarifyScrollRef}
-                            style={{
-                                display: 'flex',
-                                gap: '2px',
-                                overflowX: 'auto',
-                                overflowY: 'hidden',
-                                whiteSpace: 'nowrap',
-                                paddingBottom: '4px',
-                                scrollbarWidth: 'thin',
-                                scrollbarColor: '#4b5563 transparent',
+                            style={{ height: '5px', cursor: 'ns-resize', flexShrink: 0 }}
+                            onMouseDown={(e) => {
+                                e.preventDefault();
+                                clarifyResizeStartY.current = e.clientY;
+                                clarifyResizeStartHeight.current = clarifyBarHeight;
+                                setIsResizingClarifyBar(true);
                             }}
-                        >
-                            {clarifyTranscript.map((seg, idx) => {
-                                const isActive = idx === clarifySegmentIndex;
-                                return (
-                                    <span
-                                        key={idx}
-                                        data-clarify-bar-idx={idx}
-                                        onClick={() => {
-                                            // Seek video to this segment's time
-                                            if (iframeRef.current?.contentWindow) {
-                                                iframeRef.current.contentWindow.postMessage(
-                                                    JSON.stringify({ event: 'command', func: 'seekTo', args: [seg.start, true] }),
-                                                    '*'
-                                                );
-                                            }
-                                        }}
-                                        style={{
-                                            display: 'inline-block',
-                                            padding: '4px 8px',
-                                            borderRadius: '4px',
-                                            fontSize: '12px',
-                                            cursor: 'pointer',
-                                            flexShrink: 0,
-                                            backgroundColor: isActive ? '#2563eb' : 'transparent',
-                                            color: isActive ? '#ffffff' : '#9ca3af',
-                                            fontWeight: isActive ? 'bold' : 'normal',
-                                            borderBottom: isActive ? '2px solid #22c55e' : '2px solid transparent',
-                                            transition: 'background-color 0.2s',
-                                        }}
-                                        title={seg.text}
-                                    >
-                                        <span style={{
-                                            color: isActive ? '#93c5fd' : '#6b7280',
-                                            fontSize: '10px',
-                                            marginRight: '4px',
-                                        }}>
-                                            {Math.floor(seg.start / 60)}:{String(Math.floor(seg.start % 60)).padStart(2, '0')}
+                        />
+                        {/* Drag handle + scrollable content */}
+                        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+                            {/* Drag handle */}
+                            <div
+                                style={{
+                                    width: '28px', flexShrink: 0, display: 'flex', alignItems: 'center',
+                                    justifyContent: 'center', cursor: 'move', color: '#6b7280',
+                                    fontSize: '14px', userSelect: 'none', borderRight: '1px solid #374151',
+                                }}
+                                onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    clarifyDragStartY.current = e.clientY;
+                                    clarifyDragStartBottom.current = clarifyBarBottom;
+                                    setIsDraggingClarifyBar(true);
+                                }}
+                                title="Drag to reposition"
+                            >
+                                ↕
+                            </div>
+                            {/* Scrollable transcript segments */}
+                            <div
+                                ref={clarifyScrollRef}
+                                style={{
+                                    flex: 1,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '2px',
+                                    overflowX: 'auto',
+                                    overflowY: 'hidden',
+                                    whiteSpace: 'nowrap',
+                                    padding: '0 8px',
+                                    scrollbarWidth: 'thin',
+                                    scrollbarColor: '#4b5563 transparent',
+                                }}
+                            >
+                                {clarifyTranscript.map((seg, idx) => {
+                                    const isActive = idx === clarifySegmentIndex;
+                                    const ts = `${Math.floor(seg.start / 60)}:${String(Math.floor(seg.start % 60)).padStart(2, '0')}`;
+                                    return (
+                                        <span
+                                            key={idx}
+                                            data-clarify-bar-idx={idx}
+                                            onClick={() => {
+                                                if (iframeRef.current?.contentWindow) {
+                                                    iframeRef.current.contentWindow.postMessage(
+                                                        JSON.stringify({ event: 'command', func: 'seekTo', args: [seg.start, true] }),
+                                                        '*'
+                                                    );
+                                                }
+                                            }}
+                                            style={{
+                                                display: 'inline-block',
+                                                padding: '3px 8px',
+                                                borderRadius: '4px',
+                                                fontSize: '12px',
+                                                cursor: 'pointer',
+                                                flexShrink: 0,
+                                                backgroundColor: isActive ? '#2563eb' : 'transparent',
+                                                color: isActive ? '#ffffff' : '#9ca3af',
+                                                fontWeight: isActive ? 'bold' : 'normal',
+                                                borderBottom: isActive ? '2px solid #22c55e' : '2px solid transparent',
+                                                transition: 'background-color 0.15s',
+                                            }}
+                                            title={`[${ts}] ${seg.text}`}
+                                        >
+                                            <span style={{
+                                                color: isActive ? '#93c5fd' : '#60a5fa',
+                                                fontSize: '10px',
+                                                marginRight: '4px',
+                                                fontWeight: 'bold',
+                                            }}>
+                                                [{ts}]
+                                            </span>
+                                            {seg.text.length > 40 ? seg.text.substring(0, 40) + '…' : seg.text}
                                         </span>
-                                        {seg.text.length > 40 ? seg.text.substring(0, 40) + '…' : seg.text}
-                                    </span>
-                                );
-                            })}
+                                    );
+                                })}
+                            </div>
                         </div>
                     </div>
                 )}
@@ -1622,9 +1710,16 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                         JSON.stringify({ event: 'command', func: mute ? 'mute' : 'unMute' }),
                                                         '*'
                                                     );
-                                                    if (mute) {
-                                                        setIsMuted(true);
-                                                        setVolume(0);
+                                                    // Only toggle the mute flag — don't destroy volume
+                                                    setIsMuted(mute);
+                                                    if (!mute) {
+                                                        // Restore volume when unmuting
+                                                        const restoreVol = volume > 0 ? volume : 100;
+                                                        setVolume(restoreVol);
+                                                        iframeRef.current.contentWindow.postMessage(
+                                                            JSON.stringify({ event: 'command', func: 'setVolume', args: [restoreVol] }),
+                                                            '*'
+                                                        );
                                                     }
                                                 }
                                             }}

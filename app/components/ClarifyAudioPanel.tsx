@@ -3,7 +3,7 @@
 import { useState, useEffect, useCallback, useRef } from 'react';
 import ProcessingOptionsModal, { OutputMode } from '@/app/hooks/ProcessingOptionsModal';
 
-interface TranscriptSegment {
+export interface ClarifyTranscriptSegment {
   text: string;
   start: number;
   end: number;
@@ -11,8 +11,8 @@ interface TranscriptSegment {
 
 interface AudioCache {
   [segmentIndex: number]: {
-    url?: string;          // Object URL for OpenAI TTS audio
-    useClientTTS?: boolean; // Use browser speechSynthesis instead
+    url?: string;
+    useClientTTS?: boolean;
     generating?: boolean;
     error?: string;
   };
@@ -23,12 +23,10 @@ interface ClarifyAudioPanelProps {
   currentTime: number;
   onSubtitleChange?: (subtitle: string | null) => void;
   onMuteYouTube?: (mute: boolean) => void;
-  onTranscriptReady?: (segments: TranscriptSegment[]) => void;
+  onTranscriptReady?: (segments: ClarifyTranscriptSegment[]) => void;
   onSegmentChange?: (index: number) => void;
-  onPlaySegment?: (index: number) => void;
 }
 
-// Round-robin voices for variety
 const VOICES = ['nova', 'echo', 'shimmer', 'fable', 'alloy', 'onyx'];
 
 function formatTimestamp(seconds: number): string {
@@ -37,7 +35,7 @@ function formatTimestamp(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMuteYouTube, onTranscriptReady, onSegmentChange, onPlaySegment }: ClarifyAudioPanelProps) {
+export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMuteYouTube, onTranscriptReady, onSegmentChange }: ClarifyAudioPanelProps) {
   // Phase management
   const [phase, setPhase] = useState<'choosing' | 'processing' | 'active' | 'stopped' | 'error'>('choosing');
   const [selectedMode, setSelectedMode] = useState<OutputMode | null>(null);
@@ -45,12 +43,11 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
   const [error, setError] = useState<string | null>(null);
 
   // Processing state
-  const [isProcessing, setIsProcessing] = useState(false);
   const [processingStep, setProcessingStep] = useState('');
   const [processingProgress, setProcessingProgress] = useState(0);
 
   // Transcript
-  const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
+  const [transcript, setTranscript] = useState<ClarifyTranscriptSegment[]>([]);
   const [currentSegmentIndex, setCurrentSegmentIndex] = useState(-1);
 
   // Audio state
@@ -58,25 +55,26 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
   const [volume, setVolume] = useState(80);
   const [isMuted, setIsMuted] = useState(false);
   const [generatedCount, setGeneratedCount] = useState(0);
-  const [generatingCount, setGeneratingCount] = useState(0);
   const [useClientTTS, setUseClientTTS] = useState(false);
+  const [playbackStatus, setPlaybackStatus] = useState('');
 
-  // Refs for audio management
+  // Refs
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioCacheRef = useRef<AudioCache>({});
   const currentPlayingIndexRef = useRef(-1);
   const isPlayingRef = useRef(false);
   const volumeRef = useRef(0.8);
   const isMutedRef = useRef(false);
-  const transcriptRef = useRef<TranscriptSegment[]>([]);
+  const transcriptRef = useRef<ClarifyTranscriptSegment[]>([]);
   const generatingSetRef = useRef<Set<number>>(new Set());
-  const transcriptScrollRef = useRef<HTMLDivElement>(null);
+  const phaseRef = useRef(phase);
 
   // Keep refs in sync
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { volumeRef.current = volume / 100; }, [volume]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
   useEffect(() => { transcriptRef.current = transcript; }, [transcript]);
+  useEffect(() => { phaseRef.current = phase; }, [phase]);
 
   // Update audio element volume
   useEffect(() => {
@@ -90,9 +88,7 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
     if (transcript.length === 0) return;
     let idx = -1;
     for (let i = 0; i < transcript.length; i++) {
-      const seg = transcript[i];
-      const nextSeg = transcript[i + 1];
-      if (currentTime >= seg.start && (!nextSeg || currentTime < nextSeg.start)) {
+      if (currentTime >= transcript[i].start && (!transcript[i + 1] || currentTime < transcript[i + 1].start)) {
         idx = i;
         break;
       }
@@ -106,26 +102,15 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
     }
   }, [currentTime, transcript, currentSegmentIndex, onSubtitleChange, onSegmentChange]);
 
-  // Auto-scroll transcript to current segment
-  useEffect(() => {
-    if (currentSegmentIndex < 0 || !transcriptScrollRef.current) return;
-    const el = transcriptScrollRef.current.querySelector(`[data-clarify-idx="${currentSegmentIndex}"]`) as HTMLElement;
-    if (el) {
-      el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-    }
-  }, [currentSegmentIndex]);
-
   // ─── TTS Generation ───
 
-  const generateSegmentAudio = useCallback(async (index: number, text: string) => {
-    if (audioCacheRef.current[index]?.url || audioCacheRef.current[index]?.generating || audioCacheRef.current[index]?.useClientTTS) {
-      return; // Already generated, generating, or using client TTS
-    }
-    if (generatingSetRef.current.has(index)) return;
+  const generateSegmentAudio = useCallback(async (index: number, text: string): Promise<boolean> => {
+    if (audioCacheRef.current[index]?.url || audioCacheRef.current[index]?.useClientTTS) return true;
+    if (audioCacheRef.current[index]?.generating) return false;
+    if (generatingSetRef.current.has(index)) return false;
 
     generatingSetRef.current.add(index);
     audioCacheRef.current[index] = { generating: true };
-    setGeneratingCount(prev => prev + 1);
 
     try {
       const voiceId = VOICES[index % VOICES.length];
@@ -158,127 +143,126 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
           audioCacheRef.current[index] = { useClientTTS: true };
           setUseClientTTS(true);
           setGeneratedCount(prev => prev + 1);
-          setGeneratingCount(prev => Math.max(0, prev - 1));
           generatingSetRef.current.delete(index);
-          return;
+          return true;
         }
       }
 
       const blob = await response.blob();
+      if (blob.size === 0) throw new Error('Empty audio response');
       const url = URL.createObjectURL(blob);
       audioCacheRef.current[index] = { url };
       setGeneratedCount(prev => prev + 1);
-      setGeneratingCount(prev => Math.max(0, prev - 1));
+      generatingSetRef.current.delete(index);
+      return true;
 
     } catch (err) {
-      console.error(`[ClarifyAudio] TTS error for segment ${index}:`, err);
-      audioCacheRef.current[index] = { error: err instanceof Error ? err.message : 'TTS failed', useClientTTS: true };
+      console.error(`[ClarifyAudio] TTS error seg ${index}:`, err);
+      audioCacheRef.current[index] = { error: String(err), useClientTTS: true };
       setUseClientTTS(true);
       setGeneratedCount(prev => prev + 1);
-      setGeneratingCount(prev => Math.max(0, prev - 1));
+      generatingSetRef.current.delete(index);
+      return true; // fallback available
     }
-
-    generatingSetRef.current.delete(index);
   }, [videoId, selectedLanguage]);
 
-  // Pre-generate audio for segments near current position
+  // Pre-generate segments ahead of playback
   useEffect(() => {
-    if (phase !== 'active' || transcript.length === 0) return;
-    if (selectedMode === 'subtitles_only') return;
-
-    const LOOKAHEAD = 5; // Pre-generate 5 segments ahead
+    if (phase !== 'active' || transcript.length === 0 || selectedMode === 'subtitles_only') return;
     const startIdx = Math.max(0, currentSegmentIndex);
-
-    for (let i = startIdx; i < Math.min(startIdx + LOOKAHEAD, transcript.length); i++) {
-      if (!audioCacheRef.current[i]) {
-        generateSegmentAudio(i, transcript[i].text);
-      }
+    for (let i = startIdx; i < Math.min(startIdx + 5, transcript.length); i++) {
+      if (!audioCacheRef.current[i]) generateSegmentAudio(i, transcript[i].text);
     }
   }, [phase, currentSegmentIndex, transcript, selectedMode, generateSegmentAudio]);
 
   // ─── Audio Playback ───
 
   const playSegment = useCallback((index: number) => {
-    if (index < 0 || index >= transcriptRef.current.length) return;
+    if (index < 0 || index >= transcriptRef.current.length) {
+      setIsPlaying(false);
+      setPlaybackStatus('Finished');
+      return;
+    }
 
     const cached = audioCacheRef.current[index];
+    currentPlayingIndexRef.current = index;
+    setPlaybackStatus(`Playing seg ${index + 1}/${transcriptRef.current.length}`);
 
     if (cached?.url) {
-      // Play OpenAI TTS audio
-      if (audioRef.current) {
-        audioRef.current.pause();
-      }
+      // OpenAI TTS audio
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
       const audio = new Audio(cached.url);
       audio.volume = isMutedRef.current ? 0 : volumeRef.current;
       audioRef.current = audio;
-      currentPlayingIndexRef.current = index;
 
       audio.onended = () => {
-        // Play next segment
-        const nextIdx = index + 1;
-        if (nextIdx < transcriptRef.current.length && isPlayingRef.current) {
-          playSegment(nextIdx);
+        if (isPlayingRef.current && phaseRef.current === 'active') {
+          playSegment(index + 1);
         }
       };
+      audio.onerror = (e) => {
+        console.error('[ClarifyAudio] Audio element error:', e);
+        // Try next segment
+        if (isPlayingRef.current) playSegment(index + 1);
+      };
 
-      audio.play().catch(err => {
-        console.error('[ClarifyAudio] Play error:', err);
+      audio.play().then(() => {
+        console.log(`[ClarifyAudio] ▶ Playing seg ${index} via OpenAI TTS`);
+      }).catch(err => {
+        console.error('[ClarifyAudio] Play blocked:', err);
+        setPlaybackStatus('⚠️ Click page first (autoplay blocked)');
       });
-    } else if (cached?.useClientTTS || useClientTTS) {
-      // Use browser speechSynthesis
+
+    } else if (cached?.useClientTTS) {
+      // Browser speechSynthesis
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
         const utterance = new SpeechSynthesisUtterance(transcriptRef.current[index].text);
         utterance.lang = selectedLanguage === 'en' ? 'en-US' : selectedLanguage;
         utterance.rate = 1.0;
         utterance.volume = isMutedRef.current ? 0 : volumeRef.current;
-        currentPlayingIndexRef.current = index;
 
         utterance.onend = () => {
-          const nextIdx = index + 1;
-          if (nextIdx < transcriptRef.current.length && isPlayingRef.current) {
-            playSegment(nextIdx);
+          if (isPlayingRef.current && phaseRef.current === 'active') {
+            playSegment(index + 1);
           }
+        };
+        utterance.onerror = () => {
+          if (isPlayingRef.current) playSegment(index + 1);
         };
 
         window.speechSynthesis.speak(utterance);
+        console.log(`[ClarifyAudio] ▶ Playing seg ${index} via Browser TTS`);
       }
     } else {
-      // Not yet generated — wait and retry
-      console.log(`[ClarifyAudio] Segment ${index} not ready, waiting...`);
+      // Not ready yet — wait and retry
+      setPlaybackStatus(`Waiting for seg ${index + 1}...`);
       setTimeout(() => {
-        if (isPlayingRef.current) {
-          playSegment(index);
-        }
+        if (isPlayingRef.current && phaseRef.current === 'active') playSegment(index);
       }, 500);
     }
-  }, [selectedLanguage, useClientTTS]);
+  }, [selectedLanguage]);
 
-  // Sync playback with video time — when user seeks, jump to correct segment
+  // Sync: when user seeks video far from current TTS position, re-sync
   useEffect(() => {
-    if (!isPlaying || phase !== 'active') return;
-    if (selectedMode === 'subtitles_only') return;
-
-    // If the playing segment is way off from the video position, re-sync
+    if (!isPlaying || phase !== 'active' || selectedMode === 'subtitles_only') return;
     if (currentSegmentIndex >= 0 && Math.abs(currentPlayingIndexRef.current - currentSegmentIndex) > 2) {
       playSegment(currentSegmentIndex);
     }
   }, [currentSegmentIndex, isPlaying, phase, selectedMode, playSegment]);
 
-  const handlePlayPause = useCallback(() => {
+  const togglePlayPause = useCallback(() => {
     if (isPlaying) {
-      // Pause
       if (audioRef.current) audioRef.current.pause();
       if ('speechSynthesis' in window) window.speechSynthesis.pause();
       setIsPlaying(false);
+      setPlaybackStatus('Paused');
     } else {
-      // Play from current segment
       setIsPlaying(true);
       if ('speechSynthesis' in window && window.speechSynthesis.paused) {
         window.speechSynthesis.resume();
       } else {
-        const startIdx = currentSegmentIndex >= 0 ? currentSegmentIndex : 0;
-        playSegment(startIdx);
+        playSegment(currentSegmentIndex >= 0 ? currentSegmentIndex : 0);
       }
     }
   }, [isPlaying, currentSegmentIndex, playSegment]);
@@ -286,20 +270,20 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
   // ─── Processing Flow ───
 
   const handleSelectOption = useCallback(async (outputMode: OutputMode, langCode: string) => {
-    console.log(`[ClarifyAudioPanel] User selected: mode=${outputMode}, lang=${langCode}`);
+    console.log(`[ClarifyAudioPanel] Selected: mode=${outputMode}, lang=${langCode}`);
     setSelectedMode(outputMode);
     setSelectedLanguage(langCode);
     setPhase('processing');
     setError(null);
-    setIsProcessing(true);
     setProcessingStep('📝 Fetching transcript...');
     setProcessingProgress(10);
     audioCacheRef.current = {};
     generatingSetRef.current.clear();
     setGeneratedCount(0);
-    setGeneratingCount(0);
     setUseClientTTS(false);
+    setPlaybackStatus('');
 
+    // Mute YouTube when we'll play our own audio
     if (outputMode !== 'subtitles_only' && onMuteYouTube) {
       onMuteYouTube(true);
     }
@@ -324,65 +308,63 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
 
       console.log(`[ClarifyAudioPanel] ✓ Got ${data.transcript.length} transcript segments`);
 
-      // Normalize segments to have .end
-      const segments: TranscriptSegment[] = data.transcript.map((seg: any, i: number) => {
-        const start = seg.start || 0;
-        const end = seg.end || (data.transcript[i + 1]?.start || start + 3);
-        return { text: seg.text || '', start, end };
-      });
+      const segments: ClarifyTranscriptSegment[] = data.transcript.map((seg: any, i: number) => ({
+        text: seg.text || '',
+        start: seg.start || 0,
+        end: seg.end || (data.transcript[i + 1]?.start || (seg.start || 0) + 3),
+      }));
 
       setTranscript(segments);
       setProcessingProgress(60);
-
-      // Notify parent for horizontal transcript display
-      if (onTranscriptReady) {
-        onTranscriptReady(segments);
-      }
+      if (onTranscriptReady) onTranscriptReady(segments);
 
       if (outputMode !== 'subtitles_only') {
-        setProcessingStep('🔊 Starting audio generation...');
+        setProcessingStep('🔊 Generating audio...');
         setProcessingProgress(80);
 
-        // Pre-generate first few segments immediately
-        const INITIAL_BATCH = 5;
-        const promises = segments.slice(0, INITIAL_BATCH).map((seg, i) =>
-          generateSegmentAudio(i, seg.text)
-        );
-        await Promise.allSettled(promises);
+        // Generate first batch
+        const batch = segments.slice(0, 5);
+        await Promise.allSettled(batch.map((seg, i) => generateSegmentAudio(i, seg.text)));
 
-        setProcessingStep('✅ Ready! Click ▶ to play.');
+        setProcessingStep('✅ Ready — audio will play automatically');
+        setProcessingProgress(100);
+        setPhase('active');
+
+        // AUTO-START playback after a tiny delay for state to settle
+        setTimeout(() => {
+          if (phaseRef.current === 'active') {
+            setIsPlaying(true);
+            isPlayingRef.current = true;
+            playSegment(0);
+          }
+        }, 300);
+
       } else {
         setProcessingStep('✅ Subtitles ready!');
+        setProcessingProgress(100);
+        setPhase('active');
       }
-
-      setProcessingProgress(100);
-      setIsProcessing(false);
-      setPhase('active');
 
     } catch (err) {
       console.error('[ClarifyAudioPanel] Processing error:', err);
       setError(err instanceof Error ? err.message : 'Processing failed');
       setPhase('error');
-      setIsProcessing(false);
     }
-  }, [videoId, onMuteYouTube, onTranscriptReady, generateSegmentAudio]);
+  }, [videoId, onMuteYouTube, onTranscriptReady, generateSegmentAudio, playSegment]);
 
   const handleStop = useCallback(() => {
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current = null; }
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; audioRef.current = null; }
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-    // Clean up object URLs
-    Object.values(audioCacheRef.current).forEach(entry => {
-      if (entry.url) URL.revokeObjectURL(entry.url);
-    });
+    Object.values(audioCacheRef.current).forEach(entry => { if (entry.url) URL.revokeObjectURL(entry.url); });
     audioCacheRef.current = {};
     generatingSetRef.current.clear();
     setPhase('stopped');
     setTranscript([]);
     setIsPlaying(false);
     setGeneratedCount(0);
-    setGeneratingCount(0);
     setCurrentSegmentIndex(-1);
-    if (onMuteYouTube) onMuteYouTube(false);
+    setPlaybackStatus('');
+    if (onMuteYouTube) onMuteYouTube(false); // Unmute YouTube
     if (onTranscriptReady) onTranscriptReady([]);
   }, [onMuteYouTube, onTranscriptReady]);
 
@@ -395,11 +377,9 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
   // Cleanup on unmount
   useEffect(() => {
     return () => {
-      if (audioRef.current) audioRef.current.pause();
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
       if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-      Object.values(audioCacheRef.current).forEach(entry => {
-        if (entry.url) URL.revokeObjectURL(entry.url);
-      });
+      Object.values(audioCacheRef.current).forEach(entry => { if (entry.url) URL.revokeObjectURL(entry.url); });
     };
   }, []);
 
@@ -411,7 +391,6 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
   return (
     <div style={{ padding: '12px', fontSize: '12px', color: 'white' }}>
 
-      {/* Phase: Choosing */}
       {phase === 'choosing' && (
         <ProcessingOptionsModal
           isOpen={true}
@@ -422,7 +401,6 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
         />
       )}
 
-      {/* Phase: Stopped */}
       {phase === 'stopped' && (
         <div>
           <p style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '8px', textAlign: 'center' }}>
@@ -437,7 +415,6 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
         </div>
       )}
 
-      {/* Phase: Error */}
       {phase === 'error' && (
         <div>
           <div style={{
@@ -455,28 +432,24 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
         </div>
       )}
 
-      {/* Phase: Processing */}
       {phase === 'processing' && (
-        <div>
-          <div style={{ marginBottom: '10px' }}>
-            <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#9ca3af', marginBottom: '3px' }}>
-              <span>{processingStep}</span>
-              <span>{Math.round(processingProgress)}%</span>
-            </div>
-            <div style={{ width: '100%', height: '6px', backgroundColor: '#374151', borderRadius: '3px', overflow: 'hidden' }}>
-              <div style={{
-                width: `${processingProgress}%`, height: '100%', backgroundColor: '#3b82f6',
-                borderRadius: '3px', transition: 'width 0.3s ease'
-              }} />
-            </div>
+        <div style={{ marginBottom: '10px' }}>
+          <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#9ca3af', marginBottom: '3px' }}>
+            <span>{processingStep}</span>
+            <span>{Math.round(processingProgress)}%</span>
+          </div>
+          <div style={{ width: '100%', height: '6px', backgroundColor: '#374151', borderRadius: '3px', overflow: 'hidden' }}>
+            <div style={{
+              width: `${processingProgress}%`, height: '100%', backgroundColor: '#3b82f6',
+              borderRadius: '3px', transition: 'width 0.3s ease'
+            }} />
           </div>
         </div>
       )}
 
-      {/* Phase: Active */}
       {phase === 'active' && (
         <div>
-          {/* Mode + Language indicator */}
+          {/* Mode indicator */}
           <div style={{
             display: 'flex', justifyContent: 'space-between', alignItems: 'center',
             marginBottom: '8px', padding: '6px 8px', backgroundColor: '#1e3a5f', borderRadius: '6px', fontSize: '11px',
@@ -489,36 +462,34 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
             <span style={{ color: '#60a5fa' }}>{selectedLanguage.toUpperCase()}</span>
           </div>
 
-          {/* Audio generation status */}
+          {/* TTS status + generation count */}
           {audioMode && (
-            <div style={{ fontSize: '10px', color: '#9ca3af', marginBottom: '6px', display: 'flex', justifyContent: 'space-between' }}>
-              <span>
-                {useClientTTS ? '🌐 Browser TTS' : '🤖 OpenAI TTS'}
-                {' · '}
-                {generatedCount}/{transcript.length} generated
-              </span>
-              {generatingCount > 0 && (
-                <span style={{ color: '#60a5fa' }}>⏳ {generatingCount} generating...</span>
-              )}
+            <div style={{ fontSize: '10px', color: '#9ca3af', marginBottom: '6px' }}>
+              <span>{useClientTTS ? '🌐 Browser TTS' : '🤖 OpenAI TTS'} · {generatedCount}/{transcript.length}</span>
             </div>
           )}
 
-          {/* Audio Controls */}
+          {/* Volume control — simple, no confusing play button */}
           {audioMode && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px', padding: '6px 0' }}>
-              <button onClick={handlePlayPause} style={{
-                padding: '6px 14px', backgroundColor: isPlaying ? '#dc2626' : '#22c55e', color: 'white',
-                border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '16px', fontWeight: 'bold',
-                minWidth: '46px',
-              }}>
-                {isPlaying ? '⏸' : '▶'}
+            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
+              <span style={{ fontSize: '11px', color: isPlaying ? '#22c55e' : '#ef4444', fontWeight: 'bold' }}>
+                {isPlaying ? '▶ Playing' : '⏸ Paused'}
+              </span>
+              <button
+                onClick={togglePlayPause}
+                style={{
+                  padding: '3px 10px', fontSize: '10px', fontWeight: 'bold',
+                  backgroundColor: isPlaying ? '#374151' : '#2563eb', color: 'white',
+                  border: 'none', borderRadius: '4px', cursor: 'pointer',
+                }}
+              >
+                {isPlaying ? 'Pause' : 'Resume'}
               </button>
-
-              <button onClick={() => { setIsMuted(!isMuted); if (audioRef.current) audioRef.current.volume = !isMuted ? 0 : volume/100; }}
-                style={{ padding: '4px 8px', backgroundColor: 'transparent', color: 'white', border: 'none', cursor: 'pointer', fontSize: '16px' }}>
+              <div style={{ flex: 1 }} />
+              <button onClick={() => { setIsMuted(!isMuted); if (audioRef.current) audioRef.current.volume = !isMuted ? 0 : volume / 100; }}
+                style={{ padding: '2px 6px', backgroundColor: 'transparent', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px' }}>
                 {isMuted ? '🔇' : '🔊'}
               </button>
-
               <input type="range" min={0} max={100} value={isMuted ? 0 : volume}
                 onChange={(e) => {
                   const v = parseInt(e.target.value);
@@ -526,15 +497,19 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
                   if (v > 0 && isMuted) setIsMuted(false);
                   if (audioRef.current) audioRef.current.volume = v / 100;
                 }}
-                style={{ flex: 1, accentColor: '#3b82f6', height: '4px' }}
+                style={{ width: '60px', accentColor: '#3b82f6', height: '4px' }}
               />
-              <span style={{ fontSize: '10px', color: '#9ca3af', minWidth: '28px', textAlign: 'right' }}>
-                {isMuted ? 0 : volume}%
-              </span>
             </div>
           )}
 
-          {/* Current subtitle in sidebar */}
+          {/* Playback status line */}
+          {audioMode && playbackStatus && (
+            <div style={{ fontSize: '9px', color: '#6b7280', marginBottom: '6px' }}>
+              {playbackStatus}
+            </div>
+          )}
+
+          {/* Current subtitle */}
           {subtitleMode && currentSegmentIndex >= 0 && transcript[currentSegmentIndex] && (
             <div style={{
               padding: '8px', backgroundColor: '#1f2937', borderRadius: '6px', fontSize: '12px',
@@ -547,16 +522,14 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
             </div>
           )}
 
-          {/* Transcript info (bar renders below video via onTranscriptReady) */}
+          {/* Segment info */}
           <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '8px', borderTop: '1px solid #374151', paddingTop: '6px' }}>
             📜 {transcript.length} segments
             {currentSegmentIndex >= 0 && (
               <span style={{ color: '#60a5fa', marginLeft: '8px' }}>
-                #{currentSegmentIndex + 1}: [{formatTimestamp(transcript[currentSegmentIndex].start)}]
+                #{currentSegmentIndex + 1} [{formatTimestamp(transcript[currentSegmentIndex].start)}]
               </span>
             )}
-            <br />
-            <span style={{ fontSize: '9px', color: '#4b5563' }}>Transcript bar shown below video ↓</span>
           </div>
 
           {/* Stop / Options */}
