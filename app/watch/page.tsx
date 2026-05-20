@@ -1527,9 +1527,20 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             videoId={videoId}
                                             currentTime={currentTime}
                                             onSubtitleChange={(subtitle) => {
-                                                // Subtitle overlay could be displayed here if desired
                                                 if (DEVELOPMENT_MODE && subtitle) {
                                                     console.log('[watch] Clarify subtitle:', subtitle);
+                                                }
+                                            }}
+                                            onMuteYouTube={(mute) => {
+                                                if (iframeRef.current?.contentWindow) {
+                                                    iframeRef.current.contentWindow.postMessage(
+                                                        JSON.stringify({ event: 'command', func: mute ? 'mute' : 'unMute' }),
+                                                        '*'
+                                                    );
+                                                    if (mute) {
+                                                        setIsMuted(true);
+                                                        setVolume(0);
+                                                    }
                                                 }
                                             }}
                                         />

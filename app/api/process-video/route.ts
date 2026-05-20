@@ -55,7 +55,7 @@ async function fetchTranscript(
 ): Promise<TranscriptSegment[]> {
   // Build the URL for our transcript API
   const origin = request.nextUrl.origin;
-  const transcriptUrl = `${origin}/api/transcript?v=${videoId}&lang=${targetLanguage}`;
+  const transcriptUrl = `${origin}/api/transcript?videoId=${videoId}&lang=${targetLanguage}`;
 
   console.log(`[process-video] Fetching transcript from: ${transcriptUrl}`);
 

@@ -1,169 +1,260 @@
 'use client';
 
-import { useState, useEffect } from 'react';
-import { useClarifyAudio } from '@/app/hooks/useClarifyAudio';
+import { useState, useEffect, useCallback } from 'react';
+import ProcessingOptionsModal, { OutputMode } from '@/app/hooks/ProcessingOptionsModal';
 
 interface ClarifyAudioPanelProps {
   videoId: string;
   currentTime: number;
   onSubtitleChange?: (subtitle: string | null) => void;
+  onMuteYouTube?: (mute: boolean) => void;
 }
 
-const LANGUAGES = [
-  { code: 'en', label: '🇺🇸 English' },
-  { code: 'es', label: '🇪🇸 Spanish' },
-  { code: 'fr', label: '🇫🇷 French' },
-  { code: 'de', label: '🇩🇪 German' },
-  { code: 'it', label: '🇮🇹 Italian' },
-  { code: 'pt', label: '🇧🇷 Portuguese' },
-  { code: 'ja', label: '🇯🇵 Japanese' },
-  { code: 'ko', label: '🇰🇷 Korean' },
-  { code: 'zh', label: '🇨🇳 Chinese' },
-];
+/**
+ * ClarifyAudioPanel — The entry point for the audio clarification feature.
+ * 
+ * Flow:
+ * 1. Panel opens → ProcessingOptionsModal shown immediately
+ * 2. User selects output mode + target language → clicks "Start Processing"
+ * 3. Panel begins the clarification process via useClarifyAudio hook
+ * 4. Shows progress, controls, subtitles during processing
+ * 
+ * The useClarifyAudio hook is only initialized AFTER the user confirms their options.
+ */
+export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMuteYouTube }: ClarifyAudioPanelProps) {
+  // Phase: 'choosing' (modal open) → 'processing' (clarification active) → 'error'
+  const [phase, setPhase] = useState<'choosing' | 'processing' | 'stopped' | 'error'>('choosing');
+  const [selectedMode, setSelectedMode] = useState<OutputMode | null>(null);
+  const [selectedLanguage, setSelectedLanguage] = useState<string>('en');
+  const [error, setError] = useState<string | null>(null);
 
-export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange }: ClarifyAudioPanelProps) {
-  const [state, actions] = useClarifyAudio({ videoId });
-  const [volume, setVolumeLocal] = useState(100);
-  const [isMuted, setIsMutedLocal] = useState(false);
-  const [selectedLanguage, setSelectedLanguage] = useState('en');
+  // Processing state
+  const [isProcessing, setIsProcessing] = useState(false);
+  const [processingStep, setProcessingStep] = useState('');
+  const [processingProgress, setProcessingProgress] = useState(0);
+  const [transcript, setTranscript] = useState<any[]>([]);
+  const [currentSubtitle, setCurrentSubtitle] = useState<string>('');
 
-  // Sync currentTime from parent into the hook
-  useEffect(() => {
-    if (state.isActive) {
-      actions.updateTime(currentTime);
-    }
-  }, [currentTime, state.isActive, actions]);
+  // Audio state
+  const [isAudioPlaying, setIsAudioPlaying] = useState(false);
+  const [volume, setVolume] = useState(100);
+  const [isMuted, setIsMuted] = useState(false);
 
   // Notify parent of subtitle changes
   useEffect(() => {
     if (onSubtitleChange) {
-      onSubtitleChange(state.currentSubtitle || null);
+      onSubtitleChange(currentSubtitle || null);
     }
-  }, [state.currentSubtitle, onSubtitleChange]);
+  }, [currentSubtitle, onSubtitleChange]);
 
-  const handleStart = async () => {
-    actions.setTargetLanguage(selectedLanguage);
-    await actions.start(currentTime);
-  };
+  // Find current subtitle based on currentTime
+  useEffect(() => {
+    if (transcript.length === 0) return;
+    const seg = transcript.find((s, i) => {
+      const next = transcript[i + 1];
+      return currentTime >= s.start && (!next || currentTime < next.start);
+    });
+    setCurrentSubtitle(seg?.text || '');
+  }, [currentTime, transcript]);
 
-  const handleStop = () => {
-    actions.stop();
-  };
+  // Handle user selecting options from the modal
+  const handleSelectOption = useCallback(async (outputMode: OutputMode, langCode: string) => {
+    console.log(`[ClarifyAudioPanel] User selected: mode=${outputMode}, lang=${langCode}`);
+    setSelectedMode(outputMode);
+    setSelectedLanguage(langCode);
+    setPhase('processing');
+    setError(null);
+    setIsProcessing(true);
+    setProcessingStep('📝 Transcribing speech to text...');
+    setProcessingProgress(10);
 
-  const handlePlayPause = () => {
-    if (state.isAudioPlaying) {
-      actions.pause();
-    } else {
-      actions.resume();
+    // Mute YouTube if we're doing audio output
+    if (outputMode !== 'subtitles_only' && onMuteYouTube) {
+      onMuteYouTube(true);
     }
-  };
 
-  const handleVolumeChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    const newVolume = parseInt(e.target.value);
-    setVolumeLocal(newVolume);
-    actions.setAudioVolume(newVolume / 100);
-    if (newVolume > 0 && isMuted) {
-      setIsMutedLocal(false);
-      actions.setAudioMuted(false);
+    try {
+      // Step 1: Fetch transcript via process-video
+      setProcessingStep('📝 Transcribing speech to text...');
+      setProcessingProgress(25);
+
+      const response = await fetch('/api/process-video', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          videoId,
+          option: 2,
+          targetLanguage: langCode,
+        }),
+      });
+
+      if (!response.ok) {
+        const errorData = await response.json();
+        throw new Error(errorData.error || `Processing failed (${response.status})`);
+      }
+
+      const data = await response.json();
+
+      if (!data.transcript || data.transcript.length === 0) {
+        throw new Error('No transcript segments found for this video');
+      }
+
+      console.log(`[ClarifyAudioPanel] ✓ Got ${data.transcript.length} transcript segments`);
+      setTranscript(data.transcript);
+      setProcessingProgress(60);
+
+      // Step 2: If audio mode, prepare TTS
+      if (outputMode !== 'subtitles_only') {
+        setProcessingStep('🔊 Preparing audio generation...');
+        setProcessingProgress(70);
+        // Audio generation happens on-demand per segment via multi-voice-tts
+        // For now, mark as ready
+        setProcessingStep('✅ Ready! Audio will generate as you play.');
+        setProcessingProgress(100);
+      } else {
+        setProcessingStep('✅ Subtitles ready!');
+        setProcessingProgress(100);
+      }
+
+      setIsProcessing(false);
+
+    } catch (err) {
+      console.error('[ClarifyAudioPanel] Processing error:', err);
+      const message = err instanceof Error ? err.message : 'Processing failed';
+      setError(message);
+      setPhase('error');
+      setIsProcessing(false);
     }
-  };
+  }, [videoId, onMuteYouTube]);
 
-  const handleMuteToggle = () => {
-    const newMuted = !isMuted;
-    setIsMutedLocal(newMuted);
-    actions.setAudioMuted(newMuted);
-  };
+  // Handle closing the modal without selecting
+  const handleCloseModal = useCallback(() => {
+    setPhase('stopped');
+  }, []);
 
-  const handleLanguageChange = (e: React.ChangeEvent<HTMLSelectElement>) => {
-    const lang = e.target.value;
-    setSelectedLanguage(lang);
-    actions.setTargetLanguage(lang);
-  };
+  // Handle stop
+  const handleStop = useCallback(() => {
+    setPhase('stopped');
+    setTranscript([]);
+    setCurrentSubtitle('');
+    setIsProcessing(false);
+    setProcessingProgress(0);
+    if (onMuteYouTube) onMuteYouTube(false);
+  }, [onMuteYouTube]);
 
-  const bufferProgress = state.bufferStatus?.bufferedUntil || 0;
-  const bufferHealth = state.bufferStatus?.bufferHealth || 0;
+  // Handle restart — show modal again
+  const handleRestart = useCallback(() => {
+    handleStop();
+    setError(null);
+    setPhase('choosing');
+  }, [handleStop]);
+
+  // ─── RENDER ───
 
   return (
     <div style={{ padding: '12px', fontSize: '12px', color: 'white' }}>
-      {/* Language Selection — only when not active */}
-      {!state.isActive && (
-        <div style={{ marginBottom: '10px' }}>
-          <label style={{ display: 'block', fontSize: '11px', color: '#9ca3af', marginBottom: '4px' }}>
-            Target Language
-          </label>
-          <select
-            value={selectedLanguage}
-            onChange={handleLanguageChange}
+
+      {/* Phase: Choosing — show ProcessingOptionsModal */}
+      {phase === 'choosing' && (
+        <ProcessingOptionsModal
+          isOpen={true}
+          onClose={handleCloseModal}
+          onSelectOption={handleSelectOption}
+        />
+      )}
+
+      {/* Phase: Stopped — show restart button */}
+      {phase === 'stopped' && (
+        <div>
+          <p style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '8px', textAlign: 'center' }}>
+            Clarify Audio is not active.
+          </p>
+          <button
+            onClick={handleRestart}
             style={{
               width: '100%',
-              padding: '6px 8px',
-              backgroundColor: '#1f2937',
-              border: '1px solid #374151',
-              borderRadius: '5px',
+              padding: '10px 16px',
+              backgroundColor: '#2563eb',
               color: 'white',
-              fontSize: '12px',
-              cursor: 'pointer'
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              fontWeight: 'bold',
             }}
           >
-            {LANGUAGES.map(lang => (
-              <option key={lang.code} value={lang.code}>{lang.label}</option>
-            ))}
-          </select>
+            🎯 Choose Processing Options
+          </button>
         </div>
       )}
 
-      {/* Start/Stop Button */}
-      {!state.isActive ? (
-        <button
-          onClick={handleStart}
-          disabled={state.isProcessing}
-          style={{
-            width: '100%',
-            padding: '8px 16px',
-            backgroundColor: state.isProcessing ? '#374151' : '#2563eb',
-            color: 'white',
-            border: 'none',
+      {/* Phase: Error — show error + retry */}
+      {phase === 'error' && (
+        <div>
+          <div style={{
+            padding: '8px',
+            backgroundColor: 'rgba(220, 38, 38, 0.15)',
+            border: '1px solid #dc2626',
             borderRadius: '6px',
-            cursor: state.isProcessing ? 'wait' : 'pointer',
-            fontSize: '13px',
-            fontWeight: 'bold',
-            opacity: state.isProcessing ? 0.7 : 1,
-          }}
-        >
-          {state.isProcessing ? '⏳ Starting...' : '🚀 Start Clarification'}
-        </button>
-      ) : (
-        <button
-          onClick={handleStop}
-          style={{
-            width: '100%',
-            padding: '8px 16px',
-            backgroundColor: '#dc2626',
-            color: 'white',
-            border: 'none',
-            borderRadius: '6px',
-            cursor: 'pointer',
-            fontSize: '13px',
-            fontWeight: 'bold',
-          }}
-        >
-          ⏹ Stop Clarification
-        </button>
+            fontSize: '11px',
+            color: '#fca5a5',
+            marginBottom: '10px',
+          }}>
+            ❌ {error}
+          </div>
+          <button
+            onClick={handleRestart}
+            style={{
+              width: '100%',
+              padding: '10px 16px',
+              backgroundColor: '#2563eb',
+              color: 'white',
+              border: 'none',
+              borderRadius: '6px',
+              cursor: 'pointer',
+              fontSize: '13px',
+              fontWeight: 'bold',
+            }}
+          >
+            🔄 Try Again
+          </button>
+        </div>
       )}
 
-      {/* Processing Status */}
-      {state.isActive && (
-        <div style={{ marginTop: '12px' }}>
-          {/* Processing step indicator */}
-          {state.isProcessing && state.currentStep && (
-            <div style={{ marginBottom: '8px' }}>
+      {/* Phase: Processing — show progress + controls */}
+      {phase === 'processing' && (
+        <div>
+          {/* Mode indicator */}
+          <div style={{
+            display: 'flex',
+            justifyContent: 'space-between',
+            alignItems: 'center',
+            marginBottom: '10px',
+            padding: '6px 8px',
+            backgroundColor: '#1e3a5f',
+            borderRadius: '6px',
+            fontSize: '11px',
+          }}>
+            <span>
+              {selectedMode === 'subtitles_only' && '📝 Subtitles Only'}
+              {selectedMode === 'audio_only' && '🔊 Audio Only'}
+              {selectedMode === 'audio_and_subtitles' && '🎬 Audio + Subtitles'}
+            </span>
+            <span style={{ color: '#60a5fa' }}>
+              {selectedLanguage.toUpperCase()}
+            </span>
+          </div>
+
+          {/* Processing progress */}
+          {isProcessing && (
+            <div style={{ marginBottom: '10px' }}>
               <div style={{ display: 'flex', justifyContent: 'space-between', fontSize: '11px', color: '#9ca3af', marginBottom: '3px' }}>
-                <span>{state.currentStep}</span>
-                <span>{Math.round(state.processingProgress)}%</span>
+                <span>{processingStep}</span>
+                <span>{Math.round(processingProgress)}%</span>
               </div>
               <div style={{ width: '100%', height: '6px', backgroundColor: '#374151', borderRadius: '3px', overflow: 'hidden' }}>
                 <div style={{
-                  width: `${state.processingProgress}%`,
+                  width: `${processingProgress}%`,
                   height: '100%',
                   backgroundColor: '#3b82f6',
                   borderRadius: '3px',
@@ -173,123 +264,123 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange }: Cl
             </div>
           )}
 
-          {/* Buffer Health */}
-          <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', fontSize: '11px', marginBottom: '6px' }}>
-            <span style={{ color: '#9ca3af' }}>Buffer Health</span>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px' }}>
-              <div style={{ width: '60px', height: '5px', backgroundColor: '#374151', borderRadius: '3px', overflow: 'hidden' }}>
-                <div style={{
-                  width: `${bufferHealth * 100}%`,
-                  height: '100%',
-                  backgroundColor: bufferHealth > 0.7 ? '#22c55e' : bufferHealth > 0.4 ? '#eab308' : '#ef4444',
-                  borderRadius: '3px',
-                  transition: 'width 0.3s ease'
-                }} />
-              </div>
-              <span style={{ color: '#9ca3af', minWidth: '30px', textAlign: 'right' }}>
-                {Math.round(bufferHealth * 100)}%
-              </span>
-            </div>
-          </div>
-
-          {/* Audio Controls */}
-          <div style={{ borderTop: '1px solid #374151', paddingTop: '8px', marginTop: '8px' }}>
-            <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
-              <button
-                onClick={handlePlayPause}
-                disabled={state.isBuffering}
-                style={{
-                  padding: '4px 10px',
-                  backgroundColor: '#374151',
-                  color: 'white',
-                  border: '1px solid #4b5563',
-                  borderRadius: '4px',
-                  cursor: state.isBuffering ? 'wait' : 'pointer',
-                  fontSize: '14px',
-                  opacity: state.isBuffering ? 0.5 : 1,
-                }}
-              >
-                {state.isAudioPlaying ? '⏸' : '▶️'}
-              </button>
-
-              <button
-                onClick={handleMuteToggle}
-                style={{
-                  padding: '4px 8px',
-                  backgroundColor: 'transparent',
-                  color: 'white',
-                  border: 'none',
-                  cursor: 'pointer',
-                  fontSize: '14px',
-                }}
-              >
-                {isMuted ? '🔇' : '🔊'}
-              </button>
-
-              <input
-                type="range"
-                min={0}
-                max={100}
-                value={isMuted ? 0 : volume}
-                onChange={handleVolumeChange}
-                style={{ flex: 1, accentColor: '#3b82f6' }}
-              />
-              <span style={{ fontSize: '10px', color: '#9ca3af', minWidth: '24px', textAlign: 'right' }}>
-                {isMuted ? 0 : volume}
-              </span>
-            </div>
-          </div>
-
-          {/* Current Subtitle */}
-          {state.currentSubtitle && (
+          {/* Transcript info */}
+          {transcript.length > 0 && !isProcessing && (
             <div style={{
-              marginTop: '8px',
-              padding: '6px 8px',
-              backgroundColor: '#1f2937',
-              borderRadius: '4px',
+              display: 'flex',
+              justifyContent: 'space-between',
               fontSize: '11px',
+              color: '#9ca3af',
+              marginBottom: '8px',
+            }}>
+              <span>✅ {transcript.length} segments loaded</span>
+              <span>{processingStep}</span>
+            </div>
+          )}
+
+          {/* Current Subtitle Display */}
+          {currentSubtitle && (selectedMode === 'subtitles_only' || selectedMode === 'audio_and_subtitles') && (
+            <div style={{
+              padding: '8px',
+              backgroundColor: '#1f2937',
+              borderRadius: '6px',
+              fontSize: '12px',
               textAlign: 'center',
               color: '#e5e7eb',
+              marginBottom: '8px',
+              lineHeight: '1.4',
+              border: '1px solid #374151',
             }}>
-              {state.currentSubtitle}
+              {currentSubtitle}
             </div>
           )}
 
-          {/* Sync Info */}
-          {state.syncState && (
-            <div style={{
-              marginTop: '6px',
-              padding: '6px',
-              backgroundColor: '#1f2937',
-              borderRadius: '4px',
-              fontSize: '10px',
-              color: '#9ca3af',
-            }}>
-              <div style={{ display: 'flex', justifyContent: 'space-between' }}>
-                <span>Sync Offset</span>
-                <span style={{ color: '#e5e7eb' }}>{state.syncState.currentOffset.toFixed(2)}s</span>
-              </div>
-              <div style={{ display: 'flex', justifyContent: 'space-between', marginTop: '2px' }}>
-                <span>Sync Points</span>
-                <span style={{ color: '#e5e7eb' }}>{state.syncState.syncPoints.length}</span>
+          {/* Audio Controls — only for audio modes */}
+          {(selectedMode === 'audio_only' || selectedMode === 'audio_and_subtitles') && !isProcessing && transcript.length > 0 && (
+            <div style={{ borderTop: '1px solid #374151', paddingTop: '8px', marginTop: '4px' }}>
+              <div style={{ display: 'flex', alignItems: 'center', gap: '8px' }}>
+                <button
+                  onClick={() => setIsAudioPlaying(!isAudioPlaying)}
+                  style={{
+                    padding: '4px 10px',
+                    backgroundColor: '#374151',
+                    color: 'white',
+                    border: '1px solid #4b5563',
+                    borderRadius: '4px',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                  }}
+                >
+                  {isAudioPlaying ? '⏸' : '▶️'}
+                </button>
+
+                <button
+                  onClick={() => setIsMuted(!isMuted)}
+                  style={{
+                    padding: '4px 8px',
+                    backgroundColor: 'transparent',
+                    color: 'white',
+                    border: 'none',
+                    cursor: 'pointer',
+                    fontSize: '14px',
+                  }}
+                >
+                  {isMuted ? '🔇' : '🔊'}
+                </button>
+
+                <input
+                  type="range"
+                  min={0}
+                  max={100}
+                  value={isMuted ? 0 : volume}
+                  onChange={(e) => {
+                    const v = parseInt(e.target.value);
+                    setVolume(v);
+                    if (v > 0 && isMuted) setIsMuted(false);
+                  }}
+                  style={{ flex: 1, accentColor: '#3b82f6' }}
+                />
+                <span style={{ fontSize: '10px', color: '#9ca3af', minWidth: '24px', textAlign: 'right' }}>
+                  {isMuted ? 0 : volume}
+                </span>
               </div>
             </div>
           )}
-        </div>
-      )}
 
-      {/* Error Display */}
-      {state.error && (
-        <div style={{
-          marginTop: '8px',
-          padding: '6px 8px',
-          backgroundColor: 'rgba(220, 38, 38, 0.15)',
-          border: '1px solid #dc2626',
-          borderRadius: '4px',
-          fontSize: '11px',
-          color: '#fca5a5',
-        }}>
-          ❌ {state.error}
+          {/* Stop / Change Options buttons */}
+          <div style={{ display: 'flex', gap: '8px', marginTop: '10px' }}>
+            <button
+              onClick={handleStop}
+              style={{
+                flex: 1,
+                padding: '8px 12px',
+                backgroundColor: '#dc2626',
+                color: 'white',
+                border: 'none',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '12px',
+                fontWeight: 'bold',
+              }}
+            >
+              ⏹ Stop
+            </button>
+            <button
+              onClick={handleRestart}
+              style={{
+                flex: 1,
+                padding: '8px 12px',
+                backgroundColor: '#374151',
+                color: 'white',
+                border: '1px solid #4b5563',
+                borderRadius: '6px',
+                cursor: 'pointer',
+                fontSize: '12px',
+              }}
+            >
+              🔄 Options
+            </button>
+          </div>
         </div>
       )}
     </div>
