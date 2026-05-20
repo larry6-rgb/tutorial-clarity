@@ -1721,21 +1721,16 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                 }
                                             }}
                                             onMuteYouTube={(mute) => {
+                                                // SIMPLE: just mute/unmute the iframe. Don't touch any state.
                                                 if (iframeRef.current?.contentWindow) {
-                                                    if (mute) {
-                                                        // Mute YouTube but DON'T touch volume state
+                                                    iframeRef.current.contentWindow.postMessage(
+                                                        JSON.stringify({ event: 'command', func: mute ? 'mute' : 'unMute' }),
+                                                        '*'
+                                                    );
+                                                    if (!mute) {
+                                                        // Also restore volume to make sure unmute actually works
                                                         iframeRef.current.contentWindow.postMessage(
-                                                            JSON.stringify({ event: 'command', func: 'mute' }),
-                                                            '*'
-                                                        );
-                                                    } else {
-                                                        // Unmute YouTube and restore volume
-                                                        iframeRef.current.contentWindow.postMessage(
-                                                            JSON.stringify({ event: 'command', func: 'unMute' }),
-                                                            '*'
-                                                        );
-                                                        iframeRef.current.contentWindow.postMessage(
-                                                            JSON.stringify({ event: 'command', func: 'setVolume', args: [volume] }),
+                                                            JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
                                                             '*'
                                                         );
                                                     }
