@@ -64,15 +64,26 @@ function WatchPageContent() {
     const [clarifySegmentIndex, setClarifySegmentIndex] = useState(-1);
     const clarifyScrollRef = useRef<HTMLDivElement>(null);
 
+    // AI playback speed — persisted to localStorage
+    const AI_SPEED_KEY = 'aiPlaybackSpeed';
+    const [aiPlaybackSpeed, setAiPlaybackSpeed] = useState(() => {
+        if (typeof window === 'undefined') return 1;
+        try {
+            const saved = localStorage.getItem(AI_SPEED_KEY);
+            if (saved) { const v = parseFloat(saved); if (v >= 0.5 && v <= 2) return v; }
+        } catch {}
+        return 1;
+    });
+
     // Clarify bar position/size — persisted to localStorage
     const CLARIFY_BAR_KEY = 'clarifyBarLayout';
     const getInitialClarifyLayout = () => {
-        if (typeof window === 'undefined') return { bottom: 60, height: 44 };
+        if (typeof window === 'undefined') return { bottom: 0, height: 44 };
         try {
             const saved = localStorage.getItem(CLARIFY_BAR_KEY);
             if (saved) return JSON.parse(saved);
         } catch {}
-        return { bottom: 60, height: 44 };
+        return { bottom: 0, height: 44 };
     };
     const [clarifyBarBottom, setClarifyBarBottom] = useState(() => getInitialClarifyLayout().bottom);
     const [clarifyBarHeight, setClarifyBarHeight] = useState(() => getInitialClarifyLayout().height);
@@ -711,6 +722,12 @@ function WatchPageContent() {
         try { localStorage.setItem('clarifyBarLayout', JSON.stringify({ bottom: clarifyBarBottom, height: clarifyBarHeight })); } catch {}
     }, [clarifyBarBottom, clarifyBarHeight]);
 
+    // Save AI playback speed to localStorage
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try { localStorage.setItem(AI_SPEED_KEY, String(aiPlaybackSpeed)); } catch {}
+    }, [aiPlaybackSpeed]);
+
     // Clarify bar drag handler
     useEffect(() => {
         if (!isDraggingClarifyBar) return;
@@ -1203,6 +1220,35 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         </span>
                                     );
                                 })}
+                            </div>
+                            {/* ═══ AI SPEED DROPDOWN (right end of bar) ═══ */}
+                            <div style={{
+                                flexShrink: 0,
+                                display: 'flex',
+                                alignItems: 'center',
+                                padding: '0 8px',
+                                borderLeft: '2px solid #334155',
+                            }}>
+                                <select
+                                    value={aiPlaybackSpeed}
+                                    onChange={(e) => setAiPlaybackSpeed(parseFloat(e.target.value))}
+                                    style={{
+                                        backgroundColor: '#1e293b',
+                                        color: '#93c5fd',
+                                        border: '1px solid #475569',
+                                        borderRadius: '4px',
+                                        padding: '2px 4px',
+                                        fontSize: '11px',
+                                        fontWeight: 'bold',
+                                        cursor: 'pointer',
+                                        outline: 'none',
+                                    }}
+                                    title="AI Audio Playback Speed"
+                                >
+                                    {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(s => (
+                                        <option key={s} value={s}>{s}x</option>
+                                    ))}
+                                </select>
                             </div>
                         </div>
                     </div>
@@ -1715,6 +1761,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         <ClarifyAudioPanel
                                             videoId={videoId}
                                             currentTime={currentTime}
+                                            aiPlaybackSpeed={aiPlaybackSpeed}
                                             onSubtitleChange={(subtitle) => {
                                                 if (DEVELOPMENT_MODE && subtitle) {
                                                     console.log('[watch] Clarify subtitle:', subtitle);
@@ -1734,6 +1781,16 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                             '*'
                                                         );
                                                     }
+                                                }
+                                            }}
+                                            onPlayYouTube={() => {
+                                                // Start YouTube video when user clicks Play/Resume Clarified Audio
+                                                if (iframeRef.current?.contentWindow) {
+                                                    iframeRef.current.contentWindow.postMessage(
+                                                        JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
+                                                        '*'
+                                                    );
+                                                    setIsPlaying(true);
                                                 }
                                             }}
                                             onTranscriptReady={(segments) => {

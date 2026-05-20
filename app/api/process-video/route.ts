@@ -3,104 +3,166 @@ import { NextRequest, NextResponse } from 'next/server';
 export const dynamic = 'force-dynamic';
 
 /**
- * /api/process-video — Video Processing & Transcription Route
- * 
- * Handles two request types:
+ * /api/process-video — Video Processing, Translation & Transcription
  * 
  * POST — Start video processing
  *   Body: { videoId: string, option: number, targetLanguage: string }
  *   Response: { transcript: TranscriptSegment[], isStreaming: boolean }
  * 
- * GET — Poll for new segments (streaming mode)
- *   Params: ?videoId=xxx&afterCount=N
- *   Response: { newSegments: TranscriptSegment[], isStreaming: boolean }
- * 
- * The route fetches the YouTube transcript via the /api/transcript endpoint
- * and returns it in the format expected by useClarifyAudio.ts.
+ * CRITICAL: This route now TRANSLATES the transcript to the target language
+ * using OpenAI before returning it. The German transcript from YouTube gets
+ * translated to English (or whatever target language the user selected).
  */
 
 interface TranscriptSegment {
   text: string;
   start: number;
   end: number;
-  words?: Array<{ word: string; start: number; end: number }>;
-}
-
-// In-memory store for active processing jobs
-// In production, this would use Redis or a database
-const activeJobs = new Map<string, {
-  transcript: TranscriptSegment[];
-  isStreaming: boolean;
-  startedAt: number;
-  targetLanguage: string;
-}>();
-
-// Clean up old jobs periodically (jobs older than 30 minutes)
-function cleanupOldJobs() {
-  const cutoff = Date.now() - 30 * 60 * 1000;
-  activeJobs.forEach((job, key) => {
-    if (job.startedAt < cutoff) {
-      activeJobs.delete(key);
-    }
-  });
 }
 
 /**
- * Fetch transcript from our own /api/transcript endpoint.
+ * Fetch transcript from our /api/transcript endpoint.
  */
 async function fetchTranscript(
   videoId: string,
-  targetLanguage: string,
   request: NextRequest
 ): Promise<TranscriptSegment[]> {
-  // Build the URL for our transcript API
   const origin = request.nextUrl.origin;
-  const transcriptUrl = `${origin}/api/transcript?videoId=${videoId}&lang=${targetLanguage}`;
-
+  // Fetch default transcript (don't specify lang — let YouTube return whatever it has)
+  const transcriptUrl = `${origin}/api/transcript?videoId=${videoId}`;
   console.log(`[process-video] Fetching transcript from: ${transcriptUrl}`);
 
-  const response = await fetch(transcriptUrl, {
-    headers: {
-      'Accept': 'application/json',
-    },
-  });
-
+  const response = await fetch(transcriptUrl, { headers: { 'Accept': 'application/json' } });
   if (!response.ok) {
     const errorData = await response.json().catch(() => ({}));
-    throw new Error(
-      errorData.error || `Transcript fetch failed with status ${response.status}`
-    );
+    throw new Error(errorData.error || `Transcript fetch failed (${response.status})`);
   }
 
   const data = await response.json();
-
   if (!data.transcript || !Array.isArray(data.transcript)) {
-    throw new Error('Invalid transcript response format');
+    throw new Error('Invalid transcript response');
   }
 
-  // Convert transcript segments to the format expected by useClarifyAudio
-  const segments: TranscriptSegment[] = data.transcript.map((seg: any, index: number) => {
+  console.log(`[process-video] Got ${data.transcript.length} segments (language: ${data.language || 'unknown'})`);
+
+  return data.transcript.map((seg: any) => {
     const start = typeof seg.start === 'number' ? seg.start : parseFloat(seg.start) || 0;
     const duration = typeof seg.duration === 'number' ? seg.duration : parseFloat(seg.duration) || 3;
-    const end = start + duration;
-
-    return {
-      text: seg.text || '',
-      start,
-      end,
-    };
+    return { text: seg.text || '', start, end: start + duration };
   });
-
-  return segments;
 }
 
 /**
- * POST — Start video processing
- * 
- * Fetches the transcript and returns it. For simple transcription (option 2),
- * the transcript is returned immediately. For streaming-capable options,
- * segments are stored for polling.
+ * Translate transcript segments to target language using OpenAI.
+ * Batches segments to minimize API calls (translate ~20 at a time).
  */
+async function translateSegments(
+  segments: TranscriptSegment[],
+  targetLanguage: string
+): Promise<TranscriptSegment[]> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    console.warn('[process-video] No OPENAI_API_KEY — skipping translation');
+    return segments;
+  }
+
+  const langNames: Record<string, string> = {
+    en: 'English', es: 'Spanish', fr: 'French', de: 'German',
+    it: 'Italian', pt: 'Portuguese', ja: 'Japanese', ko: 'Korean',
+    zh: 'Chinese', ru: 'Russian', ar: 'Arabic', hi: 'Hindi',
+  };
+  const langName = langNames[targetLanguage] || targetLanguage;
+
+  console.log(`[process-video] Translating ${segments.length} segments to ${langName}...`);
+
+  const BATCH_SIZE = 25;
+  const translated: TranscriptSegment[] = [];
+
+  for (let i = 0; i < segments.length; i += BATCH_SIZE) {
+    const batch = segments.slice(i, i + BATCH_SIZE);
+    const textsToTranslate = batch.map((s, idx) => `[${idx}] ${s.text}`).join('\n');
+
+    try {
+      const response = await fetch('https://api.openai.com/v1/chat/completions', {
+        method: 'POST',
+        headers: {
+          'Authorization': `Bearer ${apiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          model: 'gpt-4o-mini',
+          temperature: 0.3,
+          messages: [
+            {
+              role: 'system',
+              content: `You are a professional translator. Translate each numbered line to ${langName}. Keep the [N] numbering prefix. Output ONLY the translated lines, one per line. Preserve the meaning and tone. Do not add explanations.`,
+            },
+            {
+              role: 'user',
+              content: textsToTranslate,
+            },
+          ],
+        }),
+      });
+
+      if (!response.ok) {
+        console.error(`[process-video] Translation API error (${response.status})`);
+        // On error, return original text for this batch
+        translated.push(...batch);
+        continue;
+      }
+
+      const data = await response.json();
+      const translatedText = data.choices?.[0]?.message?.content || '';
+      const translatedLines = translatedText.split('\n').filter((l: string) => l.trim());
+
+      // Parse translated lines back to segments
+      for (let j = 0; j < batch.length; j++) {
+        const seg = batch[j];
+        // Try to find the matching translated line by index
+        const matchingLine = translatedLines.find((l: string) => l.startsWith(`[${j}]`));
+        if (matchingLine) {
+          // Remove the [N] prefix
+          const translatedSegText = matchingLine.replace(/^\[\d+\]\s*/, '').trim();
+          translated.push({ ...seg, text: translatedSegText || seg.text });
+        } else if (translatedLines[j]) {
+          // Fallback: use position-based matching
+          const translatedSegText = translatedLines[j].replace(/^\[\d+\]\s*/, '').trim();
+          translated.push({ ...seg, text: translatedSegText || seg.text });
+        } else {
+          translated.push(seg); // Keep original if no translation found
+        }
+      }
+
+      console.log(`[process-video] Translated batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(segments.length / BATCH_SIZE)}`);
+
+    } catch (err) {
+      console.error(`[process-video] Translation batch error:`, err);
+      translated.push(...batch); // Keep originals on error
+    }
+  }
+
+  console.log(`[process-video] ✓ Translation complete: ${translated.length} segments`);
+  return translated;
+}
+
+/**
+ * Detect if the transcript is already in the target language.
+ * Simple heuristic: check first few segments for common words in the target language.
+ */
+function detectLanguage(segments: TranscriptSegment[]): string {
+  const sample = segments.slice(0, 10).map(s => s.text).join(' ').toLowerCase();
+  // Simple German detection
+  if (/\b(und|ich|die|der|das|ist|wir|sie|nicht|haben|ein|eine|für|mit|auf|den|dem|von)\b/.test(sample)) {
+    return 'de';
+  }
+  // Simple English detection
+  if (/\b(the|and|is|are|was|were|have|has|with|for|that|this|from|but|not|you|we|they)\b/.test(sample)) {
+    return 'en';
+  }
+  return 'unknown';
+}
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
@@ -110,37 +172,34 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Missing or invalid videoId' }, { status: 400 });
     }
 
-    console.log(`[process-video] POST — videoId=${videoId}, option=${option}, lang=${targetLanguage}`);
+    console.log(`[process-video] POST — videoId=${videoId}, option=${option}, targetLang=${targetLanguage}`);
 
-    // Clean up old jobs
-    cleanupOldJobs();
-
-    // Fetch the transcript
-    const transcript = await fetchTranscript(videoId, targetLanguage, request);
-
-    if (transcript.length === 0) {
-      return NextResponse.json(
-        { error: 'No transcript segments found for this video' },
-        { status: 404 }
-      );
+    // Step 1: Fetch the transcript (in whatever language YouTube has)
+    let segments = await fetchTranscript(videoId, request);
+    if (segments.length === 0) {
+      return NextResponse.json({ error: 'No transcript segments found' }, { status: 404 });
     }
 
-    console.log(`[process-video] ✓ Got ${transcript.length} segments for ${videoId}`);
+    // Step 2: Detect source language and translate if needed
+    const detectedLang = detectLanguage(segments);
+    console.log(`[process-video] Detected source language: ${detectedLang}, target: ${targetLanguage}`);
 
-    // Store the job for potential polling
-    const jobKey = `${videoId}_${targetLanguage}`;
-    activeJobs.set(jobKey, {
-      transcript,
-      isStreaming: false, // Transcript is complete
-      startedAt: Date.now(),
-      targetLanguage,
-    });
+    if (detectedLang !== targetLanguage && targetLanguage !== detectedLang) {
+      // Source and target differ — TRANSLATE!
+      segments = await translateSegments(segments, targetLanguage);
+    } else {
+      console.log(`[process-video] Source matches target (${targetLanguage}) — skipping translation`);
+    }
+
+    console.log(`[process-video] ✓ Returning ${segments.length} segments (${targetLanguage})`);
 
     return NextResponse.json({
-      transcript,
+      transcript: segments,
       isStreaming: false,
-      totalSegments: transcript.length,
+      totalSegments: segments.length,
       videoId,
+      translatedTo: targetLanguage,
+      sourceLanguage: detectedLang,
     });
 
   } catch (error) {
@@ -152,55 +211,6 @@ export async function POST(request: NextRequest) {
   }
 }
 
-/**
- * GET — Poll for new segments
- * 
- * Used in streaming mode to check if more segments are available.
- * Returns segments after the given count.
- */
 export async function GET(request: NextRequest) {
-  try {
-    const { searchParams } = request.nextUrl;
-    const videoId = searchParams.get('videoId');
-    const afterCount = parseInt(searchParams.get('afterCount') || '0', 10);
-
-    if (!videoId) {
-      return NextResponse.json({ error: 'Missing videoId parameter' }, { status: 400 });
-    }
-
-    // Try to find the job (check all language variants)
-    let matchedJob: { transcript: TranscriptSegment[]; isStreaming: boolean; startedAt: number; targetLanguage: string } | null = null;
-    activeJobs.forEach((value, key) => {
-      if (!matchedJob && key.startsWith(`${videoId}_`)) {
-        matchedJob = value;
-      }
-    });
-
-    if (!matchedJob) {
-      // No active job — processing is complete
-      return NextResponse.json({
-        newSegments: [],
-        isStreaming: false,
-      });
-    }
-
-    // TypeScript workaround: assign to a const after null check
-    const job = matchedJob as { transcript: TranscriptSegment[]; isStreaming: boolean; startedAt: number; targetLanguage: string };
-
-    // Return segments after the given count
-    const newSegments = job.transcript.slice(afterCount);
-
-    return NextResponse.json({
-      newSegments,
-      isStreaming: job.isStreaming,
-      totalSegments: job.transcript.length,
-    });
-
-  } catch (error) {
-    console.error('[process-video] GET error:', error);
-    return NextResponse.json(
-      { error: error instanceof Error ? error.message : 'Poll failed' },
-      { status: 500 }
-    );
-  }
+  return NextResponse.json({ error: 'Use POST to start processing' }, { status: 405 });
 }

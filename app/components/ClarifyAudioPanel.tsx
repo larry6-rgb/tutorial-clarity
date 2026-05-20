@@ -36,8 +36,10 @@ interface AudioCache {
 interface ClarifyAudioPanelProps {
   videoId: string;
   currentTime: number;
+  aiPlaybackSpeed?: number;
   onSubtitleChange?: (subtitle: string | null) => void;
   onMuteYouTube?: (mute: boolean) => void;
+  onPlayYouTube?: () => void;
   onTranscriptReady?: (segments: ClarifyTranscriptSegment[]) => void;
   onSegmentChange?: (index: number) => void;
 }
@@ -51,7 +53,7 @@ function fmtTime(sec: number): string {
 }
 
 export function ClarifyAudioPanel({
-  videoId, currentTime, onSubtitleChange, onMuteYouTube, onTranscriptReady, onSegmentChange,
+  videoId, currentTime, aiPlaybackSpeed = 1, onSubtitleChange, onMuteYouTube, onPlayYouTube, onTranscriptReady, onSegmentChange,
 }: ClarifyAudioPanelProps) {
 
   // ═══ STATE ═══
@@ -79,10 +81,13 @@ export function ClarifyAudioPanel({
   const mutedRef = useRef(false);
   const txRef = useRef<ClarifyTranscriptSegment[]>([]);
 
+  const speedRef = useRef(1);
+
   // Keep refs synced
   useEffect(() => { volRef.current = volume / 100; }, [volume]);
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
   useEffect(() => { txRef.current = transcript; }, [transcript]);
+  useEffect(() => { speedRef.current = aiPlaybackSpeed; }, [aiPlaybackSpeed]);
 
   // Update audio element volume in real-time
   useEffect(() => {
@@ -178,6 +183,7 @@ export function ClarifyAudioPanel({
       if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
       const a = new Audio(cached.url);
       a.volume = mutedRef.current ? 0 : volRef.current;
+      a.playbackRate = speedRef.current;
       audioRef.current = a;
       a.onended = () => { if (isPlayingRef.current) playSeg(i + 1); };
       a.onerror = () => { if (isPlayingRef.current) playSeg(i + 1); };
@@ -188,6 +194,7 @@ export function ClarifyAudioPanel({
         const u = new SpeechSynthesisUtterance(txRef.current[i].text);
         u.lang = selectedLang === 'en' ? 'en-US' : selectedLang;
         u.volume = mutedRef.current ? 0 : volRef.current;
+        u.rate = speedRef.current;
         u.onend = () => { if (isPlayingRef.current) playSeg(i + 1); };
         u.onerror = () => { if (isPlayingRef.current) playSeg(i + 1); };
         window.speechSynthesis.speak(u);
@@ -208,15 +215,22 @@ export function ClarifyAudioPanel({
 
   // ═══ USER ACTIONS ═══
 
+  // Apply speed changes to currently playing audio in real-time
+  useEffect(() => {
+    if (audioRef.current) audioRef.current.playbackRate = aiPlaybackSpeed;
+  }, [aiPlaybackSpeed]);
+
   /** User clicks "▶ Play Clarified Audio" or "▶ Resume" */
   const handlePlay = useCallback(() => {
     // MUTE YOUTUBE — only here, on explicit user action
     if (onMuteYouTube) onMuteYouTube(true);
+    // ALSO START the YouTube video so it plays alongside AI audio
+    if (onPlayYouTube) onPlayYouTube();
     isPlayingRef.current = true;
     setPhase('playing');
     const startIdx = currentSegIdx >= 0 ? currentSegIdx : 0;
     playSeg(startIdx);
-  }, [currentSegIdx, playSeg, onMuteYouTube]);
+  }, [currentSegIdx, playSeg, onMuteYouTube, onPlayYouTube]);
 
   /** User clicks "⏸ Pause" */
   const handlePause = useCallback(() => {
