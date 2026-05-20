@@ -843,7 +843,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                 <iframe
                     ref={iframeRef}
                     className="w-full h-full pointer-events-auto"
-                    src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&disablekb=1&controls=0`}
+                    src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=1`}
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                     allowFullScreen
                 />
@@ -854,7 +854,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                       position: "absolute",
                       left: 20,
                       right: 160,
-                      bottom: 14,
+                      bottom: 52,
                       height: 22,
                       display: "flex",
                       alignItems: "center",
@@ -1092,32 +1092,46 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                         position: 'fixed',
                         bottom: `${clarifyBarBottom}px`,
                         left: 0,
-                        right: '240px', /* don't overlap sidebar */
+                        right: '240px',
                         height: `${clarifyBarHeight}px`,
                         zIndex: 60,
-                        backgroundColor: 'rgba(0, 0, 0, 0.88)',
+                        backgroundColor: 'rgba(0, 0, 0, 0.92)',
                         borderTop: '3px solid #3b82f6',
                         display: 'flex',
                         flexDirection: 'column',
                     }}>
-                        {/* Resize handle (top edge) */}
+                        {/* ═══ VISIBLE RESIZE HANDLE (top edge) ═══ */}
                         <div
-                            style={{ height: '5px', cursor: 'ns-resize', flexShrink: 0 }}
+                            style={{
+                                height: '10px', cursor: 'ns-resize', flexShrink: 0,
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                backgroundColor: '#1e293b',
+                                borderBottom: '1px solid #334155',
+                            }}
                             onMouseDown={(e) => {
                                 e.preventDefault();
                                 clarifyResizeStartY.current = e.clientY;
                                 clarifyResizeStartHeight.current = clarifyBarHeight;
                                 setIsResizingClarifyBar(true);
                             }}
-                        />
+                            title="Drag up/down to resize"
+                        >
+                            <span style={{ color: '#64748b', fontSize: '10px', letterSpacing: '3px', userSelect: 'none' }}>
+                                ═══════
+                            </span>
+                        </div>
                         {/* Drag handle + scrollable content */}
                         <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-                            {/* Drag handle */}
+                            {/* ⋮⋮ VISIBLE DRAG HANDLE (left edge) ⋮⋮ */}
                             <div
                                 style={{
-                                    width: '28px', flexShrink: 0, display: 'flex', alignItems: 'center',
-                                    justifyContent: 'center', cursor: 'move', color: '#6b7280',
-                                    fontSize: '14px', userSelect: 'none', borderRight: '1px solid #374151',
+                                    width: '32px', flexShrink: 0, display: 'flex', alignItems: 'center',
+                                    justifyContent: 'center', cursor: 'move',
+                                    backgroundColor: '#1e40af',
+                                    color: '#93c5fd',
+                                    fontSize: '16px', userSelect: 'none',
+                                    borderRight: '2px solid #2563eb',
+                                    transition: 'background-color 0.15s',
                                 }}
                                 onMouseDown={(e) => {
                                     e.preventDefault();
@@ -1125,9 +1139,11 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                     clarifyDragStartBottom.current = clarifyBarBottom;
                                     setIsDraggingClarifyBar(true);
                                 }}
-                                title="Drag to reposition"
+                                onMouseEnter={(e) => { (e.target as HTMLElement).style.backgroundColor = '#1d4ed8'; }}
+                                onMouseLeave={(e) => { (e.target as HTMLElement).style.backgroundColor = '#1e40af'; }}
+                                title="Drag to move bar up/down"
                             >
-                                ↕
+                                ⋮⋮
                             </div>
                             {/* Scrollable transcript segments */}
                             <div
@@ -1706,18 +1722,20 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             }}
                                             onMuteYouTube={(mute) => {
                                                 if (iframeRef.current?.contentWindow) {
-                                                    iframeRef.current.contentWindow.postMessage(
-                                                        JSON.stringify({ event: 'command', func: mute ? 'mute' : 'unMute' }),
-                                                        '*'
-                                                    );
-                                                    // Only toggle the mute flag — don't destroy volume
-                                                    setIsMuted(mute);
-                                                    if (!mute) {
-                                                        // Restore volume when unmuting
-                                                        const restoreVol = volume > 0 ? volume : 100;
-                                                        setVolume(restoreVol);
+                                                    if (mute) {
+                                                        // Mute YouTube but DON'T touch volume state
                                                         iframeRef.current.contentWindow.postMessage(
-                                                            JSON.stringify({ event: 'command', func: 'setVolume', args: [restoreVol] }),
+                                                            JSON.stringify({ event: 'command', func: 'mute' }),
+                                                            '*'
+                                                        );
+                                                    } else {
+                                                        // Unmute YouTube and restore volume
+                                                        iframeRef.current.contentWindow.postMessage(
+                                                            JSON.stringify({ event: 'command', func: 'unMute' }),
+                                                            '*'
+                                                        );
+                                                        iframeRef.current.contentWindow.postMessage(
+                                                            JSON.stringify({ event: 'command', func: 'setVolume', args: [volume] }),
                                                             '*'
                                                         );
                                                     }

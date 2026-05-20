@@ -36,29 +36,23 @@ function formatTimestamp(seconds: number): string {
 }
 
 export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMuteYouTube, onTranscriptReady, onSegmentChange }: ClarifyAudioPanelProps) {
-  // Phase management
   const [phase, setPhase] = useState<'choosing' | 'processing' | 'active' | 'stopped' | 'error'>('choosing');
   const [selectedMode, setSelectedMode] = useState<OutputMode | null>(null);
   const [selectedLanguage, setSelectedLanguage] = useState<string>('en');
   const [error, setError] = useState<string | null>(null);
-
-  // Processing state
   const [processingStep, setProcessingStep] = useState('');
   const [processingProgress, setProcessingProgress] = useState(0);
-
-  // Transcript
   const [transcript, setTranscript] = useState<ClarifyTranscriptSegment[]>([]);
   const [currentSegmentIndex, setCurrentSegmentIndex] = useState(-1);
-
-  // Audio state
   const [isPlaying, setIsPlaying] = useState(false);
   const [volume, setVolume] = useState(80);
   const [isMuted, setIsMuted] = useState(false);
   const [generatedCount, setGeneratedCount] = useState(0);
   const [useClientTTS, setUseClientTTS] = useState(false);
   const [playbackStatus, setPlaybackStatus] = useState('');
+  // Track whether we've muted YouTube so we can restore on stop
+  const [youTubeMuted, setYouTubeMuted] = useState(false);
 
-  // Refs
   const audioRef = useRef<HTMLAudioElement | null>(null);
   const audioCacheRef = useRef<AudioCache>({});
   const currentPlayingIndexRef = useRef(-1);
@@ -68,19 +62,17 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
   const transcriptRef = useRef<ClarifyTranscriptSegment[]>([]);
   const generatingSetRef = useRef<Set<number>>(new Set());
   const phaseRef = useRef(phase);
+  const onMuteYouTubeRef = useRef(onMuteYouTube);
 
-  // Keep refs in sync
   useEffect(() => { isPlayingRef.current = isPlaying; }, [isPlaying]);
   useEffect(() => { volumeRef.current = volume / 100; }, [volume]);
   useEffect(() => { isMutedRef.current = isMuted; }, [isMuted]);
   useEffect(() => { transcriptRef.current = transcript; }, [transcript]);
   useEffect(() => { phaseRef.current = phase; }, [phase]);
+  useEffect(() => { onMuteYouTubeRef.current = onMuteYouTube; }, [onMuteYouTube]);
 
-  // Update audio element volume
   useEffect(() => {
-    if (audioRef.current) {
-      audioRef.current.volume = isMuted ? 0 : volume / 100;
-    }
+    if (audioRef.current) audioRef.current.volume = isMuted ? 0 : volume / 100;
   }, [volume, isMuted]);
 
   // Find current segment based on video time
@@ -89,8 +81,7 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
     let idx = -1;
     for (let i = 0; i < transcript.length; i++) {
       if (currentTime >= transcript[i].start && (!transcript[i + 1] || currentTime < transcript[i + 1].start)) {
-        idx = i;
-        break;
+        idx = i; break;
       }
     }
     if (idx !== currentSegmentIndex) {
@@ -102,12 +93,33 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
     }
   }, [currentTime, transcript, currentSegmentIndex, onSubtitleChange, onSegmentChange]);
 
-  // ─── TTS Generation ───
+  // ─── MUTE YOUTUBE ONLY WHEN AI AUDIO IS ACTIVELY PLAYING ───
+  // This is the key fix: only mute/unmute based on isPlaying state, not on panel open
+  useEffect(() => {
+    const audioMode = selectedMode === 'audio_only' || selectedMode === 'audio_and_subtitles';
+    if (!audioMode || phase !== 'active') {
+      // Not in audio mode or not active → make sure YouTube is unmuted
+      if (youTubeMuted && onMuteYouTube) {
+        onMuteYouTube(false);
+        setYouTubeMuted(false);
+      }
+      return;
+    }
+    if (isPlaying && !youTubeMuted) {
+      // AI audio started playing → mute YouTube
+      if (onMuteYouTube) onMuteYouTube(true);
+      setYouTubeMuted(true);
+    } else if (!isPlaying && youTubeMuted) {
+      // AI audio paused/stopped → unmute YouTube
+      if (onMuteYouTube) onMuteYouTube(false);
+      setYouTubeMuted(false);
+    }
+  }, [isPlaying, phase, selectedMode, youTubeMuted, onMuteYouTube]);
 
+  // ─── TTS Generation ───
   const generateSegmentAudio = useCallback(async (index: number, text: string): Promise<boolean> => {
     if (audioCacheRef.current[index]?.url || audioCacheRef.current[index]?.useClientTTS) return true;
-    if (audioCacheRef.current[index]?.generating) return false;
-    if (generatingSetRef.current.has(index)) return false;
+    if (audioCacheRef.current[index]?.generating || generatingSetRef.current.has(index)) return false;
 
     generatingSetRef.current.add(index);
     audioCacheRef.current[index] = { generating: true };
@@ -115,19 +127,15 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
     try {
       const voiceId = VOICES[index % VOICES.length];
       const seg = transcriptRef.current[index];
-
       const response = await fetch('/api/multi-voice-tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text,
           voice: { id: voiceId, name: voiceId, gender: 'neutral', provider: 'openai' },
-          videoId,
-          segmentId: `seg_${index}`,
-          speakerId: `speaker_${index % 3}`,
+          videoId, segmentId: `seg_${index}`, speakerId: `speaker_${index % 3}`,
           targetDuration: seg ? (seg.end - seg.start) : undefined,
-          targetLanguage: selectedLanguage,
-          ttsModel: 'tts-1',
+          targetLanguage: selectedLanguage, ttsModel: 'tts-1',
         }),
       });
 
@@ -150,23 +158,20 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
 
       const blob = await response.blob();
       if (blob.size === 0) throw new Error('Empty audio response');
-      const url = URL.createObjectURL(blob);
-      audioCacheRef.current[index] = { url };
+      audioCacheRef.current[index] = { url: URL.createObjectURL(blob) };
       setGeneratedCount(prev => prev + 1);
       generatingSetRef.current.delete(index);
       return true;
-
     } catch (err) {
-      console.error(`[ClarifyAudio] TTS error seg ${index}:`, err);
       audioCacheRef.current[index] = { error: String(err), useClientTTS: true };
       setUseClientTTS(true);
       setGeneratedCount(prev => prev + 1);
       generatingSetRef.current.delete(index);
-      return true; // fallback available
+      return true;
     }
   }, [videoId, selectedLanguage]);
 
-  // Pre-generate segments ahead of playback
+  // Pre-generate segments ahead
   useEffect(() => {
     if (phase !== 'active' || transcript.length === 0 || selectedMode === 'subtitles_only') return;
     const startIdx = Math.max(0, currentSegmentIndex);
@@ -176,74 +181,41 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
   }, [phase, currentSegmentIndex, transcript, selectedMode, generateSegmentAudio]);
 
   // ─── Audio Playback ───
-
   const playSegment = useCallback((index: number) => {
     if (index < 0 || index >= transcriptRef.current.length) {
       setIsPlaying(false);
       setPlaybackStatus('Finished');
       return;
     }
-
     const cached = audioCacheRef.current[index];
     currentPlayingIndexRef.current = index;
-    setPlaybackStatus(`Playing seg ${index + 1}/${transcriptRef.current.length}`);
+    setPlaybackStatus(`Seg ${index + 1}/${transcriptRef.current.length}`);
 
     if (cached?.url) {
-      // OpenAI TTS audio
       if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
       const audio = new Audio(cached.url);
       audio.volume = isMutedRef.current ? 0 : volumeRef.current;
       audioRef.current = audio;
-
-      audio.onended = () => {
-        if (isPlayingRef.current && phaseRef.current === 'active') {
-          playSegment(index + 1);
-        }
-      };
-      audio.onerror = (e) => {
-        console.error('[ClarifyAudio] Audio element error:', e);
-        // Try next segment
-        if (isPlayingRef.current) playSegment(index + 1);
-      };
-
-      audio.play().then(() => {
-        console.log(`[ClarifyAudio] ▶ Playing seg ${index} via OpenAI TTS`);
-      }).catch(err => {
-        console.error('[ClarifyAudio] Play blocked:', err);
-        setPlaybackStatus('⚠️ Click page first (autoplay blocked)');
-      });
-
+      audio.onended = () => { if (isPlayingRef.current && phaseRef.current === 'active') playSegment(index + 1); };
+      audio.onerror = () => { if (isPlayingRef.current) playSegment(index + 1); };
+      audio.play().catch(() => setPlaybackStatus('⚠️ Click page to enable audio'));
     } else if (cached?.useClientTTS) {
-      // Browser speechSynthesis
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
-        const utterance = new SpeechSynthesisUtterance(transcriptRef.current[index].text);
-        utterance.lang = selectedLanguage === 'en' ? 'en-US' : selectedLanguage;
-        utterance.rate = 1.0;
-        utterance.volume = isMutedRef.current ? 0 : volumeRef.current;
-
-        utterance.onend = () => {
-          if (isPlayingRef.current && phaseRef.current === 'active') {
-            playSegment(index + 1);
-          }
-        };
-        utterance.onerror = () => {
-          if (isPlayingRef.current) playSegment(index + 1);
-        };
-
-        window.speechSynthesis.speak(utterance);
-        console.log(`[ClarifyAudio] ▶ Playing seg ${index} via Browser TTS`);
+        const u = new SpeechSynthesisUtterance(transcriptRef.current[index].text);
+        u.lang = selectedLanguage === 'en' ? 'en-US' : selectedLanguage;
+        u.volume = isMutedRef.current ? 0 : volumeRef.current;
+        u.onend = () => { if (isPlayingRef.current && phaseRef.current === 'active') playSegment(index + 1); };
+        u.onerror = () => { if (isPlayingRef.current) playSegment(index + 1); };
+        window.speechSynthesis.speak(u);
       }
     } else {
-      // Not ready yet — wait and retry
-      setPlaybackStatus(`Waiting for seg ${index + 1}...`);
-      setTimeout(() => {
-        if (isPlayingRef.current && phaseRef.current === 'active') playSegment(index);
-      }, 500);
+      setPlaybackStatus(`Generating seg ${index + 1}...`);
+      setTimeout(() => { if (isPlayingRef.current && phaseRef.current === 'active') playSegment(index); }, 500);
     }
   }, [selectedLanguage]);
 
-  // Sync: when user seeks video far from current TTS position, re-sync
+  // Re-sync when user seeks video
   useEffect(() => {
     if (!isPlaying || phase !== 'active' || selectedMode === 'subtitles_only') return;
     if (currentSegmentIndex >= 0 && Math.abs(currentPlayingIndexRef.current - currentSegmentIndex) > 2) {
@@ -268,9 +240,7 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
   }, [isPlaying, currentSegmentIndex, playSegment]);
 
   // ─── Processing Flow ───
-
   const handleSelectOption = useCallback(async (outputMode: OutputMode, langCode: string) => {
-    console.log(`[ClarifyAudioPanel] Selected: mode=${outputMode}, lang=${langCode}`);
     setSelectedMode(outputMode);
     setSelectedLanguage(langCode);
     setPhase('processing');
@@ -283,10 +253,8 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
     setUseClientTTS(false);
     setPlaybackStatus('');
 
-    // Mute YouTube when we'll play our own audio
-    if (outputMode !== 'subtitles_only' && onMuteYouTube) {
-      onMuteYouTube(true);
-    }
+    // NOTE: Do NOT mute YouTube here. It will be muted automatically
+    // when isPlaying becomes true (via the useEffect above).
 
     try {
       setProcessingProgress(25);
@@ -295,22 +263,15 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ videoId, option: 2, targetLanguage: langCode }),
       });
-
       if (!response.ok) {
         const errorData = await response.json();
         throw new Error(errorData.error || `Processing failed (${response.status})`);
       }
-
       const data = await response.json();
-      if (!data.transcript || data.transcript.length === 0) {
-        throw new Error('No transcript segments found for this video');
-      }
-
-      console.log(`[ClarifyAudioPanel] ✓ Got ${data.transcript.length} transcript segments`);
+      if (!data.transcript || data.transcript.length === 0) throw new Error('No transcript segments found');
 
       const segments: ClarifyTranscriptSegment[] = data.transcript.map((seg: any, i: number) => ({
-        text: seg.text || '',
-        start: seg.start || 0,
+        text: seg.text || '', start: seg.start || 0,
         end: seg.end || (data.transcript[i + 1]?.start || (seg.start || 0) + 3),
       }));
 
@@ -321,16 +282,12 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
       if (outputMode !== 'subtitles_only') {
         setProcessingStep('🔊 Generating audio...');
         setProcessingProgress(80);
-
-        // Generate first batch
-        const batch = segments.slice(0, 5);
-        await Promise.allSettled(batch.map((seg, i) => generateSegmentAudio(i, seg.text)));
-
-        setProcessingStep('✅ Ready — audio will play automatically');
+        await Promise.allSettled(segments.slice(0, 5).map((seg, i) => generateSegmentAudio(i, seg.text)));
+        setProcessingStep('✅ Ready — AI audio will auto-play');
         setProcessingProgress(100);
         setPhase('active');
 
-        // AUTO-START playback after a tiny delay for state to settle
+        // Auto-start TTS playback (this will trigger YouTube mute via the effect)
         setTimeout(() => {
           if (phaseRef.current === 'active') {
             setIsPlaying(true);
@@ -338,33 +295,32 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
             playSegment(0);
           }
         }, 300);
-
       } else {
         setProcessingStep('✅ Subtitles ready!');
         setProcessingProgress(100);
         setPhase('active');
       }
-
     } catch (err) {
-      console.error('[ClarifyAudioPanel] Processing error:', err);
       setError(err instanceof Error ? err.message : 'Processing failed');
       setPhase('error');
     }
-  }, [videoId, onMuteYouTube, onTranscriptReady, generateSegmentAudio, playSegment]);
+  }, [videoId, onTranscriptReady, generateSegmentAudio, playSegment]);
 
   const handleStop = useCallback(() => {
     if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; audioRef.current = null; }
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-    Object.values(audioCacheRef.current).forEach(entry => { if (entry.url) URL.revokeObjectURL(entry.url); });
+    Object.values(audioCacheRef.current).forEach(e => { if (e.url) URL.revokeObjectURL(e.url); });
     audioCacheRef.current = {};
     generatingSetRef.current.clear();
     setPhase('stopped');
     setTranscript([]);
-    setIsPlaying(false);
+    setIsPlaying(false); // This will trigger YouTube unmute via the effect
     setGeneratedCount(0);
     setCurrentSegmentIndex(-1);
     setPlaybackStatus('');
-    if (onMuteYouTube) onMuteYouTube(false); // Unmute YouTube
+    setYouTubeMuted(false);
+    // Explicitly unmute YouTube immediately on stop
+    if (onMuteYouTube) onMuteYouTube(false);
     if (onTranscriptReady) onTranscriptReady([]);
   }, [onMuteYouTube, onTranscriptReady]);
 
@@ -374,16 +330,15 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
     setPhase('choosing');
   }, [handleStop]);
 
-  // Cleanup on unmount
   useEffect(() => {
     return () => {
       if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
       if ('speechSynthesis' in window) window.speechSynthesis.cancel();
-      Object.values(audioCacheRef.current).forEach(entry => { if (entry.url) URL.revokeObjectURL(entry.url); });
+      Object.values(audioCacheRef.current).forEach(e => { if (e.url) URL.revokeObjectURL(e.url); });
+      // Unmute YouTube on unmount
+      if (onMuteYouTubeRef.current) onMuteYouTubeRef.current(false);
     };
   }, []);
-
-  // ─── RENDER ───
 
   const audioMode = selectedMode === 'audio_only' || selectedMode === 'audio_and_subtitles';
   const subtitleMode = selectedMode === 'subtitles_only' || selectedMode === 'audio_and_subtitles';
@@ -393,18 +348,15 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
 
       {phase === 'choosing' && (
         <ProcessingOptionsModal
-          isOpen={true}
-          onClose={() => setPhase('stopped')}
-          onSelectOption={handleSelectOption}
-          initialMode={selectedMode || undefined}
-          initialLanguage={selectedLanguage}
+          isOpen={true} onClose={() => setPhase('stopped')} onSelectOption={handleSelectOption}
+          initialMode={selectedMode || undefined} initialLanguage={selectedLanguage}
         />
       )}
 
       {phase === 'stopped' && (
         <div>
           <p style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '8px', textAlign: 'center' }}>
-            Clarify Audio is not active.
+            Clarify Audio is not active. YouTube audio is normal.
           </p>
           <button onClick={handleRestart} style={{
             width: '100%', padding: '10px 16px', backgroundColor: '#2563eb', color: 'white',
@@ -462,32 +414,32 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
             <span style={{ color: '#60a5fa' }}>{selectedLanguage.toUpperCase()}</span>
           </div>
 
-          {/* TTS status + generation count */}
+          {/* TTS status */}
           {audioMode && (
             <div style={{ fontSize: '10px', color: '#9ca3af', marginBottom: '6px' }}>
-              <span>{useClientTTS ? '🌐 Browser TTS' : '🤖 OpenAI TTS'} · {generatedCount}/{transcript.length}</span>
+              {useClientTTS ? '🌐 Browser TTS' : '🤖 OpenAI TTS'} · {generatedCount}/{transcript.length} generated
             </div>
           )}
 
-          {/* Volume control — simple, no confusing play button */}
+          {/* AI Audio status — text only, NO confusing button */}
           {audioMode && (
-            <div style={{ display: 'flex', alignItems: 'center', gap: '6px', marginBottom: '8px' }}>
-              <span style={{ fontSize: '11px', color: isPlaying ? '#22c55e' : '#ef4444', fontWeight: 'bold' }}>
-                {isPlaying ? '▶ Playing' : '⏸ Paused'}
-              </span>
-              <button
-                onClick={togglePlayPause}
-                style={{
-                  padding: '3px 10px', fontSize: '10px', fontWeight: 'bold',
-                  backgroundColor: isPlaying ? '#374151' : '#2563eb', color: 'white',
-                  border: 'none', borderRadius: '4px', cursor: 'pointer',
-                }}
-              >
-                {isPlaying ? 'Pause' : 'Resume'}
-              </button>
-              <div style={{ flex: 1 }} />
+            <div style={{
+              display: 'flex', alignItems: 'center', gap: '8px', marginBottom: '8px',
+              padding: '6px 8px', backgroundColor: isPlaying ? 'rgba(34,197,94,0.15)' : 'rgba(239,68,68,0.1)',
+              borderRadius: '6px', border: isPlaying ? '1px solid #22c55e' : '1px solid #4b5563',
+            }}>
+              <span style={{ fontSize: '12px' }}>{isPlaying ? '🔊' : '🔇'}</span>
+              <div style={{ flex: 1 }}>
+                <div style={{ fontSize: '11px', fontWeight: 'bold', color: isPlaying ? '#22c55e' : '#9ca3af' }}>
+                  AI Audio: {isPlaying ? 'Playing' : 'Paused'}
+                </div>
+                <div style={{ fontSize: '9px', color: '#6b7280' }}>
+                  {isPlaying ? 'YouTube is muted while AI speaks' : 'YouTube audio is active'}
+                </div>
+              </div>
+              {/* Volume slider for AI audio */}
               <button onClick={() => { setIsMuted(!isMuted); if (audioRef.current) audioRef.current.volume = !isMuted ? 0 : volume / 100; }}
-                style={{ padding: '2px 6px', backgroundColor: 'transparent', color: 'white', border: 'none', cursor: 'pointer', fontSize: '14px' }}>
+                style={{ padding: '2px', background: 'none', border: 'none', cursor: 'pointer', fontSize: '12px', color: 'white' }}>
                 {isMuted ? '🔇' : '🔊'}
               </button>
               <input type="range" min={0} max={100} value={isMuted ? 0 : volume}
@@ -497,16 +449,14 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
                   if (v > 0 && isMuted) setIsMuted(false);
                   if (audioRef.current) audioRef.current.volume = v / 100;
                 }}
-                style={{ width: '60px', accentColor: '#3b82f6', height: '4px' }}
+                style={{ width: '50px', accentColor: '#3b82f6', height: '3px' }}
               />
             </div>
           )}
 
-          {/* Playback status line */}
+          {/* Status */}
           {audioMode && playbackStatus && (
-            <div style={{ fontSize: '9px', color: '#6b7280', marginBottom: '6px' }}>
-              {playbackStatus}
-            </div>
+            <div style={{ fontSize: '9px', color: '#6b7280', marginBottom: '6px' }}>{playbackStatus}</div>
           )}
 
           {/* Current subtitle */}
