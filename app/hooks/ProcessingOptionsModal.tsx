@@ -30,6 +30,8 @@ interface ProcessingOptionsModalProps {
   isOpen: boolean;
   onClose: () => void;
   onSelectOption: (outputMode: OutputMode, langCode: string) => void;
+  initialMode?: OutputMode;
+  initialLanguage?: string;
 }
 
 const OUTPUT_OPTIONS: { mode: OutputMode; icon: string; title: string; description: string }[] = [
@@ -53,9 +55,9 @@ const OUTPUT_OPTIONS: { mode: OutputMode; icon: string; title: string; descripti
   },
 ];
 
-export default function ProcessingOptionsModal({ isOpen, onClose, onSelectOption }: ProcessingOptionsModalProps) {
-  const [selectedMode, setSelectedMode] = useState<OutputMode>('audio_and_subtitles');
-  const [selectedLanguage, setSelectedLanguage] = useState('en');
+export default function ProcessingOptionsModal({ isOpen, onClose, onSelectOption, initialMode, initialLanguage }: ProcessingOptionsModalProps) {
+  const [selectedMode, setSelectedMode] = useState<OutputMode>(initialMode || 'audio_and_subtitles');
+  const [selectedLanguage, setSelectedLanguage] = useState(initialLanguage || 'en');
 
   if (!isOpen) return null;
 

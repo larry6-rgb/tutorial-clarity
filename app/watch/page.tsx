@@ -58,6 +58,12 @@ function WatchPageContent() {
     const [transcriptCenterOffset, setTranscriptCenterOffset] = useState(0);
     const [isDraggingHeight, setIsDraggingHeight] = useState(false);
     const [isDraggingPosition, setIsDraggingPosition] = useState(false);
+
+    // Clarify Audio transcript bar (rendered below video)
+    // Uses {text, start, end} shape from ClarifyAudioPanel (different from main transcript's {text, start, duration})
+    const [clarifyTranscript, setClarifyTranscript] = useState<{text: string; start: number; end: number}[]>([]);
+    const [clarifySegmentIndex, setClarifySegmentIndex] = useState(-1);
+    const clarifyScrollRef = useRef<HTMLDivElement>(null);
     const dragStartY = useRef(0);
     const dragStartX = useRef(0);
     const dragStartHeight = useRef(0);
@@ -672,6 +678,15 @@ function WatchPageContent() {
         controlsPositionOnDragStart.current = transcriptTopPosition >= controlHandleHeight ? 'above' : 'below';
     };
 
+    // Auto-scroll clarify transcript bar to current segment
+    useEffect(() => {
+        if (clarifySegmentIndex < 0 || !clarifyScrollRef.current) return;
+        const el = clarifyScrollRef.current.querySelector(`[data-clarify-bar-idx="${clarifySegmentIndex}"]`) as HTMLElement;
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+        }
+    }, [clarifySegmentIndex]);
+
     const fontSize = Math.max(14, Math.min(32, (transcriptHeight / 54) * 14));
     const showTranscriptBar = expandedSections.has('scroll') || expandedSections.has('definitions');
 const windowHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -1017,6 +1032,76 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                             </div>
                         </div>
                     </>
+                )}
+
+                {/* Clarify Audio Transcript Bar — below video */}
+                {clarifyTranscript.length > 0 && (
+                    <div style={{
+                        position: 'absolute',
+                        bottom: 0,
+                        left: 0,
+                        right: 0,
+                        zIndex: 55,
+                        backgroundColor: 'rgba(0, 0, 0, 0.85)',
+                        borderTop: '2px solid #3b82f6',
+                        padding: '6px 12px',
+                    }}>
+                        <div
+                            ref={clarifyScrollRef}
+                            style={{
+                                display: 'flex',
+                                gap: '2px',
+                                overflowX: 'auto',
+                                overflowY: 'hidden',
+                                whiteSpace: 'nowrap',
+                                paddingBottom: '4px',
+                                scrollbarWidth: 'thin',
+                                scrollbarColor: '#4b5563 transparent',
+                            }}
+                        >
+                            {clarifyTranscript.map((seg, idx) => {
+                                const isActive = idx === clarifySegmentIndex;
+                                return (
+                                    <span
+                                        key={idx}
+                                        data-clarify-bar-idx={idx}
+                                        onClick={() => {
+                                            // Seek video to this segment's time
+                                            if (iframeRef.current?.contentWindow) {
+                                                iframeRef.current.contentWindow.postMessage(
+                                                    JSON.stringify({ event: 'command', func: 'seekTo', args: [seg.start, true] }),
+                                                    '*'
+                                                );
+                                            }
+                                        }}
+                                        style={{
+                                            display: 'inline-block',
+                                            padding: '4px 8px',
+                                            borderRadius: '4px',
+                                            fontSize: '12px',
+                                            cursor: 'pointer',
+                                            flexShrink: 0,
+                                            backgroundColor: isActive ? '#2563eb' : 'transparent',
+                                            color: isActive ? '#ffffff' : '#9ca3af',
+                                            fontWeight: isActive ? 'bold' : 'normal',
+                                            borderBottom: isActive ? '2px solid #22c55e' : '2px solid transparent',
+                                            transition: 'background-color 0.2s',
+                                        }}
+                                        title={seg.text}
+                                    >
+                                        <span style={{
+                                            color: isActive ? '#93c5fd' : '#6b7280',
+                                            fontSize: '10px',
+                                            marginRight: '4px',
+                                        }}>
+                                            {Math.floor(seg.start / 60)}:{String(Math.floor(seg.start % 60)).padStart(2, '0')}
+                                        </span>
+                                        {seg.text.length > 40 ? seg.text.substring(0, 40) + '…' : seg.text}
+                                    </span>
+                                );
+                            })}
+                        </div>
+                    </div>
                 )}
             </div>
 
@@ -1543,6 +1628,11 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                     }
                                                 }
                                             }}
+                                            onTranscriptReady={(segments) => {
+                                                setClarifyTranscript(segments);
+                                                setClarifySegmentIndex(-1);
+                                            }}
+                                            onSegmentChange={(idx) => setClarifySegmentIndex(idx)}
                                         />
                                     </div>
                                 )}

@@ -24,6 +24,8 @@ interface ClarifyAudioPanelProps {
   onSubtitleChange?: (subtitle: string | null) => void;
   onMuteYouTube?: (mute: boolean) => void;
   onTranscriptReady?: (segments: TranscriptSegment[]) => void;
+  onSegmentChange?: (index: number) => void;
+  onPlaySegment?: (index: number) => void;
 }
 
 // Round-robin voices for variety
@@ -35,7 +37,7 @@ function formatTimestamp(seconds: number): string {
   return `${m}:${s.toString().padStart(2, '0')}`;
 }
 
-export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMuteYouTube, onTranscriptReady }: ClarifyAudioPanelProps) {
+export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMuteYouTube, onTranscriptReady, onSegmentChange, onPlaySegment }: ClarifyAudioPanelProps) {
   // Phase management
   const [phase, setPhase] = useState<'choosing' | 'processing' | 'active' | 'stopped' | 'error'>('choosing');
   const [selectedMode, setSelectedMode] = useState<OutputMode | null>(null);
@@ -97,11 +99,12 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
     }
     if (idx !== currentSegmentIndex) {
       setCurrentSegmentIndex(idx);
-      if (idx >= 0 && onSubtitleChange) {
-        onSubtitleChange(transcript[idx].text);
+      if (idx >= 0) {
+        if (onSubtitleChange) onSubtitleChange(transcript[idx].text);
+        if (onSegmentChange) onSegmentChange(idx);
       }
     }
-  }, [currentTime, transcript, currentSegmentIndex, onSubtitleChange]);
+  }, [currentTime, transcript, currentSegmentIndex, onSubtitleChange, onSegmentChange]);
 
   // Auto-scroll transcript to current segment
   useEffect(() => {
@@ -410,7 +413,13 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
 
       {/* Phase: Choosing */}
       {phase === 'choosing' && (
-        <ProcessingOptionsModal isOpen={true} onClose={() => setPhase('stopped')} onSelectOption={handleSelectOption} />
+        <ProcessingOptionsModal
+          isOpen={true}
+          onClose={() => setPhase('stopped')}
+          onSelectOption={handleSelectOption}
+          initialMode={selectedMode || undefined}
+          initialLanguage={selectedLanguage}
+        />
       )}
 
       {/* Phase: Stopped */}
@@ -538,58 +547,16 @@ export function ClarifyAudioPanel({ videoId, currentTime, onSubtitleChange, onMu
             </div>
           )}
 
-          {/* Horizontal scrolling transcript */}
-          <div style={{
-            marginBottom: '8px', borderTop: '1px solid #374151', paddingTop: '8px',
-          }}>
-            <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '4px' }}>
-              📜 Transcript ({transcript.length} segments)
-            </div>
-            <div
-              ref={transcriptScrollRef}
-              style={{
-                display: 'flex', gap: '2px', overflowX: 'auto', overflowY: 'hidden',
-                whiteSpace: 'nowrap', paddingBottom: '6px', maxHeight: '60px',
-                scrollbarWidth: 'thin', scrollbarColor: '#4b5563 #1f2937',
-              }}
-            >
-              {transcript.map((seg, idx) => {
-                const isActive = idx === currentSegmentIndex;
-                const hasAudio = !!audioCacheRef.current[idx]?.url || !!audioCacheRef.current[idx]?.useClientTTS;
-                return (
-                  <span
-                    key={idx}
-                    data-clarify-idx={idx}
-                    style={{
-                      display: 'inline-block',
-                      padding: '3px 6px',
-                      borderRadius: '4px',
-                      fontSize: '11px',
-                      cursor: 'pointer',
-                      flexShrink: 0,
-                      backgroundColor: isActive ? '#2563eb' : 'transparent',
-                      color: isActive ? '#ffffff' : '#9ca3af',
-                      fontWeight: isActive ? 'bold' : 'normal',
-                      borderBottom: hasAudio && audioMode ? '2px solid #22c55e' : '2px solid transparent',
-                      transition: 'background-color 0.2s',
-                    }}
-                    onClick={() => {
-                      // Jump to this segment's time
-                      setCurrentSegmentIndex(idx);
-                      if (isPlaying && audioMode) {
-                        playSegment(idx);
-                      }
-                    }}
-                    title={`[${formatTimestamp(seg.start)}] ${seg.text}`}
-                  >
-                    <span style={{ color: isActive ? '#93c5fd' : '#6b7280', fontSize: '9px', marginRight: '3px' }}>
-                      {formatTimestamp(seg.start)}
-                    </span>
-                    {seg.text.length > 30 ? seg.text.substring(0, 30) + '…' : seg.text}
-                  </span>
-                );
-              })}
-            </div>
+          {/* Transcript info (bar renders below video via onTranscriptReady) */}
+          <div style={{ fontSize: '10px', color: '#6b7280', marginBottom: '8px', borderTop: '1px solid #374151', paddingTop: '6px' }}>
+            📜 {transcript.length} segments
+            {currentSegmentIndex >= 0 && (
+              <span style={{ color: '#60a5fa', marginLeft: '8px' }}>
+                #{currentSegmentIndex + 1}: [{formatTimestamp(transcript[currentSegmentIndex].start)}]
+              </span>
+            )}
+            <br />
+            <span style={{ fontSize: '9px', color: '#4b5563' }}>Transcript bar shown below video ↓</span>
           </div>
 
           {/* Stop / Options */}
