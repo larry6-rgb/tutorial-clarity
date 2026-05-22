@@ -7,11 +7,10 @@
   "scripts": {
     "start": "electron .",
     "simple": "node simple-launcher.js",
-    "install-simple": "npm install clipboardy open",
+    "install-simple": "npm install open",
     "postinstall": "node -e \"try{require('electron')}catch(e){console.log('\\n⚠️  Electron not installed. Use: npm run simple\\n')}\""
   },
   "dependencies": {
-    "clipboardy": "^4.0.0",
     "open": "^10.1.0"
   },
   "optionalDependencies": {
