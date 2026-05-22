@@ -20,16 +20,20 @@
 
 import clipboardy from 'clipboardy';
 import open from 'open';
-import readline from 'readline';
+import { execSync } from 'child_process';
+import { platform } from 'os';
 
 // ── Config ──────────────────────────────────────────────────────────
 const TC_BASE_URL = 'http://localhost:3000';
-const POLL_INTERVAL_MS = 1500;
+const POLL_INTERVAL_MS = 500;          // poll every 500ms (was 1500)
+const DIAG_POLLS = 20;                 // first 20 polls show verbose output
 // ────────────────────────────────────────────────────────────────────
 
 let lastClipboard = '';
 let pendingUrl = null;
 let urlCount = 0;
+let pollNumber = 0;
+let useClipboardy = true;              // will fall back to PowerShell if clipboardy fails
 
 // ── YouTube URL Detection ───────────────────────────────────────────
 
@@ -58,6 +62,42 @@ const BOLD = '\x1b[1m';
 const RESET = '\x1b[0m';
 const DIM = '\x1b[2m';
 
+// ── Clipboard Reading (with Windows fallback) ───────────────────────
+
+function readClipboardDirect() {
+  // Direct PowerShell / pbpaste / xclip fallback
+  const os = platform();
+  try {
+    if (os === 'win32') {
+      return execSync('powershell -NoProfile -Command "Get-Clipboard"', {
+        encoding: 'utf8',
+        timeout: 3000,
+        windowsHide: true,
+      }).trim();
+    } else if (os === 'darwin') {
+      return execSync('pbpaste', { encoding: 'utf8', timeout: 3000 }).trim();
+    } else {
+      return execSync('xclip -selection clipboard -o', { encoding: 'utf8', timeout: 3000 }).trim();
+    }
+  } catch (err) {
+    return null;
+  }
+}
+
+function readClipboard() {
+  // Try clipboardy first, fall back to direct shell command
+  if (useClipboardy) {
+    try {
+      return clipboardy.readSync().trim();
+    } catch (err) {
+      console.log(`${DIM}  ⚠ clipboardy failed: ${err.message} — switching to direct mode${RESET}`);
+      useClipboardy = false;
+      // Fall through to direct read
+    }
+  }
+  return readClipboardDirect();
+}
+
 // ── Console UI ──────────────────────────────────────────────────────
 
 function showBanner() {
@@ -65,6 +105,10 @@ function showBanner() {
   console.log(`${CYAN}${BOLD}╔═══════════════════════════════════════════════════╗${RESET}`);
   console.log(`${CYAN}${BOLD}║     🎯 Tutorial Clarity — Clipboard Launcher     ║${RESET}`);
   console.log(`${CYAN}${BOLD}╚═══════════════════════════════════════════════════╝${RESET}`);
+  console.log('');
+  console.log(`${DIM}  Platform: ${platform()}${RESET}`);
+  console.log(`${DIM}  Polling every ${POLL_INTERVAL_MS}ms${RESET}`);
+  console.log(`${DIM}  (First ${DIAG_POLLS} polls show diagnostic output)${RESET}`);
   console.log('');
   console.log(`${DIM}  Watching clipboard for YouTube URLs...${RESET}`);
   console.log(`${DIM}  Copy any YouTube URL to get started.${RESET}`);
@@ -112,18 +156,52 @@ async function openInTutorialClarity(youtubeUrl) {
 // ── Clipboard Polling ───────────────────────────────────────────────
 
 function checkClipboard() {
+  pollNumber++;
+  const isDiag = pollNumber <= DIAG_POLLS;
+  
   try {
-    const current = clipboardy.readSync().trim();
-    if (current && current !== lastClipboard) {
-      lastClipboard = current;
-      const ytUrl = extractYouTubeUrl(current);
-      if (ytUrl && ytUrl !== pendingUrl) {
-        pendingUrl = ytUrl;
-        showStep1(ytUrl);
+    const current = readClipboard();
+    
+    if (current === null) {
+      if (isDiag) console.log(`${DIM}  [poll #${pollNumber}] clipboard read returned null${RESET}`);
+      return;
+    }
+
+    const changed = current !== lastClipboard;
+    const preview = current.substring(0, 80).replace(/\n/g, '\\n');
+    
+    if (isDiag) {
+      const method = useClipboardy ? 'clipboardy' : 'direct';
+      if (changed) {
+        console.log(`${DIM}  [poll #${pollNumber}] (${method}) CHANGED → "${preview}"${RESET}`);
+      } else {
+        console.log(`${DIM}  [poll #${pollNumber}] (${method}) same${RESET}`);
       }
     }
-  } catch {
-    // Clipboard read can fail sometimes — ignore silently
+
+    if (changed) {
+      lastClipboard = current;
+      const ytUrl = extractYouTubeUrl(current);
+      if (ytUrl) {
+        if (ytUrl !== pendingUrl) {
+          if (isDiag) console.log(`${DIM}  [poll #${pollNumber}] ✓ YouTube match: ${ytUrl}${RESET}`);
+          pendingUrl = ytUrl;
+          showStep1(ytUrl);
+        }
+      } else if (isDiag) {
+        console.log(`${DIM}  [poll #${pollNumber}] ✗ Not a YouTube URL${RESET}`);
+      }
+    }
+    
+    // End of diagnostic window
+    if (pollNumber === DIAG_POLLS) {
+      console.log('');
+      console.log(`${DIM}  ── Diagnostic output complete. Polling silently now. ──${RESET}`);
+      console.log(`${DIM}  (Clipboard reads are working. Copy a YouTube URL!)${RESET}`);
+      console.log('');
+    }
+  } catch (err) {
+    console.error(`${DIM}  [poll #${pollNumber}] ❌ Error: ${err.message}${RESET}`);
   }
 }
 
@@ -133,47 +211,54 @@ async function main() {
   showBanner();
 
   // Capture current clipboard so we don't trigger on pre-existing content
-  try {
-    lastClipboard = clipboardy.readSync().trim();
-  } catch {
-    lastClipboard = '';
-  }
+  const initial = readClipboard();
+  lastClipboard = initial || '';
+  const initPreview = (initial || '(empty)').substring(0, 80).replace(/\n/g, '\\n');
+  console.log(`${DIM}  Initial clipboard: "${initPreview}"${RESET}`);
+  console.log('');
 
   // Start clipboard polling
   const pollTimer = setInterval(checkClipboard, POLL_INTERVAL_MS);
 
-  // Listen for ENTER key to open the pending URL
-  const rl = readline.createInterface({
-    input: process.stdin,
-    output: process.stdout,
-    terminal: false,
-  });
+  // ── Keypress handling (raw mode ONLY, no readline) ──
+  if (process.stdin.isTTY) {
+    process.stdin.setRawMode(true);
+    process.stdin.resume();
+    process.stdin.setEncoding('utf8');
 
-  // Handle raw keypress for ENTER
-  process.stdin.setRawMode && process.stdin.setRawMode(true);
-  process.stdin.resume();
-  process.stdin.setEncoding('utf8');
+    process.stdin.on('data', async (key) => {
+      // Ctrl+C
+      if (key === '\u0003') {
+        console.log('');
+        console.log(`${DIM}  👋 Goodbye! Opened ${urlCount} video(s) this session.${RESET}`);
+        clearInterval(pollTimer);
+        process.exit(0);
+      }
 
-  process.stdin.on('data', async (key) => {
-    // Ctrl+C
-    if (key === '\u0003') {
-      console.log('');
-      console.log(`${DIM}  👋 Goodbye! Opened ${urlCount} video(s) this session.${RESET}`);
-      clearInterval(pollTimer);
-      process.exit(0);
-    }
-
-    // ENTER key
-    if (key === '\r' || key === '\n') {
-      if (pendingUrl) {
+      // ENTER key
+      if (key === '\r' || key === '\n') {
+        if (pendingUrl) {
+          const url = pendingUrl;
+          pendingUrl = null;
+          await openInTutorialClarity(url);
+        } else {
+          console.log(`${DIM}  (No YouTube URL pending — copy one first)${RESET}`);
+        }
+      }
+    });
+  } else {
+    // Non-TTY fallback: just use process.stdin line events
+    console.log(`${DIM}  (Non-TTY mode — type and press ENTER)${RESET}`);
+    process.stdin.resume();
+    process.stdin.setEncoding('utf8');
+    process.stdin.on('data', async (chunk) => {
+      if (chunk.trim() === '' && pendingUrl) {
         const url = pendingUrl;
         pendingUrl = null;
         await openInTutorialClarity(url);
-      } else {
-        console.log(`${DIM}  (No YouTube URL pending — copy one first)${RESET}`);
       }
-    }
-  });
+    });
+  }
 }
 
 main().catch(console.error);
