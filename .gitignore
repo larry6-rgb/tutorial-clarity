@@ -141,4 +141,4 @@ vite.config.ts.timestamp-*
 # Local configs and secrets
 .env
 .env.local
-yt-api-key.txt
+yt-api-key.txt.logs/
