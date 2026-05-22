@@ -45,7 +45,6 @@
  * AUDIO MODES:
  *   A) YouTube Audio ON  → YT audio plays, synced with video
  *   B) AI Clarified      → AI audio plays, YT audio OFF, video keeps playing
- *   C) Silent            → No audio, just video
  * 
  * This is a PROOF OF CONCEPT page. It does NOT replace /watch.
  * Navigate to: /watch-v2?url=https://youtube.com/watch?v=VIDEO_ID
@@ -96,7 +95,7 @@ interface TranscriptSegment {
 
 // ── Audio Mode ──────────────────────────────────────────────────────
 
-type AudioMode = 'youtube' | 'ai' | 'silent';
+type AudioMode = 'youtube' | 'ai';
 
 // ── Main Component ──────────────────────────────────────────────────
 
@@ -320,10 +319,11 @@ function WatchV2Content() {
         return;
       }
 
-      // Match play/pause state
+      // Match play/pause state (only runs when audioMode === 'youtube')
       if (video.paused && !audio.paused) {
         audio.pause();
       } else if (!video.paused && audio.paused) {
+        audio.muted = false; // ensure unmuted when syncing in YouTube mode
         audio.play().catch(() => {});
       }
 
@@ -362,19 +362,18 @@ function WatchV2Content() {
     const audio = ytAudioRef.current;
     if (!audio) return;
 
-    console.log('[watch-v2] audioMode useEffect:', audioMode, 'volume:', volume);
+    console.log('[watch-v2] === audioMode changed to:', audioMode, 'volume:', volume);
 
     if (audioMode === 'youtube') {
+      // YouTube mode: unmute YT audio, set volume
+      audio.muted = false;
       audio.volume = volume / 100;
-      // NOTE: audio.play() is called from direct click handlers (not here)
-      // because browser autoplay policy requires a user gesture.
+      console.log('[watch-v2] YouTube audio UNMUTED, volume:', volume);
     } else {
-      // AI mode or silent — pause YouTube audio
+      // AI mode — mute AND pause YouTube audio so only AI is heard
+      audio.muted = true;
       audio.pause();
-      if (audioMode === 'silent' && videoRef.current) {
-        videoRef.current.pause();
-      }
-      console.log('[watch-v2] Audio paused via useEffect, mode:', audioMode);
+      console.log('[watch-v2] YouTube audio MUTED + PAUSED (AI mode active)');
     }
   }, [audioMode, volume]);
 
@@ -385,22 +384,25 @@ function WatchV2Content() {
     if (!video) return;
     const audio = ytAudioRef.current;
     if (video.paused) {
-      // If we were in Silent mode, switch to YouTube mode on play
-      if (audioMode === 'silent') {
-        setAudioMode('youtube');
-      }
       video.play();
-      // Start audio in same user gesture (autoplay policy)
-      if ((audioMode === 'youtube' || audioMode === 'silent') && audio) {
+      console.log('[watch-v2] Video play, audioMode:', audioMode);
+      if (audioMode === 'youtube' && audio) {
+        // YouTube mode: unmute and play audio in same user gesture
+        audio.muted = false;
         audio.currentTime = video.currentTime;
         audio.volume = volume / 100;
         audio.play()
-          .then(() => console.log('[watch-v2] Audio started with video'))
-          .catch((e: unknown) => console.error('[watch-v2] Audio play-with-video failed:', e));
+          .then(() => console.log('[watch-v2] YouTube audio started with video'))
+          .catch((e: unknown) => console.error('[watch-v2] YouTube audio play failed:', e));
+      } else if (audioMode === 'ai' && audio) {
+        // AI mode: keep YT audio muted
+        audio.muted = true;
+        console.log('[watch-v2] Video playing in AI mode - YT audio stays muted');
       }
     } else {
       video.pause();
       if (audio) audio.pause();
+      console.log('[watch-v2] Video + audio paused');
     }
   };
 
@@ -530,14 +532,10 @@ function WatchV2Content() {
             borderRadius: 20,
             fontSize: 13,
             fontWeight: 'bold',
-            background: audioMode === 'youtube' ? '#3b82f6' 
-                      : audioMode === 'ai' ? '#8b5cf6' 
-                      : '#6b7280',
+            background: audioMode === 'youtube' ? '#3b82f6' : '#8b5cf6',
             color: '#fff',
           }}>
-            {audioMode === 'youtube' ? '🔊 YouTube Audio' 
-             : audioMode === 'ai' ? '🤖 AI Audio' 
-             : '🔇 Silent'}
+            {audioMode === 'youtube' ? '🔊 YouTube Audio' : '🤖 AI Audio'}
           </span>
           <span style={{ color: '#666', fontSize: 12 }}>
             {streamData ? `${streamData.bestVideo?.quality_label || '?'} · ${streamData.totalFormats} formats` : ''}
@@ -684,77 +682,108 @@ function WatchV2Content() {
               <span style={{ fontSize: 12, color: '#888' }}>{volume}%</span>
             </div>
 
-            {/* Center: Audio mode toggle */}
+            {/* Center: Audio mode toggle (YouTube / AI) */}
             <div style={{ 
               display: 'flex', gap: 4, background: '#222', borderRadius: 8, padding: 4,
+              alignItems: 'center',
             }}>
-              {(['youtube', 'ai', 'silent'] as AudioMode[]).map((mode) => (
-                <button
-                  key={mode}
-                  onClick={() => {
-                    console.log('[watch-v2] Audio mode button clicked:', mode);
-                    const prevMode = audioMode;
-                    setAudioMode(mode);
-                    const audio = ytAudioRef.current;
-                    const video = videoRef.current;
+              {/* YouTube Audio button */}
+              <button
+                onClick={() => {
+                  console.log('[watch-v2] YouTube button clicked');
+                  setAudioMode('youtube');
+                  const audio = ytAudioRef.current;
+                  const video = videoRef.current;
+                  
+                  // STOP AI audio first
+                  if (clarifyRef.current?.isPlaying()) {
+                    clarifyRef.current.pause();
+                    console.log('[watch-v2] AI audio STOPPED');
+                  }
+                  
+                  // UNMUTE + PLAY YouTube audio
+                  if (audio) {
+                    audio.muted = false;
+                    audio.volume = volume / 100;
+                    if (video) audio.currentTime = video.currentTime;
+                    audio.play()
+                      .then(() => console.log('[watch-v2] YouTube audio UNMUTED and PLAYING'))
+                      .catch((e: unknown) => console.error('[watch-v2] YouTube audio play failed:', e));
+                  }
+                  
+                  // Ensure video is playing
+                  if (video && video.paused) video.play();
+                }}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: 6,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: audioMode === 'youtube' ? 'bold' : 'normal',
+                  background: audioMode === 'youtube' ? '#3b82f6' : 'transparent',
+                  color: audioMode === 'youtube' ? '#fff' : '#888',
+                  transition: 'all 0.2s',
+                }}
+              >
+                🔊 YouTube
+              </button>
 
-                    if (mode === 'silent') {
-                      // SILENT: pause everything — video + all audio
-                      if (video) video.pause();
-                      if (audio) audio.pause();
-                      // If AI audio is playing, pause it too
-                      if (clarifyRef.current?.pause) clarifyRef.current.pause();
-                      console.log('[watch-v2] Silent mode: everything paused');
-                    } else if (mode === 'youtube') {
-                      // YOUTUBE: resume video + start YT audio
-                      if (video && video.paused) video.play();
-                      if (audio) {
-                        audio.volume = volume / 100;
-                        if (video) audio.currentTime = video.currentTime;
-                        audio.play()
-                          .then(() => console.log('[watch-v2] YouTube audio playing!'))
-                          .catch((e: unknown) => console.error('[watch-v2] YouTube audio play failed:', e));
-                      }
-                    } else if (mode === 'ai') {
-                      // AI: resume video, pause YT audio, toggle AI audio
-                      if (video && video.paused) video.play();
-                      if (audio) audio.pause();
-                      // Toggle AI audio play/pause
-                      if (clarifyRef.current) {
-                        if (prevMode === 'ai') {
-                          // Already in AI mode — toggle pause/play
-                          if (clarifyRef.current.isPlaying()) {
-                            clarifyRef.current.pause();
-                          } else {
-                            clarifyRef.current.play();
-                          }
-                        } else {
-                          // Switching TO AI mode — start playing
-                          clarifyRef.current.play();
-                        }
-                      }
-                      console.log('[watch-v2] AI mode activated');
+              {/* AI Audio button */}
+              <button
+                onClick={() => {
+                  console.log('[watch-v2] AI button clicked');
+                  setAudioMode('ai');
+                  const audio = ytAudioRef.current;
+                  const video = videoRef.current;
+                  
+                  // MUTE + PAUSE YouTube audio immediately
+                  if (audio) {
+                    audio.muted = true;
+                    audio.pause();
+                    console.log('[watch-v2] YouTube audio MUTED and PAUSED');
+                  }
+                  
+                  // START AI audio playback via ClarifyAudioPanel
+                  if (clarifyRef.current) {
+                    if (clarifyRef.current.isPlaying()) {
+                      // Already playing — user is toggling pause/resume
+                      clarifyRef.current.pause();
+                      console.log('[watch-v2] AI audio PAUSED (toggle)');
+                    } else {
+                      clarifyRef.current.play();
+                      console.log('[watch-v2] AI audio STARTED');
                     }
-                  }}
-                  style={{
-                    padding: '6px 14px',
-                    borderRadius: 6,
-                    border: 'none',
-                    cursor: 'pointer',
-                    fontSize: 13,
-                    fontWeight: audioMode === mode ? 'bold' : 'normal',
-                    background: audioMode === mode 
-                      ? (mode === 'youtube' ? '#3b82f6' : mode === 'ai' ? '#8b5cf6' : '#6b7280')
-                      : 'transparent',
-                    color: audioMode === mode ? '#fff' : '#888',
-                    transition: 'all 0.2s',
-                  }}
-                >
-                  {mode === 'youtube' ? '🔊 YouTube' : mode === 'ai' ? '🤖 AI' : '🔇 Silent'}
-                </button>
-              ))}
-              <span style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginLeft: 4 }}>
-                {audioMode === 'youtube' ? '♪ on' : audioMode === 'ai' ? 'AI' : 'off'}
+                  } else {
+                    console.warn('[watch-v2] clarifyRef not available — process AI audio first!');
+                  }
+                  
+                  // Ensure video keeps playing (video is silent, AI provides audio)
+                  if (video && video.paused) video.play();
+                }}
+                style={{
+                  padding: '6px 14px',
+                  borderRadius: 6,
+                  border: 'none',
+                  cursor: 'pointer',
+                  fontSize: 13,
+                  fontWeight: audioMode === 'ai' ? 'bold' : 'normal',
+                  background: audioMode === 'ai' ? '#8b5cf6' : 'transparent',
+                  color: audioMode === 'ai' ? '#fff' : '#888',
+                  transition: 'all 0.2s',
+                }}
+              >
+                🤖 AI
+              </button>
+
+              {/* Active audio indicator */}
+              <span style={{ 
+                fontSize: 11, marginLeft: 8, padding: '2px 8px', borderRadius: 4,
+                background: audioMode === 'youtube' ? 'rgba(59,130,246,0.15)' : 'rgba(139,92,246,0.15)',
+                color: audioMode === 'youtube' ? '#60a5fa' : '#a78bfa',
+                fontWeight: 'bold',
+              }}>
+                {audioMode === 'youtube' ? '♪ YT audio active' : '🤖 AI audio active'}
               </span>
             </div>
 
@@ -841,20 +870,29 @@ function WatchV2Content() {
                   if (subtitle) console.log('[watch-v2] AI subtitle:', subtitle);
                 }}
                 onMuteYouTube={(mute) => {
+                  const audio = ytAudioRef.current;
                   if (mute) {
+                    // ClarifyPanel says "mute YouTube" — AI is about to play
                     setAudioMode('ai');
-                    if (ytAudioRef.current) ytAudioRef.current.pause();
-                    console.log('[watch-v2] AI requested mute → AI audio mode');
-                  } else {
-                    setAudioMode('youtube');
-                    // Resume YT audio in user gesture context
-                    const audio = ytAudioRef.current;
-                    if (audio && videoRef.current && !videoRef.current.paused) {
-                      audio.currentTime = videoRef.current.currentTime;
-                      audio.volume = volume / 100;
-                      audio.play().catch(() => {});
+                    if (audio) {
+                      audio.muted = true;
+                      audio.pause();
                     }
-                    console.log('[watch-v2] AI requested unmute → YouTube audio mode');
+                    console.log('[watch-v2] ClarifyPanel MUTE → YT audio muted+paused, AI mode ON');
+                  } else {
+                    // ClarifyPanel says "unmute YouTube" — AI finished/paused
+                    setAudioMode('youtube');
+                    if (audio) {
+                      audio.muted = false;
+                      audio.volume = volume / 100;
+                      if (videoRef.current && !videoRef.current.paused) {
+                        audio.currentTime = videoRef.current.currentTime;
+                        audio.play()
+                          .then(() => console.log('[watch-v2] YT audio RESUMED after AI'))
+                          .catch((e: unknown) => console.error('[watch-v2] YT audio resume failed:', e));
+                      }
+                    }
+                    console.log('[watch-v2] ClarifyPanel UNMUTE → YT audio unmuted, YouTube mode ON');
                   }
                 }}
                 onPlayYouTube={() => {
