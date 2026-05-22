@@ -1,16 +1,13 @@
 {
-  "name": "tutorial-clarity-launcher",
-  "version": "2.0.0",
-  "description": "Two-step clipboard watcher — detects YouTube URLs, shows pink then orange notification, opens Tutorial Clarity",
-  "main": "main.js",
+  "name": "tutorial-clarity-electron",
+  "version": "1.0.0",
+  "description": "Electron launcher for Tutorial Clarity",
+  "main": "main.mjs",
+  "type": "module",
   "scripts": {
-    "start": "electron .",
-    "dev": "electron . --dev"
+    "start": "electron ."
   },
-  "keywords": ["tutorial-clarity", "youtube", "clipboard", "electron", "notification"],
-  "author": "Tutorial Clarity",
-  "license": "MIT",
-  "devDependencies": {
+  "dependencies": {
     "electron": "^28.0.0"
   }
 }
