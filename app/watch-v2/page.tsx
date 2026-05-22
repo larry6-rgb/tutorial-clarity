@@ -138,6 +138,17 @@ function WatchV2Content() {
     || searchParams.get('videoId') 
     || null;
 
+  // DEBUG: Log what we're getting from search params
+  // This helps Larry see exactly what the page receives
+  if (typeof window !== 'undefined') {
+    console.log('[watch-v2 DEBUG] Full URL:', window.location.href);
+    console.log('[watch-v2 DEBUG] searchParams.get("url"):', searchParams.get('url'));
+    console.log('[watch-v2 DEBUG] searchParams.get("v"):', searchParams.get('v'));
+    console.log('[watch-v2 DEBUG] searchParams.get("videoId"):', searchParams.get('videoId'));
+    console.log('[watch-v2 DEBUG] extractId(rawUrl):', extractId(rawUrl));
+    console.log('[watch-v2 DEBUG] → Final videoId:', videoId);
+  }
+
   // ── Refs ──
   const videoRef = useRef<HTMLVideoElement>(null);
   const ytAudioRef = useRef<HTMLAudioElement>(null);
@@ -432,14 +443,36 @@ function WatchV2Content() {
         minHeight: '100vh', background: '#000', color: '#fff',
         fontFamily: 'system-ui, sans-serif',
       }}>
-        <div style={{ textAlign: 'center', maxWidth: 600, padding: 40 }}>
+        <div style={{ textAlign: 'center', maxWidth: 700, padding: 40 }}>
           <h1 style={{ fontSize: 32, marginBottom: 16 }}>🎬 Watch V2 — POC</h1>
           <p style={{ color: '#aaa', fontSize: 18, marginBottom: 24 }}>
             Separated video/audio architecture
           </p>
-          <p style={{ color: '#888' }}>
-            Add a YouTube URL: <code style={{ color: '#4ade80' }}>/watch-v2?url=YOUTUBE_URL</code>
+          <p style={{ color: '#888', marginBottom: 16 }}>
+            Usage: <code style={{ color: '#4ade80' }}>/watch-v2?videoId=YOUTUBE_ID</code>
           </p>
+          <p style={{ color: '#888', marginBottom: 8 }}>
+            Or: <code style={{ color: '#4ade80' }}>/watch-v2?v=YOUTUBE_ID</code>
+          </p>
+          <p style={{ color: '#888', marginBottom: 24 }}>
+            Or: <code style={{ color: '#4ade80' }}>/watch-v2?url=https://youtube.com/watch?v=ID</code>
+          </p>
+
+          {/* Debug info — shows what the page actually received */}
+          <div style={{
+            marginTop: 24, padding: 16, background: '#111', borderRadius: 8,
+            textAlign: 'left', fontSize: 13, color: '#888',
+          }}>
+            <p style={{ color: '#f59e0b', fontWeight: 'bold', marginBottom: 8 }}>🔧 Debug (what this page received):</p>
+            <p>searchParams.get(&quot;url&quot;): <code style={{ color: '#60a5fa' }}>{rawUrl ?? '(null)'}</code></p>
+            <p>searchParams.get(&quot;v&quot;): <code style={{ color: '#60a5fa' }}>{searchParams.get('v') ?? '(null)'}</code></p>
+            <p>searchParams.get(&quot;videoId&quot;): <code style={{ color: '#60a5fa' }}>{searchParams.get('videoId') ?? '(null)'}</code></p>
+            <p>extractId(url): <code style={{ color: '#60a5fa' }}>{extractId(rawUrl) ?? '(null)'}</code></p>
+            <p style={{ marginTop: 8, color: '#f87171' }}>→ Final videoId: <code>{videoId ?? '(null)'}</code></p>
+            <p style={{ marginTop: 12, color: '#666', fontSize: 11 }}>
+              All params: {typeof window !== 'undefined' ? window.location.search : '(SSR)'}
+            </p>
+          </div>
         </div>
       </div>
     );
