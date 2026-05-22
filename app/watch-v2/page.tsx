@@ -104,17 +104,37 @@ function WatchV2Content() {
   const searchParams = useSearchParams();
   const rawUrl = searchParams.get('url');
 
-  // Extract YouTube video ID from URL
+  /**
+   * Extract YouTube video ID — handles multiple URL formats.
+   * 
+   * BROWSER QUERY STRING PROBLEM:
+   *   When user navigates to:
+   *     /watch-v2?url=https://www.youtube.com/watch?v=ABC123_xYz
+   *   The browser parses TWO query params:
+   *     url = "https://www.youtube.com/watch"  (truncated!)
+   *     v   = "ABC123_xYz"                      (split off!)
+   * 
+   *   So we check BOTH searchParams.get('url') AND searchParams.get('v').
+   */
   const extractId = (url: string | null): string | null => {
     if (!url) return null;
-    const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\s]+)/);
+    // Standard YouTube URL patterns
+    const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
     if (match) return match[1];
+    // Bare 11-char ID
     const idMatch = url.match(/^([a-zA-Z0-9_-]{11})$/);
     if (idMatch) return idMatch[1];
-    return url;
+    return null;
   };
 
-  const videoId = extractId(rawUrl);
+  // Try multiple sources for the video ID:
+  // 1. Extract from the ?url= parameter (works when URL is properly encoded)
+  // 2. Fall back to ?v= parameter (works when browser splits unencoded YouTube URL)
+  // 3. Fall back to ?videoId= parameter (direct ID)
+  const videoId = extractId(rawUrl) 
+    || searchParams.get('v')?.match(/^([a-zA-Z0-9_-]{11})/)?.[1]
+    || searchParams.get('videoId')?.match(/^([a-zA-Z0-9_-]{11})$/)?.[1]
+    || null;
 
   // ── Refs ──
   const videoRef = useRef<HTMLVideoElement>(null);
@@ -506,9 +526,12 @@ function WatchV2Content() {
             </div>
           )}
           {streamData?.hint && (
-            <p style={{ color: '#fbbf24', marginTop: 12, fontSize: 14 }}>
+            <pre style={{ 
+              color: '#fbbf24', marginTop: 12, fontSize: 14,
+              whiteSpace: 'pre-wrap', fontFamily: 'system-ui, sans-serif',
+            }}>
               💡 {streamData.hint}
-            </p>
+            </pre>
           )}
         </div>
       )}

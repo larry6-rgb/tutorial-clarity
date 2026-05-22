@@ -350,7 +350,12 @@ export async function GET(request: NextRequest) {
   // ── Validate input ──
   if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
     return NextResponse.json(
-      { error: 'Invalid or missing videoId parameter (must be 11 chars)' },
+      { 
+        error: 'Invalid or missing videoId parameter (must be exactly 11 alphanumeric/dash/underscore characters)',
+        received: videoId || '(empty)',
+        hint: 'Use ?videoId=XXXXXXXXXXX with the 11-character YouTube video ID',
+        example: '/api/video-stream?videoId=dQw4w9WgXcQ',
+      },
       { status: 400 }
     );
   }
@@ -438,12 +443,27 @@ export async function GET(request: NextRequest) {
   } catch (err: any) {
     console.error('[video-stream] Error:', err.message);
     
+    // Build context-specific hint
+    let hint = 'Make sure yt-dlp is installed and working: yt-dlp --version';
+    const msg = err.message || '';
+    
+    if (msg.includes('bot') || msg.includes('Sign in')) {
+      hint = 'YouTube is blocking this request. This usually works from home (residential IP) but fails from cloud servers.';
+    } else if (msg.includes('Video unavailable') || msg.includes('unavailable')) {
+      hint = [
+        'The video might be unavailable, age-restricted, or private.',
+        'Also try updating yt-dlp to the latest version:',
+        '  Windows: yt-dlp -U   OR   winget upgrade yt-dlp',
+        '  Mac: brew upgrade yt-dlp',
+        '  Linux: pip install -U yt-dlp',
+        `Your version: run "yt-dlp --version" to check. Latest is usually best.`,
+      ].join('\n');
+    }
+    
     return NextResponse.json({
-      error: err.message,
+      error: msg,
       videoId,
-      hint: err.message.includes('bot') || err.message.includes('Sign in')
-        ? 'YouTube is blocking this request. This usually works from home (residential IP) but fails from cloud servers.'
-        : 'Make sure yt-dlp is installed and working: yt-dlp --version',
+      hint,
     }, { status: 500 });
   }
 }
