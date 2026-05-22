@@ -348,12 +348,12 @@ export async function GET(request: NextRequest) {
   const quality = searchParams.get('quality') || undefined;
 
   // ── Validate input ──
-  if (!videoId || !/^[a-zA-Z0-9_-]{11}$/.test(videoId)) {
+  if (!videoId || !/^[a-zA-Z0-9_-]{5,20}$/.test(videoId)) {
     return NextResponse.json(
       { 
-        error: 'Invalid or missing videoId parameter (must be exactly 11 alphanumeric/dash/underscore characters)',
+        error: 'Invalid or missing videoId parameter',
         received: videoId || '(empty)',
-        hint: 'Use ?videoId=XXXXXXXXXXX with the 11-character YouTube video ID',
+        hint: 'Use ?videoId=XXXXXXXXXXX with the YouTube video ID (the part after v= in the URL)',
         example: '/api/video-stream?videoId=dQw4w9WgXcQ',
       },
       { status: 400 }

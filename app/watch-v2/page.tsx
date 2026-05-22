@@ -107,6 +107,8 @@ function WatchV2Content() {
   /**
    * Extract YouTube video ID — handles multiple URL formats.
    * 
+   * YouTube IDs are typically 11 chars, but we accept 8-16 to be safe.
+   * 
    * BROWSER QUERY STRING PROBLEM:
    *   When user navigates to:
    *     /watch-v2?url=https://www.youtube.com/watch?v=ABC123_xYz
@@ -118,11 +120,11 @@ function WatchV2Content() {
    */
   const extractId = (url: string | null): string | null => {
     if (!url) return null;
-    // Standard YouTube URL patterns
-    const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([a-zA-Z0-9_-]{11})/);
+    // Standard YouTube URL patterns (capture the ID part after v= or youtu.be/)
+    const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/|youtube\.com\/embed\/|youtube\.com\/shorts\/)([a-zA-Z0-9_-]+)/);
     if (match) return match[1];
-    // Bare 11-char ID
-    const idMatch = url.match(/^([a-zA-Z0-9_-]{11})$/);
+    // Bare ID (alphanumeric, dash, underscore, reasonable length)
+    const idMatch = url.match(/^([a-zA-Z0-9_-]{8,16})$/);
     if (idMatch) return idMatch[1];
     return null;
   };
@@ -132,8 +134,8 @@ function WatchV2Content() {
   // 2. Fall back to ?v= parameter (works when browser splits unencoded YouTube URL)
   // 3. Fall back to ?videoId= parameter (direct ID)
   const videoId = extractId(rawUrl) 
-    || searchParams.get('v')?.match(/^([a-zA-Z0-9_-]{11})/)?.[1]
-    || searchParams.get('videoId')?.match(/^([a-zA-Z0-9_-]{11})$/)?.[1]
+    || searchParams.get('v')?.match(/^([a-zA-Z0-9_-]+)/)?.[1]
+    || searchParams.get('videoId') 
     || null;
 
   // ── Refs ──
