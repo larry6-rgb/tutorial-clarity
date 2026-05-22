@@ -42,6 +42,7 @@ interface ClarifyAudioPanelProps {
   onPlayYouTube?: () => void;
   onTranscriptReady?: (segments: ClarifyTranscriptSegment[]) => void;
   onSegmentChange?: (index: number) => void;
+  registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean }) => void;
 }
 
 const VOICES = ['nova', 'echo', 'shimmer', 'fable', 'alloy', 'onyx'];
@@ -53,7 +54,7 @@ function fmtTime(sec: number): string {
 }
 
 export function ClarifyAudioPanel({
-  videoId, currentTime, aiPlaybackSpeed = 1, onSubtitleChange, onMuteYouTube, onPlayYouTube, onTranscriptReady, onSegmentChange,
+  videoId, currentTime, aiPlaybackSpeed = 1, onSubtitleChange, onMuteYouTube, onPlayYouTube, onTranscriptReady, onSegmentChange, registerHandlers,
 }: ClarifyAudioPanelProps) {
 
   // ═══ STATE ═══
@@ -241,6 +242,17 @@ export function ClarifyAudioPanel({
     // UNMUTE YOUTUBE — immediately on pause
     if (onMuteYouTube) onMuteYouTube(false);
   }, [onMuteYouTube]);
+
+  // Register external handlers so parent can control AI audio
+  useEffect(() => {
+    if (registerHandlers) {
+      registerHandlers({
+        play: () => handlePlay(),
+        pause: () => handlePause(),
+        isPlaying: () => isPlayingRef.current,
+      });
+    }
+  }, [registerHandlers, handlePlay, handlePause]);
 
   /** User clicks "⏹ Stop" */
   const handleStop = useCallback(() => {
