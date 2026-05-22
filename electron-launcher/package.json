@@ -1,13 +1,20 @@
 {
   "name": "tutorial-clarity-electron",
-  "version": "1.0.0",
-  "description": "Electron launcher for Tutorial Clarity",
+  "version": "1.1.0",
+  "description": "Tutorial Clarity clipboard launcher — Electron version OR simple Node.js version",
   "main": "main.mjs",
   "type": "module",
   "scripts": {
-    "start": "electron ."
+    "start": "electron .",
+    "simple": "node simple-launcher.js",
+    "install-simple": "npm install clipboardy open",
+    "postinstall": "node -e \"try{require('electron')}catch(e){console.log('\\n⚠️  Electron not installed. Use: npm run simple\\n')}\""
   },
   "dependencies": {
+    "clipboardy": "^4.0.0",
+    "open": "^10.1.0"
+  },
+  "optionalDependencies": {
     "electron": "^28.0.0"
   }
 }
