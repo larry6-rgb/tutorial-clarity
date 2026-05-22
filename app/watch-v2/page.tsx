@@ -359,15 +359,16 @@ function WatchV2Content() {
     const audio = ytAudioRef.current;
     if (!audio) return;
 
+    console.log('[watch-v2] audioMode useEffect:', audioMode, 'volume:', volume);
+
     if (audioMode === 'youtube') {
       audio.volume = volume / 100;
-      if (videoRef.current && !videoRef.current.paused) {
-        audio.currentTime = videoRef.current.currentTime;
-        audio.play().catch(() => {});
-      }
+      // NOTE: audio.play() is called from direct click handlers (not here)
+      // because browser autoplay policy requires a user gesture.
     } else {
-      // AI mode or silent — mute YouTube audio
+      // AI mode or silent — pause YouTube audio
       audio.pause();
+      console.log('[watch-v2] Audio paused via useEffect, mode:', audioMode);
     }
   }, [audioMode, volume]);
 
@@ -376,10 +377,20 @@ function WatchV2Content() {
   const togglePlay = () => {
     const video = videoRef.current;
     if (!video) return;
+    const audio = ytAudioRef.current;
     if (video.paused) {
       video.play();
+      // Start audio in same user gesture (autoplay policy)
+      if (audioMode === 'youtube' && audio) {
+        audio.currentTime = video.currentTime;
+        audio.volume = volume / 100;
+        audio.play()
+          .then(() => console.log('[watch-v2] Audio started with video'))
+          .catch((e: unknown) => console.error('[watch-v2] Audio play-with-video failed:', e));
+      }
     } else {
       video.pause();
+      if (audio) audio.pause();
     }
   };
 
@@ -667,7 +678,23 @@ function WatchV2Content() {
               {(['youtube', 'ai', 'silent'] as AudioMode[]).map((mode) => (
                 <button
                   key={mode}
-                  onClick={() => setAudioMode(mode)}
+                  onClick={() => {
+                    console.log('[watch-v2] Audio mode button clicked:', mode);
+                    setAudioMode(mode);
+                    const audio = ytAudioRef.current;
+                    if (mode === 'youtube' && audio) {
+                      audio.volume = volume / 100;
+                      if (videoRef.current) {
+                        audio.currentTime = videoRef.current.currentTime;
+                      }
+                      audio.play()
+                        .then(() => console.log('[watch-v2] Audio now playing!'))
+                        .catch((e: unknown) => console.error('[watch-v2] Audio play failed:', e));
+                    } else if (audio) {
+                      audio.pause();
+                      console.log('[watch-v2] Audio paused, mode:', mode);
+                    }
+                  }}
                   style={{
                     padding: '6px 14px',
                     borderRadius: 6,
@@ -685,6 +712,9 @@ function WatchV2Content() {
                   {mode === 'youtube' ? '🔊 YouTube' : mode === 'ai' ? '🤖 AI' : '🔇 Silent'}
                 </button>
               ))}
+              <span style={{ fontSize: 11, color: '#6b7280', fontStyle: 'italic', marginLeft: 4 }}>
+                {audioMode === 'youtube' ? '♪ on' : audioMode === 'ai' ? 'AI' : 'off'}
+              </span>
             </div>
 
             {/* Right: Speed */}
