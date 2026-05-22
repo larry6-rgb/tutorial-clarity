@@ -166,6 +166,9 @@ function WatchV2Content() {
 
   // Audio mode: which audio source is active
   const [audioMode, setAudioMode] = useState<AudioMode>('youtube');
+  // CRITICAL: Ref mirrors audioMode so sync event handlers always see the current value
+  // (React state in useEffect closures can be stale — this ref is always up-to-date)
+  const audioModeRef = useRef<AudioMode>('youtube');
 
   // Transcript
   const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
@@ -181,6 +184,12 @@ function WatchV2Content() {
 
   // Ref to control ClarifyAudioPanel externally (play/pause AI audio)
   const clarifyRef = useRef<{ play: () => void; pause: () => void; isPlaying: () => boolean } | null>(null);
+
+  // Keep audioModeRef in sync with state (for use in event handler closures)
+  useEffect(() => {
+    audioModeRef.current = audioMode;
+    console.log('[watch-v2] audioModeRef updated to:', audioMode);
+  }, [audioMode]);
 
   // ── Fetch stream URLs from our API ────────────────────────────────
 
@@ -305,6 +314,12 @@ function WatchV2Content() {
      * The <video> element is the master clock.
      * The <audio> element for YouTube audio follows the video's time.
      * We sync every timeupdate event, but only if drift > 0.3s.
+     * 
+     * CRITICAL: Uses audioModeRef.current (not audioMode from closure)
+     * because React state updates are async — when ClarifyAudioPanel calls
+     * onMuteYouTube(true) → setAudioMode('ai') → onPlayYouTube() → video.play(),
+     * the 'play' event fires BEFORE React re-renders, so audioMode in the
+     * closure would still be 'youtube'. The ref is always current.
      */
     const video = videoRef.current;
     const audio = ytAudioRef.current;
@@ -313,9 +328,16 @@ function WatchV2Content() {
     const syncAudio = () => {
       if (syncingRef.current) return;
       
+      // CRITICAL: Read from ref, not closure — ref is always up-to-date
+      const currentMode = audioModeRef.current;
+      
       // Only sync if YouTube audio is active
-      if (audioMode !== 'youtube') {
-        if (!audio.paused) audio.pause();
+      if (currentMode !== 'youtube') {
+        if (!audio.paused) {
+          audio.pause();
+          audio.muted = true;
+          console.log('[watch-v2] syncAudio: NOT youtube mode (' + currentMode + '), pausing + muting YT audio');
+        }
         return;
       }
 
@@ -323,7 +345,7 @@ function WatchV2Content() {
       if (video.paused && !audio.paused) {
         audio.pause();
       } else if (!video.paused && audio.paused) {
-        audio.muted = false; // ensure unmuted when syncing in YouTube mode
+        audio.muted = false;
         audio.play().catch(() => {});
       }
 
@@ -354,7 +376,7 @@ function WatchV2Content() {
       video.removeEventListener('pause', syncAudio);
       video.removeEventListener('ratechange', syncAudio);
     };
-  }, [audioMode, audioUrl]);
+  }, [audioUrl]); // NOTE: removed audioMode dep — we use audioModeRef instead
 
   // ── Audio mode changes ────────────────────────────────────────────
 
@@ -691,6 +713,7 @@ function WatchV2Content() {
               <button
                 onClick={() => {
                   console.log('[watch-v2] YouTube button clicked');
+                  audioModeRef.current = 'youtube'; // Update ref FIRST
                   setAudioMode('youtube');
                   const audio = ytAudioRef.current;
                   const video = videoRef.current;
@@ -733,6 +756,7 @@ function WatchV2Content() {
               <button
                 onClick={() => {
                   console.log('[watch-v2] AI button clicked');
+                  audioModeRef.current = 'ai'; // Update ref FIRST
                   setAudioMode('ai');
                   const audio = ytAudioRef.current;
                   const video = videoRef.current;
@@ -873,14 +897,18 @@ function WatchV2Content() {
                   const audio = ytAudioRef.current;
                   if (mute) {
                     // ClarifyPanel says "mute YouTube" — AI is about to play
+                    // CRITICAL: Update ref FIRST (sync handlers read this immediately)
+                    audioModeRef.current = 'ai';
                     setAudioMode('ai');
                     if (audio) {
                       audio.muted = true;
                       audio.pause();
                     }
-                    console.log('[watch-v2] ClarifyPanel MUTE → YT audio muted+paused, AI mode ON');
+                    console.log('[watch-v2] ClarifyPanel MUTE → ref=ai, YT audio muted+paused');
                   } else {
                     // ClarifyPanel says "unmute YouTube" — AI finished/paused
+                    // CRITICAL: Update ref FIRST
+                    audioModeRef.current = 'youtube';
                     setAudioMode('youtube');
                     if (audio) {
                       audio.muted = false;
@@ -892,7 +920,7 @@ function WatchV2Content() {
                           .catch((e: unknown) => console.error('[watch-v2] YT audio resume failed:', e));
                       }
                     }
-                    console.log('[watch-v2] ClarifyPanel UNMUTE → YT audio unmuted, YouTube mode ON');
+                    console.log('[watch-v2] ClarifyPanel UNMUTE → ref=youtube, YT audio restored');
                   }
                 }}
                 onPlayYouTube={() => {
