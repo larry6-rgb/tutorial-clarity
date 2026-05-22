@@ -4,11 +4,14 @@
  * Pure Node.js — no native binaries, no Electron download issues.
  * Works on Windows, Mac, and Linux.
  *
- * TWO-STEP WORKFLOW:
+ * TWO-STEP NOTIFICATION WORKFLOW:
  *   1. Copy a YouTube URL
- *   2. Console shows: "YouTube URL detected! Press ENTER to open in Tutorial Clarity"
- *   3. Press ENTER (this gives you time to pause the YouTube video first)
- *   4. Tutorial Clarity opens in your default browser
+ *   2. Toast notification #1: "YouTube URL Detected! Click here to continue"
+ *   3. Click the notification
+ *   4. Toast notification #2: "Pause your video, then click here to open"
+ *   5. Click it → Tutorial Clarity opens in your browser
+ *
+ * Also works with ENTER key in the terminal as a fallback.
  *
  * Usage:
  *   cd electron-launcher
@@ -19,12 +22,19 @@
  */
 
 import open from 'open';
+import notifier from 'node-notifier';
 import { execSync } from 'child_process';
 import { platform } from 'os';
+import { fileURLToPath } from 'url';
+import { dirname, join } from 'path';
+
+const __filename = fileURLToPath(import.meta.url);
+const __dirname = dirname(__filename);
 
 // ── Config ──────────────────────────────────────────────────────────
 const TC_BASE_URL = 'http://localhost:3000';
 const POLL_INTERVAL_MS = 500;
+const APP_NAME = 'Tutorial Clarity';
 // ────────────────────────────────────────────────────────────────────
 
 let lastClipboard = '';
@@ -79,6 +89,78 @@ function readClipboard() {
   }
 }
 
+// ── Toast Notifications ─────────────────────────────────────────────
+
+/**
+ * Show a native toast notification and return a promise that resolves
+ * to 'click' or 'timeout' (or rejects on error).
+ */
+function showToast(title, message) {
+  return new Promise((resolve) => {
+    notifier.notify(
+      {
+        title,
+        message,
+        sound: true,
+        wait: true,                       // keep alive until user acts
+        appID: APP_NAME,                  // shows "Tutorial Clarity" in Windows toast
+      },
+      (err, response) => {
+        if (err) {
+          console.error(`${DIM}  ⚠ Notification error: ${err.message}${RESET}`);
+          resolve('error');
+        } else {
+          // response is 'click', 'timeout', or 'dismissed'
+          resolve(response);
+        }
+      }
+    );
+  });
+}
+
+/**
+ * Two-step notification workflow:
+ *   Step 1: "YouTube URL Detected!" → click
+ *   Step 2: "Pause your video first, then click" → click → open TC
+ */
+async function notifyAndOpen(youtubeUrl) {
+  // ── Step 1: URL Detected notification ──
+  console.log(`${PINK}${BOLD}  📢 Sending notification #1: URL Detected...${RESET}`);
+
+  const step1 = await showToast(
+    '🔗 YouTube URL Detected!',
+    `I see you copied a URL!\n${youtubeUrl}\n\n👉 Click here to continue...`
+  );
+
+  console.log(`${DIM}  Notification #1 result: ${step1}${RESET}`);
+
+  if (step1 !== 'click') {
+    // User dismissed or it timed out — back to watching
+    console.log(`${DIM}  (Notification dismissed — still watching clipboard)${RESET}`);
+    console.log('');
+    return;
+  }
+
+  // ── Step 2: Pause & Open notification ──
+  console.log(`${YELLOW}${BOLD}  📢 Sending notification #2: Pause & Open...${RESET}`);
+
+  const step2 = await showToast(
+    '⏸ Pause Your Video First!',
+    'Pause your YouTube video now.\n\n👉 Then click HERE to open in Tutorial Clarity!'
+  );
+
+  console.log(`${DIM}  Notification #2 result: ${step2}${RESET}`);
+
+  if (step2 !== 'click') {
+    console.log(`${DIM}  (Notification dismissed — still watching clipboard)${RESET}`);
+    console.log('');
+    return;
+  }
+
+  // ── Open in Tutorial Clarity ──
+  await openInTutorialClarity(youtubeUrl);
+}
+
 // ── Console UI ──────────────────────────────────────────────────────
 
 function showBanner() {
@@ -88,12 +170,13 @@ function showBanner() {
   console.log(`${CYAN}${BOLD}╚═══════════════════════════════════════════════════╝${RESET}`);
   console.log('');
   console.log(`${DIM}  Watching clipboard for YouTube URLs...${RESET}`);
-  console.log(`${DIM}  Copy any YouTube URL to get started.${RESET}`);
+  console.log(`${DIM}  Copy any YouTube URL → you'll get a pop-up notification!${RESET}`);
+  console.log(`${DIM}  (ENTER key also works as a fallback)${RESET}`);
   console.log(`${DIM}  Press Ctrl+C to quit.${RESET}`);
   console.log('');
 }
 
-function showStep1(youtubeUrl) {
+function showStep1Terminal(youtubeUrl) {
   console.log('');
   console.log(`${PINK}${BOLD}╔═══════════════════════════════════════════════════╗${RESET}`);
   console.log(`${PINK}${BOLD}║  🔗 YouTube URL Detected!                        ║${RESET}`);
@@ -101,7 +184,7 @@ function showStep1(youtubeUrl) {
   console.log(`${PINK}  ${youtubeUrl}${RESET}`);
   console.log('');
   console.log(`${YELLOW}${BOLD}  ⏸  STEP 1: Pause your YouTube video first!${RESET}`);
-  console.log(`${YELLOW}${BOLD}  ⏎  STEP 2: Press ENTER to open in Tutorial Clarity${RESET}`);
+  console.log(`${YELLOW}${BOLD}  ⏎  STEP 2: Press ENTER to open (or click the pop-up!)${RESET}`);
   console.log('');
 }
 
@@ -135,18 +218,24 @@ async function openInTutorialClarity(youtubeUrl) {
 function checkClipboard() {
   try {
     const current = readClipboard();
-    if (current === null) return;          // read failed, skip this tick
+    if (current === null) return;
 
     if (current && current !== lastClipboard) {
       lastClipboard = current;
       const ytUrl = extractYouTubeUrl(current);
       if (ytUrl && ytUrl !== pendingUrl) {
         pendingUrl = ytUrl;
-        showStep1(ytUrl);
+
+        // Show terminal message
+        showStep1Terminal(ytUrl);
+
+        // Fire the two-step toast notification workflow (async, non-blocking)
+        notifyAndOpen(ytUrl).catch((err) => {
+          console.error(`${DIM}  ⚠ Notification flow error: ${err.message}${RESET}`);
+        });
       }
     }
   } catch (err) {
-    // Unexpected error — log once and keep going
     console.error(`${DIM}  ⚠ clipboard poll error: ${err.message}${RESET}`);
   }
 }
@@ -162,7 +251,7 @@ async function main() {
   // Start clipboard polling
   const pollTimer = setInterval(checkClipboard, POLL_INTERVAL_MS);
 
-  // ── Keypress handling ──
+  // ── Keypress handling (ENTER as fallback) ──
   if (process.stdin.isTTY) {
     process.stdin.setRawMode(true);
     process.stdin.resume();
@@ -177,11 +266,12 @@ async function main() {
         process.exit(0);
       }
 
-      // ENTER key
+      // ENTER key — manual fallback (skips notification workflow)
       if (key === '\r' || key === '\n') {
         if (pendingUrl) {
           const url = pendingUrl;
           pendingUrl = null;
+          console.log(`${DIM}  (ENTER pressed — skipping to open)${RESET}`);
           await openInTutorialClarity(url);
         } else {
           console.log(`${DIM}  (No YouTube URL pending — copy one first)${RESET}`);

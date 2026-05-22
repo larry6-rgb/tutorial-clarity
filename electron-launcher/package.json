@@ -11,6 +11,7 @@
     "postinstall": "node -e \"try{require('electron')}catch(e){console.log('\\n⚠️  Electron not installed. Use: npm run simple\\n')}\""
   },
   "dependencies": {
+    "node-notifier": "^10.0.1",
     "open": "^10.1.0"
   },
   "optionalDependencies": {
