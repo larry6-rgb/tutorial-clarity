@@ -2,6 +2,7 @@
 
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Suspense, useEffect, useRef, useState } from 'react';
+import { ClarifyAudioPanel } from '../components/ClarifyAudioPanel';
 
 interface SavedVideo {
     id: string;
@@ -49,7 +50,7 @@ function WatchPageContent() {
     const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
     const [transcriptLoading, setTranscriptLoading] = useState(false);
     const [transcriptError, setTranscriptError] = useState('');
-    // Language selection removed - just fetch the default transcript
+    const [transcriptLanguage, setTranscriptLanguage] = useState('de');
     const [transcriptOpacity, setTranscriptOpacity] = useState(90);
     const [transcriptHeight, setTranscriptHeight] = useState(54);
     const [transcriptBottom, setTranscriptBottom] = useState(0);
@@ -57,6 +58,41 @@ function WatchPageContent() {
     const [transcriptCenterOffset, setTranscriptCenterOffset] = useState(0);
     const [isDraggingHeight, setIsDraggingHeight] = useState(false);
     const [isDraggingPosition, setIsDraggingPosition] = useState(false);
+
+    // Clarify Audio transcript bar (rendered below video)
+    const [clarifyTranscript, setClarifyTranscript] = useState<{text: string; start: number; end: number}[]>([]);
+    const [clarifySegmentIndex, setClarifySegmentIndex] = useState(-1);
+    const clarifyScrollRef = useRef<HTMLDivElement>(null);
+
+    // AI playback speed — persisted to localStorage
+    const AI_SPEED_KEY = 'aiPlaybackSpeed';
+    const [aiPlaybackSpeed, setAiPlaybackSpeed] = useState(() => {
+        if (typeof window === 'undefined') return 1;
+        try {
+            const saved = localStorage.getItem(AI_SPEED_KEY);
+            if (saved) { const v = parseFloat(saved); if (v >= 0.5 && v <= 2) return v; }
+        } catch {}
+        return 1;
+    });
+
+    // Clarify bar position/size — persisted to localStorage
+    const CLARIFY_BAR_KEY = 'clarifyBarLayout';
+    const getInitialClarifyLayout = () => {
+        if (typeof window === 'undefined') return { bottom: 0, height: 44 };
+        try {
+            const saved = localStorage.getItem(CLARIFY_BAR_KEY);
+            if (saved) return JSON.parse(saved);
+        } catch {}
+        return { bottom: 0, height: 44 };
+    };
+    const [clarifyBarBottom, setClarifyBarBottom] = useState(() => getInitialClarifyLayout().bottom);
+    const [clarifyBarHeight, setClarifyBarHeight] = useState(() => getInitialClarifyLayout().height);
+    const [isDraggingClarifyBar, setIsDraggingClarifyBar] = useState(false);
+    const [isResizingClarifyBar, setIsResizingClarifyBar] = useState(false);
+    const clarifyDragStartY = useRef(0);
+    const clarifyDragStartBottom = useRef(0);
+    const clarifyResizeStartY = useRef(0);
+    const clarifyResizeStartHeight = useRef(0);
     const dragStartY = useRef(0);
     const dragStartX = useRef(0);
     const dragStartHeight = useRef(0);
@@ -79,16 +115,6 @@ function WatchPageContent() {
     const [isDraggingPopup, setIsDraggingPopup] = useState(false);
     const popupDragStart = useRef<{ mouseX: number; mouseY: number; popupX: number; popupY: number } | null>(null);
     const [userTier] = useState<'free' | 'premium'>('free');
-
-    // Resizable popup state
-    const [popupSize, setPopupSize] = useState<{ width: number; height: number }>({ width: 400, height: 300 });
-    const [isResizingPopup, setIsResizingPopup] = useState(false);
-    const resizeStart = useRef<{
-        mouseX: number; mouseY: number;
-        width: number; height: number;
-        popupX: number; popupY: number;
-        handle: string;
-    } | null>(null);
 
 
     useEffect(() => {
@@ -125,9 +151,9 @@ function WatchPageContent() {
             try {
                 // Add cache-busting timestamp to prevent browser/Next.js from serving stale responses
                 const cacheBust = Date.now();
-                console.log(`[watch] Fetching transcript: videoId=${videoId}, t=${cacheBust}`);
+                console.log(`[watch] Fetching transcript: videoId=${videoId}, lang=${transcriptLanguage}, t=${cacheBust}`);
                 const response = await fetch(
-                    `/api/transcript?videoId=${videoId}&_t=${cacheBust}`,
+                    `/api/transcript?videoId=${videoId}&lang=${transcriptLanguage}&_t=${cacheBust}`,
                     {
                         cache: 'no-store',
                         headers: { 'Cache-Control': 'no-cache', 'Pragma': 'no-cache' }
@@ -139,11 +165,19 @@ function WatchPageContent() {
                 }
 
                 const data = await response.json();
-                console.log(`[watch] Transcript response: lang=${data.language}, segments=${data.count}`);
+                console.log(`[watch] Transcript response: lang=${data.language}, switched=${data.languageSwitched}, segments=${data.count}, available=[${(data.availableLanguages || []).join(', ')}]`);
 
                 if (data.transcript && data.transcript.length > 0) {
                     setTranscript(data.transcript);
-                    setTranscriptError('');
+                    // If the requested language wasn't available, show a note
+                    if (data.languageSwitched === false && data.language !== transcriptLanguage) {
+                        const langNames: Record<string, string> = { de: 'German', en: 'English', es: 'Spanish', fr: 'French', it: 'Italian', pt: 'Portuguese' };
+                        const requestedName = langNames[transcriptLanguage] || transcriptLanguage;
+                        const availableStr = (data.availableLanguages || []).join(', ');
+                        setTranscriptError(`"${requestedName}" not available for this video. Available: ${availableStr || 'unknown'}. Showing default.`);
+                    } else {
+                        setTranscriptError('');
+                    }
                 } else {
                     setTranscriptError('No transcript available for this video');
                 }
@@ -156,7 +190,7 @@ function WatchPageContent() {
         };
 
         fetchTranscript();
-    }, [videoId, transcriptSectionOpen]);
+    }, [videoId, transcriptSectionOpen, transcriptLanguage]);
 
     useEffect(() => {
         if (!transcriptRef.current || transcript.length === 0 || (!expandedSections.has('scroll') && !expandedSections.has('definitions'))) return;
@@ -315,7 +349,7 @@ function WatchPageContent() {
 
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
-            if (isDraggingPopup || isResizingPopup) return; // Don't close while dragging or resizing
+            if (isDraggingPopup) return; // Don't close while dragging
             if (definitionPopup && !(e.target as HTMLElement).closest('.definition-popup')) {
                 setDefinitionPopup(null);
                 setPopupDragOffset(null);
@@ -325,7 +359,7 @@ function WatchPageContent() {
 
         document.addEventListener('mousedown', handleClickOutside);
         return () => document.removeEventListener('mousedown', handleClickOutside);
-    }, [definitionPopup, isDraggingPopup, isResizingPopup]);
+    }, [definitionPopup, isDraggingPopup]);
 
     // Popup drag handlers
     useEffect(() => {
@@ -360,61 +394,6 @@ function WatchPageContent() {
             document.body.style.userSelect = '';
         };
     }, [isDraggingPopup]);
-
-    // Resize popup effect
-    useEffect(() => {
-        if (!isResizingPopup) return;
-
-        const handleMouseMove = (e: MouseEvent) => {
-            if (!resizeStart.current) return;
-            e.preventDefault();
-            const dx = e.clientX - resizeStart.current.mouseX;
-            const dy = e.clientY - resizeStart.current.mouseY;
-            const handle = resizeStart.current.handle;
-            const minW = 300, minH = 200;
-            const maxW = window.innerWidth * 0.8, maxH = window.innerHeight * 0.8;
-
-            let newW = resizeStart.current.width;
-            let newH = resizeStart.current.height;
-            let newX = resizeStart.current.popupX;
-            let newY = resizeStart.current.popupY;
-
-            if (handle.includes('e')) { newW = Math.max(minW, Math.min(maxW, resizeStart.current.width + dx)); }
-            if (handle.includes('w')) {
-                const delta = Math.min(dx, resizeStart.current.width - minW);
-                const clampedDelta = Math.max(delta, resizeStart.current.width - maxW);
-                newW = resizeStart.current.width - clampedDelta;
-                newX = resizeStart.current.popupX + clampedDelta;
-            }
-            if (handle.includes('s')) { newH = Math.max(minH, Math.min(maxH, resizeStart.current.height + dy)); }
-            if (handle.includes('n')) {
-                const delta = Math.min(dy, resizeStart.current.height - minH);
-                const clampedDelta = Math.max(delta, resizeStart.current.height - maxH);
-                newH = resizeStart.current.height - clampedDelta;
-                newY = resizeStart.current.popupY + clampedDelta;
-            }
-
-            setPopupSize({ width: newW, height: newH });
-            setPopupDragOffset({ x: newX, y: newY });
-        };
-
-        const handleMouseUp = () => {
-            setIsResizingPopup(false);
-            resizeStart.current = null;
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-        };
-
-        document.body.style.userSelect = 'none';
-        window.addEventListener('mousemove', handleMouseMove, true);
-        window.addEventListener('mouseup', handleMouseUp, true);
-        return () => {
-            window.removeEventListener('mousemove', handleMouseMove, true);
-            window.removeEventListener('mouseup', handleMouseUp, true);
-            document.body.style.cursor = '';
-            document.body.style.userSelect = '';
-        };
-    }, [isResizingPopup]);
 
     useEffect(() => {
         const handleMouseMove = (e: MouseEvent) => {
@@ -542,25 +521,7 @@ function WatchPageContent() {
 
     const showDefinition = (popup: typeof definitionPopup) => {
         setDefinitionPopup(popup);
-        if (popup) {
-            setPopupDragOffset(null); // Reset drag position for new popups
-            setPopupSize({ width: 400, height: 300 }); // Reset size for new popups
-        }
-    };
-
-    const handleResizeStart = (handle: string, e: React.MouseEvent, popupX: number, popupY: number) => {
-        e.preventDefault();
-        e.stopPropagation();
-        setIsResizingPopup(true);
-        resizeStart.current = {
-            mouseX: e.clientX,
-            mouseY: e.clientY,
-            width: popupSize.width,
-            height: popupSize.height,
-            popupX,
-            popupY,
-            handle
-        };
+        if (popup) setPopupDragOffset(null); // Reset drag position for new popups
     };
 
     const handleTextSelection = async (e: React.MouseEvent) => {
@@ -746,6 +707,55 @@ function WatchPageContent() {
         controlsPositionOnDragStart.current = transcriptTopPosition >= controlHandleHeight ? 'above' : 'below';
     };
 
+    // Auto-scroll clarify transcript bar to current segment
+    useEffect(() => {
+        if (clarifySegmentIndex < 0 || !clarifyScrollRef.current) return;
+        const el = clarifyScrollRef.current.querySelector(`[data-clarify-bar-idx="${clarifySegmentIndex}"]`) as HTMLElement;
+        if (el) {
+            el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
+        }
+    }, [clarifySegmentIndex]);
+
+    // Save clarify bar layout to localStorage
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try { localStorage.setItem('clarifyBarLayout', JSON.stringify({ bottom: clarifyBarBottom, height: clarifyBarHeight })); } catch {}
+    }, [clarifyBarBottom, clarifyBarHeight]);
+
+    // Save AI playback speed to localStorage
+    useEffect(() => {
+        if (typeof window === 'undefined') return;
+        try { localStorage.setItem(AI_SPEED_KEY, String(aiPlaybackSpeed)); } catch {}
+    }, [aiPlaybackSpeed]);
+
+    // Clarify bar drag handler
+    useEffect(() => {
+        if (!isDraggingClarifyBar) return;
+        const handleMove = (e: MouseEvent) => {
+            const delta = clarifyDragStartY.current - e.clientY;
+            const newBottom = Math.max(0, Math.min(window.innerHeight - 80, clarifyDragStartBottom.current + delta));
+            setClarifyBarBottom(newBottom);
+        };
+        const handleUp = () => setIsDraggingClarifyBar(false);
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('mouseup', handleUp);
+        return () => { window.removeEventListener('mousemove', handleMove); window.removeEventListener('mouseup', handleUp); };
+    }, [isDraggingClarifyBar]);
+
+    // Clarify bar resize handler
+    useEffect(() => {
+        if (!isResizingClarifyBar) return;
+        const handleMove = (e: MouseEvent) => {
+            const delta = clarifyResizeStartY.current - e.clientY;
+            const newHeight = Math.max(30, Math.min(200, clarifyResizeStartHeight.current + delta));
+            setClarifyBarHeight(newHeight);
+        };
+        const handleUp = () => setIsResizingClarifyBar(false);
+        window.addEventListener('mousemove', handleMove);
+        window.addEventListener('mouseup', handleUp);
+        return () => { window.removeEventListener('mousemove', handleMove); window.removeEventListener('mouseup', handleUp); };
+    }, [isResizingClarifyBar]);
+
     const fontSize = Math.max(14, Math.min(32, (transcriptHeight / 54) * 14));
     const showTranscriptBar = expandedSections.has('scroll') || expandedSections.has('definitions');
 const windowHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
@@ -850,7 +860,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                 <iframe
                     ref={iframeRef}
                     className="w-full h-full pointer-events-auto"
-                    src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&disablekb=1&controls=0`}
+                    src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=1`}
                     allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                     allowFullScreen
                 />
@@ -861,7 +871,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                       position: "absolute",
                       left: 20,
                       right: 160,
-                      bottom: 14,
+                      bottom: 52,
                       height: 22,
                       display: "flex",
                       alignItems: "center",
@@ -936,51 +946,24 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                 )}
 
                 {definitionPopup && (() => {
-                    const popupX = popupDragOffset ? popupDragOffset.x : Math.min(definitionPopup.x, window.innerWidth - popupSize.width);
+                    const popupX = popupDragOffset ? popupDragOffset.x : Math.min(definitionPopup.x, window.innerWidth - 400);
                     const popupY = popupDragOffset ? popupDragOffset.y : Math.max(10, definitionPopup.y - 100);
-                    const resizeHandleBase: React.CSSProperties = { position: 'absolute', zIndex: 10 };
-                    const cornerSize = 12;
-                    const edgeThickness = 6;
-                    const handles: { key: string; style: React.CSSProperties; cursor: string }[] = [
-                        { key: 'nw', cursor: 'nw-resize', style: { top: -cornerSize/2, left: -cornerSize/2, width: cornerSize, height: cornerSize } },
-                        { key: 'ne', cursor: 'ne-resize', style: { top: -cornerSize/2, right: -cornerSize/2, width: cornerSize, height: cornerSize } },
-                        { key: 'sw', cursor: 'sw-resize', style: { bottom: -cornerSize/2, left: -cornerSize/2, width: cornerSize, height: cornerSize } },
-                        { key: 'se', cursor: 'se-resize', style: { bottom: -cornerSize/2, right: -cornerSize/2, width: cornerSize, height: cornerSize } },
-                        { key: 'n', cursor: 'n-resize', style: { top: -edgeThickness/2, left: cornerSize, right: cornerSize, height: edgeThickness } },
-                        { key: 's', cursor: 's-resize', style: { bottom: -edgeThickness/2, left: cornerSize, right: cornerSize, height: edgeThickness } },
-                        { key: 'w', cursor: 'w-resize', style: { left: -edgeThickness/2, top: cornerSize, bottom: cornerSize, width: edgeThickness } },
-                        { key: 'e', cursor: 'e-resize', style: { right: -edgeThickness/2, top: cornerSize, bottom: cornerSize, width: edgeThickness } },
-                    ];
                     return (
                     <div
-                        className="definition-popup fixed rounded-lg border-2 border-blue-500 z-[9999]"
+                        className="definition-popup fixed rounded-lg max-w-md border-2 border-blue-500 z-[9999]"
                         style={{
                             left: `${popupX}px`,
                             top: `${popupY}px`,
-                            width: `${popupSize.width}px`,
-                            height: `${popupSize.height}px`,
                             backgroundColor: 'rgba(255, 255, 255, 0.75)',
                             backdropFilter: 'blur(12px)',
                             WebkitBackdropFilter: 'blur(12px)',
-                            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.2)',
-                            display: 'flex',
-                            flexDirection: 'column',
-                            overflow: 'hidden'
+                            boxShadow: '0 25px 50px -12px rgba(0, 0, 0, 0.4), 0 0 0 1px rgba(255, 255, 255, 0.2)'
                         }}
                     >
-                        {/* Resize handles */}
-                        {handles.map(h => (
-                            <div
-                                key={h.key}
-                                style={{ ...resizeHandleBase, ...h.style, cursor: h.cursor }}
-                                onMouseDown={(e) => handleResizeStart(h.key, e, popupX, popupY)}
-                            />
-                        ))}
-
                         {/* Draggable header area */}
                         <div
                             className="flex justify-between items-start px-4 pt-3 pb-1 cursor-move select-none"
-                            style={{ borderBottom: '1px solid rgba(59,130,246,0.3)', flexShrink: 0 }}
+                            style={{ borderBottom: '1px solid rgba(59,130,246,0.3)' }}
                             onMouseDown={(e) => {
                                 e.preventDefault();
                                 e.stopPropagation();
@@ -1006,7 +989,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 ×
                             </button>
                         </div>
-                        <div className="px-4 pb-3 pt-2" style={{ overflowY: 'auto', flex: 1 }}>
+                        <div className="px-4 pb-3 pt-2">
                             {definitionPopup.loading ? (
                                 <p className="text-gray-600 text-sm">⏳ Loading definition...</p>
                             ) : (
@@ -1118,6 +1101,157 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                             </div>
                         </div>
                     </>
+                )}
+
+                {/* Clarify Audio Transcript Bar — fixed position, draggable & resizable */}
+                {clarifyTranscript.length > 0 && (
+                    <div style={{
+                        position: 'fixed',
+                        bottom: `${clarifyBarBottom}px`,
+                        left: 0,
+                        right: '240px',
+                        height: `${clarifyBarHeight}px`,
+                        zIndex: 60,
+                        backgroundColor: 'rgba(0, 0, 0, 0.92)',
+                        borderTop: '3px solid #3b82f6',
+                        display: 'flex',
+                        flexDirection: 'column',
+                    }}>
+                        {/* ═══ VISIBLE RESIZE HANDLE (top edge) ═══ */}
+                        <div
+                            style={{
+                                height: '10px', cursor: 'ns-resize', flexShrink: 0,
+                                display: 'flex', alignItems: 'center', justifyContent: 'center',
+                                backgroundColor: '#1e293b',
+                                borderBottom: '1px solid #334155',
+                            }}
+                            onMouseDown={(e) => {
+                                e.preventDefault();
+                                clarifyResizeStartY.current = e.clientY;
+                                clarifyResizeStartHeight.current = clarifyBarHeight;
+                                setIsResizingClarifyBar(true);
+                            }}
+                            title="Drag up/down to resize"
+                        >
+                            <span style={{ color: '#64748b', fontSize: '10px', letterSpacing: '3px', userSelect: 'none' }}>
+                                ═══════
+                            </span>
+                        </div>
+                        {/* Drag handle + scrollable content */}
+                        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
+                            {/* ⋮⋮ VISIBLE DRAG HANDLE (left edge) ⋮⋮ */}
+                            <div
+                                style={{
+                                    width: '32px', flexShrink: 0, display: 'flex', alignItems: 'center',
+                                    justifyContent: 'center', cursor: 'move',
+                                    backgroundColor: '#1e40af',
+                                    color: '#93c5fd',
+                                    fontSize: '16px', userSelect: 'none',
+                                    borderRight: '2px solid #2563eb',
+                                    transition: 'background-color 0.15s',
+                                }}
+                                onMouseDown={(e) => {
+                                    e.preventDefault();
+                                    clarifyDragStartY.current = e.clientY;
+                                    clarifyDragStartBottom.current = clarifyBarBottom;
+                                    setIsDraggingClarifyBar(true);
+                                }}
+                                onMouseEnter={(e) => { (e.target as HTMLElement).style.backgroundColor = '#1d4ed8'; }}
+                                onMouseLeave={(e) => { (e.target as HTMLElement).style.backgroundColor = '#1e40af'; }}
+                                title="Drag to move bar up/down"
+                            >
+                                ⋮⋮
+                            </div>
+                            {/* Scrollable transcript segments */}
+                            <div
+                                ref={clarifyScrollRef}
+                                style={{
+                                    flex: 1,
+                                    display: 'flex',
+                                    alignItems: 'center',
+                                    gap: '2px',
+                                    overflowX: 'auto',
+                                    overflowY: 'hidden',
+                                    whiteSpace: 'nowrap',
+                                    padding: '0 8px',
+                                    scrollbarWidth: 'thin',
+                                    scrollbarColor: '#4b5563 transparent',
+                                }}
+                            >
+                                {clarifyTranscript.map((seg, idx) => {
+                                    const isActive = idx === clarifySegmentIndex;
+                                    const ts = `${Math.floor(seg.start / 60)}:${String(Math.floor(seg.start % 60)).padStart(2, '0')}`;
+                                    return (
+                                        <span
+                                            key={idx}
+                                            data-clarify-bar-idx={idx}
+                                            onClick={() => {
+                                                if (iframeRef.current?.contentWindow) {
+                                                    iframeRef.current.contentWindow.postMessage(
+                                                        JSON.stringify({ event: 'command', func: 'seekTo', args: [seg.start, true] }),
+                                                        '*'
+                                                    );
+                                                }
+                                            }}
+                                            style={{
+                                                display: 'inline-block',
+                                                padding: '3px 8px',
+                                                borderRadius: '4px',
+                                                fontSize: '12px',
+                                                cursor: 'pointer',
+                                                flexShrink: 0,
+                                                backgroundColor: isActive ? '#2563eb' : 'transparent',
+                                                color: isActive ? '#ffffff' : '#9ca3af',
+                                                fontWeight: isActive ? 'bold' : 'normal',
+                                                borderBottom: isActive ? '2px solid #22c55e' : '2px solid transparent',
+                                                transition: 'background-color 0.15s',
+                                            }}
+                                            title={`[${ts}] ${seg.text}`}
+                                        >
+                                            <span style={{
+                                                color: isActive ? '#93c5fd' : '#60a5fa',
+                                                fontSize: '10px',
+                                                marginRight: '4px',
+                                                fontWeight: 'bold',
+                                            }}>
+                                                [{ts}]
+                                            </span>
+                                            {seg.text.length > 40 ? seg.text.substring(0, 40) + '…' : seg.text}
+                                        </span>
+                                    );
+                                })}
+                            </div>
+                            {/* ═══ AI SPEED DROPDOWN (right end of bar) ═══ */}
+                            <div style={{
+                                flexShrink: 0,
+                                display: 'flex',
+                                alignItems: 'center',
+                                padding: '0 8px',
+                                borderLeft: '2px solid #334155',
+                            }}>
+                                <select
+                                    value={aiPlaybackSpeed}
+                                    onChange={(e) => setAiPlaybackSpeed(parseFloat(e.target.value))}
+                                    style={{
+                                        backgroundColor: '#1e293b',
+                                        color: '#93c5fd',
+                                        border: '1px solid #475569',
+                                        borderRadius: '4px',
+                                        padding: '2px 4px',
+                                        fontSize: '11px',
+                                        fontWeight: 'bold',
+                                        cursor: 'pointer',
+                                        outline: 'none',
+                                    }}
+                                    title="AI Audio Playback Speed"
+                                >
+                                    {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(s => (
+                                        <option key={s} value={s}>{s}x</option>
+                                    ))}
+                                </select>
+                            </div>
+                        </div>
+                    </div>
                 )}
             </div>
 
@@ -1548,6 +1682,41 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             </ul>
                                         </div>
 
+                                        {/* Language Selector */}
+                                        <div style={{
+                                            backgroundColor: 'rgba(124, 58, 237, 0.2)',
+                                            padding: '8px',
+                                            borderRadius: '5px',
+                                            border: '1px solid #7c3aed',
+                                            marginBottom: '8px'
+                                        }}>
+                                            <h4 style={{ fontWeight: 'bold', marginBottom: '6px' }}>🌐 Transcript Language</h4>
+                                            <select
+                                                value={transcriptLanguage}
+                                                onChange={(e) => setTranscriptLanguage(e.target.value)}
+                                                style={{
+                                                    width: '100%',
+                                                    padding: '6px 8px',
+                                                    backgroundColor: '#1f2937',
+                                                    border: '1px solid #374151',
+                                                    borderRadius: '5px',
+                                                    color: 'white',
+                                                    fontSize: '12px',
+                                                    cursor: 'pointer'
+                                                }}
+                                            >
+                                                <option value="de">🇩🇪 German (Deutsch)</option>
+                                                <option value="en">🇬🇧 English</option>
+                                                <option value="es">🇪🇸 Spanish (Español)</option>
+                                                <option value="fr">🇫🇷 French (Français)</option>
+                                                <option value="it">🇮🇹 Italian (Italiano)</option>
+                                                <option value="pt">🇵🇹 Portuguese (Português)</option>
+                                            </select>
+                                            <p style={{ fontSize: '10px', color: '#a78bfa', marginTop: '4px' }}>
+                                                Select the language for the transcript captions. Availability depends on the video.
+                                            </p>
+                                        </div>
+
                                         <div style={{
                                             backgroundColor: 'rgba(59, 130, 246, 0.2)',
                                             padding: '8px',
@@ -1566,6 +1735,70 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             {transcriptLoading && <p style={{ color: '#60a5fa', marginTop: '6px' }}>⏳ Loading transcript...</p>}
                                             {transcriptError && <p style={{ color: '#f87171', marginTop: '6px' }}>• {transcriptError}</p>}
                                         </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 7. CLARIFY AUDIO */}
+                            <div style={{ borderTop: '1px solid #374151' }}>
+                                <h3
+                                    onClick={() => toggleSection('clarify')}
+                                    style={{
+                                        fontSize: '16px',
+                                        fontWeight: 'bold',
+                                        padding: '12px',
+                                        cursor: 'pointer',
+                                        display: 'flex',
+                                        justifyContent: 'space-between',
+                                        alignItems: 'center'
+                                    }}
+                                >
+                                    <span>7. CLARIFY AUDIO 🔊</span>
+                                    <span>{expandedSections.has('clarify') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('clarify') && (
+                                    <div style={{ padding: '0', backgroundColor: '#111827' }}>
+                                        <ClarifyAudioPanel
+                                            videoId={videoId}
+                                            currentTime={currentTime}
+                                            aiPlaybackSpeed={aiPlaybackSpeed}
+                                            onSubtitleChange={(subtitle) => {
+                                                if (DEVELOPMENT_MODE && subtitle) {
+                                                    console.log('[watch] Clarify subtitle:', subtitle);
+                                                }
+                                            }}
+                                            onMuteYouTube={(mute) => {
+                                                // SIMPLE: just mute/unmute the iframe. Don't touch any state.
+                                                if (iframeRef.current?.contentWindow) {
+                                                    iframeRef.current.contentWindow.postMessage(
+                                                        JSON.stringify({ event: 'command', func: mute ? 'mute' : 'unMute' }),
+                                                        '*'
+                                                    );
+                                                    if (!mute) {
+                                                        // Also restore volume to make sure unmute actually works
+                                                        iframeRef.current.contentWindow.postMessage(
+                                                            JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
+                                                            '*'
+                                                        );
+                                                    }
+                                                }
+                                            }}
+                                            onPlayYouTube={() => {
+                                                // Start YouTube video when user clicks Play/Resume Clarified Audio
+                                                if (iframeRef.current?.contentWindow) {
+                                                    iframeRef.current.contentWindow.postMessage(
+                                                        JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
+                                                        '*'
+                                                    );
+                                                    setIsPlaying(true);
+                                                }
+                                            }}
+                                            onTranscriptReady={(segments) => {
+                                                setClarifyTranscript(segments);
+                                                setClarifySegmentIndex(-1);
+                                            }}
+                                            onSegmentChange={(idx) => setClarifySegmentIndex(idx)}
+                                        />
                                     </div>
                                 )}
                             </div>

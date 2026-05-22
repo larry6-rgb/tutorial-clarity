@@ -1,7 +1,9 @@
-﻿{
-  "name": "tutorial-clarity-launcher",
+{
+  "name": "tutorial-clarity-electron",
   "version": "1.0.0",
-  "main": "main.js",
+  "description": "Electron launcher for Tutorial Clarity",
+  "main": "main.mjs",
+  "type": "module",
   "scripts": {
     "start": "electron ."
   },

@@ -1,0 +1,36 @@
+V153 INSTALLATION MAP
+=====================
+
+Download these files from DeepAgent:
+1. page_v153_WATCH_ROUTE.tsx
+2. ClarifyAudioPanel_v153.tsx
+3. useAudioClarification_v153.ts
+
+Install them to your LOCAL project:
+1. page_v153_WATCH_ROUTE.tsx → app/watch/page.tsx
+2. ClarifyAudioPanel_v153.tsx → components/ClarifyAudioPanel.tsx
+3. useAudioClarification_v153.ts → components/useAudioClarification.ts
+
+(or wherever these files live in your project structure)
+
+WHAT EACH FILE FIXES (v153 Sync Fixes):
+========================================
+
+Fix #1 — page_v153_WATCH_ROUTE.tsx (app/watch/page.tsx)
+  → Exposes YouTube player globally via window.__TC_ACTIVE_YT_PLAYER__
+  → Lets "George" (useAudioTranslation) read accurate video time
+  → Cleans up on unmount to prevent memory leaks
+
+Fix #2 — useAudioClarification_v153.ts (components/useAudioClarification.ts)
+  → Preserves REAL YouTube caption timestamps instead of synthetic timeline
+  → Eliminates progressive drift and the 252-second stutter issue
+  → Falls back to word-count estimation only when timestamps are missing
+
+Fix #3 — ClarifyAudioPanel_v153.tsx (components/ClarifyAudioPanel.tsx)
+  → Passes currentTime to start() so TTS begins at video position, not 0:00
+  → Fixes hook destructuring (tuple [state, actions] not {state, actions})
+  → Aligns method names with useClarifyAudio interface
+
+VERIFICATION:
+=============
+Each file has a [v153] comment on line 1. If you see it, you have the right version.

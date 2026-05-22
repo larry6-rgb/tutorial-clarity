@@ -1,9 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server';
 import Groq from 'groq-sdk';
 
-const groq = new Groq({
-    apiKey: process.env.GROQ_API_KEY
-});
+// Lazy-initialize Groq client to avoid build-time errors when GROQ_API_KEY is not set
+let groq: Groq | null = null;
+function getGroqClient(): Groq {
+    if (!groq) {
+        groq = new Groq({ apiKey: process.env.GROQ_API_KEY || '' });
+    }
+    return groq;
+}
 
 // Dictionary API
 async function getDictionaryDefinition(term: string): Promise<string | null> {
@@ -61,7 +66,7 @@ Provide a clear, concise definition of "${term}" in the context of this tutorial
 
 Keep the response under 150 words.`;
 
-        const completion = await groq.chat.completions.create({
+        const completion = await getGroqClient().chat.completions.create({
             messages: [{ role: 'user', content: prompt }],
             model: 'llama-3.3-70b-versatile',
             temperature: 0.7,
