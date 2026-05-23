@@ -70,10 +70,10 @@ function WatchPageContent() {
         if (typeof window === 'undefined') return 1;
         try {
             const saved = localStorage.getItem(AI_SPEED_KEY);
-            // Only restore if explicitly saved AND valid
-            if (saved) { const v = parseFloat(saved); if (v >= 0.5 && v <= 2) return v; }
+            // Valid range: 0.5 to 3.0
+            if (saved) { const v = parseFloat(saved); if (v >= 0.5 && v <= 3) return v; }
         } catch {}
-        return 1; // Default: normal speed
+        return 1; // Default: 1x normal speed
     });
 
     // Clarify bar position/size — persisted to localStorage
@@ -1445,7 +1445,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                     }}
                                     title="AI Audio Playback Speed"
                                 >
-                                    {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(s => (
+                                    {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3].map(s => (
                                         <option key={s} value={s}>{s}x AI</option>
                                     ))}
                                 </select>

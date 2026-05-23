@@ -68,16 +68,12 @@ export async function POST(request: NextRequest) {
     console.log(`[multi-voice-tts] Generating: voice=${voiceId}, model=${model}, lang=${targetLanguage}, ` +
       `segment=${segmentId}, speaker=${speakerId}, text="${text.substring(0, 50)}..."`);
 
-    // Optionally adjust speed based on target duration
-    let speed = 1.0;
-    if (targetDuration && targetDuration > 0) {
-      // Rough estimate: ~150 words per minute at speed 1.0
-      const wordCount = text.split(/\s+/).length;
-      const estimatedDuration = (wordCount / 150) * 60;
-      if (estimatedDuration > 0) {
-        speed = Math.max(0.25, Math.min(4.0, estimatedDuration / targetDuration));
-      }
-    }
+    // FIXED: Always generate at speed 1.0
+    // Previously auto-adjusted speed based on targetDuration, which caused each segment
+    // to have a different base speed. The user's playbackRate is applied on TOP of this,
+    // making the final speed = generationSpeed * userSpeed — causing "bouncing" speeds.
+    // User controls speed entirely via client-side playbackRate.
+    const speed = 1.0;
 
     // Call OpenAI TTS API
     const ttsResponse = await fetch('https://api.openai.com/v1/audio/speech', {

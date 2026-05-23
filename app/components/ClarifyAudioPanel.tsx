@@ -108,7 +108,15 @@ export function ClarifyAudioPanel({
   useEffect(() => { volRef.current = volume / 100; }, [volume]);
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
   useEffect(() => { txRef.current = transcript; }, [transcript]);
-  useEffect(() => { speedRef.current = aiPlaybackSpeed; }, [aiPlaybackSpeed]);
+  useEffect(() => {
+    console.log(`[clarify-speed] Speed changed: ${speedRef.current} → ${aiPlaybackSpeed}`);
+    speedRef.current = aiPlaybackSpeed;
+    // Also update currently playing audio element immediately
+    if (audioRef.current) {
+      audioRef.current.playbackRate = aiPlaybackSpeed;
+      console.log(`[clarify-speed] Updated playing audio to ${aiPlaybackSpeed}x`);
+    }
+  }, [aiPlaybackSpeed]);
   useEffect(() => { originalTxRef.current = originalTranscript; }, [originalTranscript]);
   useEffect(() => { translatedTxRef.current = translatedTranscript; }, [translatedTranscript]);
 
@@ -269,10 +277,11 @@ export function ClarifyAudioPanel({
         const targetSpeed = speedRef.current;
         a.volume = mutedRef.current ? 0 : volRef.current;
         a.playbackRate = targetSpeed;
+        console.log(`[clarify-speed] Seg ${i}: set playbackRate=${targetSpeed}`);
         // Lock speed — force reset if browser tries to change it
         a.addEventListener('ratechange', () => {
           if (Math.abs(a.playbackRate - speedRef.current) > 0.01) {
-            console.log(`[clarify] Speed drift detected: ${a.playbackRate} → forcing ${speedRef.current}`);
+            console.log(`[clarify-speed] DRIFT on seg ${i}: ${a.playbackRate} → forcing ${speedRef.current}`);
             a.playbackRate = speedRef.current;
           }
         });
@@ -319,10 +328,7 @@ export function ClarifyAudioPanel({
 
   // ═══ USER ACTIONS ═══
 
-  // Apply speed changes to currently playing audio in real-time
-  useEffect(() => {
-    if (audioRef.current) audioRef.current.playbackRate = aiPlaybackSpeed;
-  }, [aiPlaybackSpeed]);
+  // Speed changes are applied in the aiPlaybackSpeed ref sync useEffect above
 
   /** User clicks "Play Clarified Audio" or "Resume" */
   const handlePlay = useCallback(() => {
