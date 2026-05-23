@@ -323,10 +323,11 @@ export function ClarifyAudioPanel({
   }, [selectedLang, onMuteYouTube]);
 
   // ═══ ELASTIC SYNC — smooth speed adjustments instead of jump-back ═══
-  // Monitors drift between video position and AI audio position.
+  // Monitors drift between AI audio segment and video position.
   // If AI is ahead: slow down slightly. If behind: speed up slightly. No jumps.
   const currentTimeRef = useRef(currentTime);
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
+  const syncTickRef = useRef(0); // counter for periodic verbose logging
 
   useEffect(() => {
     // Only run elastic sync while playing
@@ -336,70 +337,82 @@ export function ClarifyAudioPanel({
         syncIntervalRef.current = null;
         // Reset elastic rate to user speed
         elasticRateRef.current = speedRef.current;
+        console.log(`[elastic-sync] Stopped (phase=${phase}), reset rate to ${speedRef.current}`);
       }
       return;
     }
 
-    const SYNC_THRESHOLD = 0.3;  // seconds — within this is "in sync"
+    console.log(`[elastic-sync] === STARTING monitoring loop (phase=playing) ===`);
+    syncTickRef.current = 0;
 
     syncIntervalRef.current = setInterval(() => {
-      if (!isPlayingRef.current) return;
+      syncTickRef.current++;
+      const verbose = syncTickRef.current % 20 === 1; // log details every ~3s (20 × 150ms)
+
+      if (!isPlayingRef.current) {
+        if (verbose) console.log(`[elastic-sync] tick ${syncTickRef.current}: skipped (not playing)`);
+        return;
+      }
 
       const audio = audioRef.current;
-      const segIdx = playingIdxRef.current;
+      const aiSegIdx = playingIdxRef.current;
+      const videoSegIdx = currentTimeRef.current; // this is video time in seconds
       const segs = translatedTxRef.current;
 
-      if (!audio || segIdx < 0 || segIdx >= segs.length) return;
-      if (audio.paused || !audio.duration || audio.duration === 0) return;
+      if (!audio || aiSegIdx < 0 || aiSegIdx >= segs.length) {
+        if (verbose) console.log(`[elastic-sync] tick ${syncTickRef.current}: skipped (audio=${!!audio}, aiSeg=${aiSegIdx}, totalSegs=${segs.length})`);
+        return;
+      }
 
-      const seg = segs[segIdx];
-      const segVideoStart = seg.start;
-      const segVideoDuration = seg.end - seg.start;
-      const audioProgress = audio.currentTime / audio.duration; // 0.0 to 1.0
-      const aiVideoPosition = segVideoStart + audioProgress * segVideoDuration;
-      const videoPosition = currentTimeRef.current;
-      const drift = aiVideoPosition - videoPosition; // positive = AI ahead, negative = AI behind
+      // Use segment-level drift: compare where AI is vs where video is
+      const aiSeg = segs[aiSegIdx];
+      const videoTime = currentTimeRef.current;
 
+      // AI's estimated video position = start of its current segment + progress within it
+      let aiVideoPos: number;
+      if (audio.duration && audio.duration > 0 && !audio.paused) {
+        const segVideoDuration = aiSeg.end - aiSeg.start;
+        const audioFraction = audio.currentTime / audio.duration;
+        aiVideoPos = aiSeg.start + audioFraction * segVideoDuration;
+      } else {
+        // Audio element not ready yet — use segment start as estimate
+        aiVideoPos = aiSeg.start;
+      }
+
+      const drift = aiVideoPos - videoTime; // positive = AI ahead, negative = AI behind
       const userSpeed = speedRef.current;
       let multiplier = 1.0;
 
-      if (drift > SYNC_THRESHOLD) {
+      if (drift > 0.5) {
         // AI is ahead of video — slow down
-        if (drift > 2.0) {
-          multiplier = 0.90; // far ahead, max correction
-        } else if (drift > 1.0) {
-          multiplier = 0.92;
-        } else if (drift > 0.5) {
-          multiplier = 0.95;
-        } else {
-          multiplier = 0.98;
-        }
-      } else if (drift < -SYNC_THRESHOLD) {
+        if (drift > 3.0) multiplier = 0.85;
+        else if (drift > 2.0) multiplier = 0.90;
+        else if (drift > 1.0) multiplier = 0.93;
+        else multiplier = 0.96;
+      } else if (drift < -0.5) {
         // AI is behind video — speed up
-        if (drift < -2.0) {
-          multiplier = 1.10; // far behind, max correction
-        } else if (drift < -1.0) {
-          multiplier = 1.08;
-        } else if (drift < -0.5) {
-          multiplier = 1.05;
-        } else {
-          multiplier = 1.02;
-        }
+        if (drift < -3.0) multiplier = 1.15;
+        else if (drift < -2.0) multiplier = 1.10;
+        else if (drift < -1.0) multiplier = 1.07;
+        else multiplier = 1.04;
       }
-      // else: within threshold, multiplier stays 1.0
+      // else: within ±0.5s threshold, multiplier stays 1.0
 
-      const newRate = Math.round(userSpeed * multiplier * 100) / 100; // round to 2 decimals
+      const newRate = Math.round(userSpeed * multiplier * 100) / 100;
       const oldRate = elasticRateRef.current;
 
-      // Only update if rate actually changed (avoid constant ratechange events)
+      // Always log periodically (every ~3s) regardless of rate change
+      if (verbose) {
+        console.log(`[elastic-sync] tick ${syncTickRef.current}: videoTime=${videoTime.toFixed(1)}, aiVideoPos=${aiVideoPos.toFixed(1)}, drift=${drift.toFixed(2)}s, aiSeg=${aiSegIdx}, multiplier=${multiplier}, rate=${newRate} (user=${userSpeed})`);
+      }
+
+      // Apply rate change if different
       if (Math.abs(newRate - oldRate) > 0.005) {
         elasticRateRef.current = newRate;
-        audio.playbackRate = newRate;
-        if (Math.abs(multiplier - 1.0) > 0.005) {
-          console.log(`[elastic-sync] drift=${drift.toFixed(2)}s, multiplier=${multiplier}, rate=${newRate} (user=${userSpeed})`);
-        } else {
-          console.log(`[elastic-sync] in sync, rate=${newRate}`);
+        if (audio && !audio.paused) {
+          audio.playbackRate = newRate;
         }
+        console.log(`[elastic-sync] ADJUSTING: drift=${drift.toFixed(2)}s, ${oldRate} → ${newRate} (×${multiplier})`);
       }
     }, 150); // check every 150ms
 
@@ -407,6 +420,7 @@ export function ClarifyAudioPanel({
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current);
         syncIntervalRef.current = null;
+        console.log(`[elastic-sync] Cleanup: interval cleared`);
       }
     };
   }, [phase]);
@@ -431,8 +445,10 @@ export function ClarifyAudioPanel({
     if (onMuteYouTube) onMuteYouTube(true);
     if (onPlayYouTube) onPlayYouTube();
     isPlayingRef.current = true;
+    elasticRateRef.current = speedRef.current; // reset elastic to user speed on play/resume
     setPhase('playing');
     const startIdx = currentSegIdx >= 0 ? currentSegIdx : 0;
+    console.log(`[elastic-sync] handlePlay: starting at seg ${startIdx}, elasticRate reset to ${speedRef.current}`);
     playSeg(startIdx);
   }, [currentSegIdx, playSeg, onMuteYouTube, onPlayYouTube]);
 
