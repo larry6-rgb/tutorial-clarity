@@ -340,16 +340,19 @@ export function ClarifyAudioPanel({
     setPhase('choosing');
   }, [handleStop]);
 
-  // Cleanup on unmount — unmute YouTube
+  // Keep a ref to onMuteYouTube so cleanup doesn't re-fire on every prop change
+  const onMuteYouTubeRef = useRef(onMuteYouTube);
+  useEffect(() => { onMuteYouTubeRef.current = onMuteYouTube; }, [onMuteYouTube]);
+
+  // Cleanup on unmount ONLY — unmute YouTube
   useEffect(() => {
-    const muteRef = onMuteYouTube;
     return () => {
       if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
       if ('speechSynthesis' in window) window.speechSynthesis.cancel();
       Object.values(cacheRef.current).forEach(e => { if (e.url) URL.revokeObjectURL(e.url); });
-      if (muteRef) muteRef(false);
+      if (onMuteYouTubeRef.current) onMuteYouTubeRef.current(false);
     };
-  }, [onMuteYouTube]);
+  }, []); // Empty deps — only runs on unmount
 
   // ═══ COMPUTED ═══
   const audioMode = selectedMode === 'audio_only' || selectedMode === 'audio_and_subtitles';

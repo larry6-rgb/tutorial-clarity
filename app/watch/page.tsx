@@ -245,6 +245,30 @@ function WatchPageContent() {
         }
     }, []);
 
+    // ── Stable callbacks for ClarifyAudioPanel (prevent re-render unmute bug) ──
+    const handleClarifySubtitle = useCallback((subtitle: string | null) => {
+        if (subtitle) console.log('[watch] Clarify subtitle:', subtitle);
+    }, []);
+
+    const handleClarifyPlayYouTube = useCallback(() => {
+        if (iframeRef.current?.contentWindow) {
+            iframeRef.current.contentWindow.postMessage(
+                JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
+                '*'
+            );
+            setIsPlaying(true);
+        }
+    }, []);
+
+    const handleClarifyTranscriptReady = useCallback((segments: any[]) => {
+        setClarifyTranscript(segments);
+        setClarifySegmentIndex(-1);
+    }, []);
+
+    const handleClarifySegmentChange = useCallback((idx: number) => {
+        setClarifySegmentIndex(idx);
+    }, []);
+
     useEffect(() => {
         const stored = localStorage.getItem('tutorialClaritySavedVideos');
         if (stored) {
@@ -1931,30 +1955,11 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             videoId={videoId}
                                             currentTime={currentTime}
                                             aiPlaybackSpeed={aiPlaybackSpeed}
-                                            onSubtitleChange={(subtitle) => {
-                                                if (DEVELOPMENT_MODE && subtitle) {
-                                                    console.log('[watch] Clarify subtitle:', subtitle);
-                                                }
-                                            }}
-                                            onMuteYouTube={(mute) => {
-                                                // ROBUST mute with verification + retries
-                                                robustMuteYouTube(mute);
-                                            }}
-                                            onPlayYouTube={() => {
-                                                // Start YouTube video when user clicks Play/Resume Clarified Audio
-                                                if (iframeRef.current?.contentWindow) {
-                                                    iframeRef.current.contentWindow.postMessage(
-                                                        JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
-                                                        '*'
-                                                    );
-                                                    setIsPlaying(true);
-                                                }
-                                            }}
-                                            onTranscriptReady={(segments) => {
-                                                setClarifyTranscript(segments);
-                                                setClarifySegmentIndex(-1);
-                                            }}
-                                            onSegmentChange={(idx) => setClarifySegmentIndex(idx)}
+                                            onSubtitleChange={handleClarifySubtitle}
+                                            onMuteYouTube={robustMuteYouTube}
+                                            onPlayYouTube={handleClarifyPlayYouTube}
+                                            onTranscriptReady={handleClarifyTranscriptReady}
+                                            onSegmentChange={handleClarifySegmentChange}
                                         />
                                     </div>
                                 )}
