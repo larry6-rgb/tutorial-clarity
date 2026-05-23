@@ -322,32 +322,45 @@ export function ClarifyAudioPanel({
     }
   }, [selectedLang, onMuteYouTube]);
 
-  // ═══ ELASTIC SYNC — smooth speed adjustments instead of jump-back ═══
-  // Monitors drift between AI audio segment and video position.
-  // If AI is ahead: slow down slightly. If behind: speed up slightly. No jumps.
+  // ═══ TWO-TIER SYNC: elastic speed for small drift, jump for large drift ═══
   const currentTimeRef = useRef(currentTime);
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
-  const syncTickRef = useRef(0); // counter for periodic verbose logging
+  const syncTickRef = useRef(0);
+  const jumpCooldownRef = useRef(0); // timestamp of last jump — prevents re-jumps
+
+  // Helper: find the segment index that covers a given video time
+  const findSegForTime = useCallback((videoTime: number, segs: ClarifyTranscriptSegment[]): number => {
+    for (let i = 0; i < segs.length; i++) {
+      if (videoTime >= segs[i].start && (i === segs.length - 1 || videoTime < segs[i + 1].start)) {
+        return i;
+      }
+    }
+    // If before first segment, return 0; if after last, return last
+    if (segs.length > 0 && videoTime < segs[0].start) return 0;
+    return segs.length - 1;
+  }, []);
 
   useEffect(() => {
-    // Only run elastic sync while playing
     if (phase !== 'playing') {
       if (syncIntervalRef.current) {
         clearInterval(syncIntervalRef.current);
         syncIntervalRef.current = null;
-        // Reset elastic rate to user speed
         elasticRateRef.current = speedRef.current;
         console.log(`[elastic-sync] Stopped (phase=${phase}), reset rate to ${speedRef.current}`);
       }
       return;
     }
 
-    console.log(`[elastic-sync] === STARTING monitoring loop (phase=playing) ===`);
+    console.log(`[elastic-sync] === STARTING two-tier sync (phase=playing) ===`);
     syncTickRef.current = 0;
+
+    const LARGE_DRIFT_THRESHOLD = 5.0;  // seconds — jump to correct position
+    const SMALL_DRIFT_THRESHOLD = 0.5;  // seconds — elastic speed adjustment
+    const JUMP_COOLDOWN_MS = 1500;      // ms to wait after a jump before allowing another
 
     syncIntervalRef.current = setInterval(() => {
       syncTickRef.current++;
-      const verbose = syncTickRef.current % 20 === 1; // log details every ~3s (20 × 150ms)
+      const verbose = syncTickRef.current % 20 === 1; // log every ~3s
 
       if (!isPlayingRef.current) {
         if (verbose) console.log(`[elastic-sync] tick ${syncTickRef.current}: skipped (not playing)`);
@@ -356,7 +369,6 @@ export function ClarifyAudioPanel({
 
       const audio = audioRef.current;
       const aiSegIdx = playingIdxRef.current;
-      const videoSegIdx = currentTimeRef.current; // this is video time in seconds
       const segs = translatedTxRef.current;
 
       if (!audio || aiSegIdx < 0 || aiSegIdx >= segs.length) {
@@ -364,49 +376,62 @@ export function ClarifyAudioPanel({
         return;
       }
 
-      // Use segment-level drift: compare where AI is vs where video is
       const aiSeg = segs[aiSegIdx];
       const videoTime = currentTimeRef.current;
 
-      // AI's estimated video position = start of its current segment + progress within it
+      // Calculate AI's estimated video position
       let aiVideoPos: number;
       if (audio.duration && audio.duration > 0 && !audio.paused) {
         const segVideoDuration = aiSeg.end - aiSeg.start;
         const audioFraction = audio.currentTime / audio.duration;
         aiVideoPos = aiSeg.start + audioFraction * segVideoDuration;
       } else {
-        // Audio element not ready yet — use segment start as estimate
         aiVideoPos = aiSeg.start;
       }
 
       const drift = aiVideoPos - videoTime; // positive = AI ahead, negative = AI behind
+      const absDrift = Math.abs(drift);
       const userSpeed = speedRef.current;
+      const now = Date.now();
+      const cooldownActive = (now - jumpCooldownRef.current) < JUMP_COOLDOWN_MS;
+
+      // ─── TIER 1: LARGE DRIFT → JUMP ───
+      if (absDrift > LARGE_DRIFT_THRESHOLD && !cooldownActive) {
+        const targetSegIdx = findSegForTime(videoTime, segs);
+        console.log(`[elastic-sync] ⚡ LARGE DRIFT: ${drift.toFixed(1)}s — JUMPING from seg ${aiSegIdx} → seg ${targetSegIdx} (videoTime=${videoTime.toFixed(1)})`);
+        jumpCooldownRef.current = now;
+        elasticRateRef.current = userSpeed; // reset elastic rate
+        // Stop current audio and jump
+        if (audio) { audio.pause(); audio.onended = null; }
+        playSeg(targetSegIdx);
+        return;
+      }
+
+      // ─── TIER 2: SMALL DRIFT → ELASTIC SPEED ───
       let multiplier = 1.0;
 
-      if (drift > 0.5) {
-        // AI is ahead of video — slow down
+      if (drift > SMALL_DRIFT_THRESHOLD) {
+        // AI ahead — slow down
         if (drift > 3.0) multiplier = 0.85;
         else if (drift > 2.0) multiplier = 0.90;
         else if (drift > 1.0) multiplier = 0.93;
         else multiplier = 0.96;
-      } else if (drift < -0.5) {
-        // AI is behind video — speed up
+      } else if (drift < -SMALL_DRIFT_THRESHOLD) {
+        // AI behind — speed up
         if (drift < -3.0) multiplier = 1.15;
         else if (drift < -2.0) multiplier = 1.10;
         else if (drift < -1.0) multiplier = 1.07;
         else multiplier = 1.04;
       }
-      // else: within ±0.5s threshold, multiplier stays 1.0
 
       const newRate = Math.round(userSpeed * multiplier * 100) / 100;
       const oldRate = elasticRateRef.current;
 
-      // Always log periodically (every ~3s) regardless of rate change
       if (verbose) {
-        console.log(`[elastic-sync] tick ${syncTickRef.current}: videoTime=${videoTime.toFixed(1)}, aiVideoPos=${aiVideoPos.toFixed(1)}, drift=${drift.toFixed(2)}s, aiSeg=${aiSegIdx}, multiplier=${multiplier}, rate=${newRate} (user=${userSpeed})`);
+        const tier = absDrift > LARGE_DRIFT_THRESHOLD ? 'JUMP(cooldown)' : absDrift > SMALL_DRIFT_THRESHOLD ? 'ELASTIC' : 'IN-SYNC';
+        console.log(`[elastic-sync] tick ${syncTickRef.current}: [${tier}] videoTime=${videoTime.toFixed(1)}, aiPos=${aiVideoPos.toFixed(1)}, drift=${drift.toFixed(2)}s, aiSeg=${aiSegIdx}, rate=${newRate} (user=${userSpeed})`);
       }
 
-      // Apply rate change if different
       if (Math.abs(newRate - oldRate) > 0.005) {
         elasticRateRef.current = newRate;
         if (audio && !audio.paused) {
@@ -414,7 +439,7 @@ export function ClarifyAudioPanel({
         }
         console.log(`[elastic-sync] ADJUSTING: drift=${drift.toFixed(2)}s, ${oldRate} → ${newRate} (×${multiplier})`);
       }
-    }, 150); // check every 150ms
+    }, 150);
 
     return () => {
       if (syncIntervalRef.current) {
@@ -423,18 +448,7 @@ export function ClarifyAudioPanel({
         console.log(`[elastic-sync] Cleanup: interval cleared`);
       }
     };
-  }, [phase]);
-
-  // Handle user SEEKING video far from current TTS (manual seek, not drift)
-  // Only jump when user deliberately seeks (drift > 5 segments = clearly a seek)
-  useEffect(() => {
-    if (phase !== 'playing') return;
-    if (currentSegIdx >= 0 && Math.abs(playingIdxRef.current - currentSegIdx) > 5) {
-      console.log(`[elastic-sync] User seeked: AI seg=${playingIdxRef.current} → video seg=${currentSegIdx}, jumping to match`);
-      elasticRateRef.current = speedRef.current; // reset elastic
-      playSeg(currentSegIdx);
-    }
-  }, [currentSegIdx, phase, playSeg]);
+  }, [phase, playSeg, findSegForTime]);
 
   // ═══ USER ACTIONS ═══
 
