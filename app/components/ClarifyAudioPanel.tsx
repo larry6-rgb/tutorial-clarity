@@ -48,8 +48,10 @@ interface ClarifyAudioPanelProps {
   registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean }) => void;
 }
 
-// Use a SINGLE consistent voice for all segments (no male/female switching)
-const TTS_VOICE = 'nova';
+// Use a SINGLE consistent voice for all segments
+// 'onyx' = deep male voice (good for male speakers, which is the common case)
+// Other options: 'echo' (male), 'fable' (male), 'nova' (female), 'shimmer' (female), 'alloy' (neutral)
+const TTS_VOICE = 'onyx';
 
 function fmtTime(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -264,8 +266,16 @@ export function ClarifyAudioPanel({
       if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
       try {
         const a = new Audio(cached.url);
+        const targetSpeed = speedRef.current;
         a.volume = mutedRef.current ? 0 : volRef.current;
-        a.playbackRate = speedRef.current;
+        a.playbackRate = targetSpeed;
+        // Lock speed — force reset if browser tries to change it
+        a.addEventListener('ratechange', () => {
+          if (Math.abs(a.playbackRate - speedRef.current) > 0.01) {
+            console.log(`[clarify] Speed drift detected: ${a.playbackRate} → forcing ${speedRef.current}`);
+            a.playbackRate = speedRef.current;
+          }
+        });
         audioRef.current = a;
         a.onended = () => { if (isPlayingRef.current) playSeg(i + 1); };
         a.onerror = () => {

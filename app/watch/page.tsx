@@ -246,6 +246,9 @@ function WatchPageContent() {
         }
     }, []);
 
+    // ── Ref to ClarifyAudioPanel handlers (for spacebar + video sync control) ──
+    const clarifyHandlersRef = useRef<{ play: () => void; pause: () => void; isPlaying: () => boolean } | null>(null);
+
     // ── Stable callbacks for ClarifyAudioPanel (prevent re-render unmute bug) ──
     const handleClarifySubtitle = useCallback((subtitle: string | null) => {
         if (subtitle) console.log('[watch] Clarify subtitle:', subtitle);
@@ -268,6 +271,11 @@ function WatchPageContent() {
 
     const handleClarifySegmentChange = useCallback((idx: number) => {
         setClarifySegmentIndex(idx);
+    }, []);
+
+    const handleClarifyRegisterHandlers = useCallback((handlers: { play: () => void; pause: () => void; isPlaying: () => boolean }) => {
+        clarifyHandlersRef.current = handlers;
+        console.log('[watch] ClarifyAudioPanel handlers registered');
     }, []);
 
     useEffect(() => {
@@ -440,6 +448,25 @@ function WatchPageContent() {
                             }
                         }
                     }
+                    // ── Video/Audio Sync: detect YouTube play/pause state ──
+                    if (data.info.playerState !== undefined) {
+                        const state = data.info.playerState;
+                        // playerState: -1=unstarted, 0=ended, 1=playing, 2=paused, 3=buffering, 5=cued
+                        if (state === 2) {
+                            // YouTube PAUSED (user clicked on video or used YT controls)
+                            setIsPlaying(false);
+                            if (clarifyHandlersRef.current?.isPlaying()) {
+                                clarifyHandlersRef.current.pause();
+                                console.log('[watch] YouTube paused → auto-paused AI audio');
+                            }
+                        } else if (state === 1) {
+                            // YouTube PLAYING
+                            setIsPlaying(true);
+                            // Don't auto-resume AI audio — user might have intentionally stopped it
+                            // Only log the state change
+                            console.log('[watch] YouTube playing');
+                        }
+                    }
                 }
             } catch (e) {
                 // Ignore parsing errors
@@ -480,30 +507,34 @@ function WatchPageContent() {
 
                 if (iframeRef.current?.contentWindow) {
                     if (isPlaying) {
+                        // PAUSE video
                         iframeRef.current.contentWindow.postMessage(
-                            JSON.stringify({
-                                event: 'command',
-                                func: 'pauseVideo',
-                                args: []
-                            }),
+                            JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
                             '*'
                         );
                         setIsPlaying(false);
+                        // Also pause AI audio if playing
+                        if (clarifyHandlersRef.current?.isPlaying()) {
+                            clarifyHandlersRef.current.pause();
+                            console.log('[watch] Spacebar: paused both video and AI audio');
+                        }
 
                         if (!firstPauseRef.current && !nudgeDismissedRef.current) {
                             firstPauseRef.current = true;
                             setShowNudge(true);
                         }
                     } else {
+                        // PLAY video
                         iframeRef.current.contentWindow.postMessage(
-                            JSON.stringify({
-                                event: 'command',
-                                func: 'playVideo',
-                                args: []
-                            }),
+                            JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
                             '*'
                         );
                         setIsPlaying(true);
+                        // Also resume AI audio if it was playing before pause
+                        if (clarifyHandlersRef.current && !clarifyHandlersRef.current.isPlaying()) {
+                            clarifyHandlersRef.current.play();
+                            console.log('[watch] Spacebar: resumed both video and AI audio');
+                        }
                     }
                 }
             }
@@ -1106,9 +1137,9 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                         fontWeight: 700,
                         fontVariantNumeric: "tabular-nums",
                       }}
-                      title="Playback speed"
+                      title="AI Audio Speed"
                     >
-                      {playbackSpeed.toFixed(playbackSpeed % 1 === 0 ? 0 : 2)}x
+                      {aiPlaybackSpeed.toFixed(aiPlaybackSpeed % 1 === 0 ? 0 : 2)}x
                     </div>
                   </div>
                 )}
@@ -1962,6 +1993,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             onPlayYouTube={handleClarifyPlayYouTube}
                                             onTranscriptReady={handleClarifyTranscriptReady}
                                             onSegmentChange={handleClarifySegmentChange}
+                                            registerHandlers={handleClarifyRegisterHandlers}
                                         />
                                     </div>
                                 )}
