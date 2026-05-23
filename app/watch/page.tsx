@@ -169,21 +169,16 @@ function WatchPageContent() {
                     JSON.stringify({ event: 'command', func: 'setVolume', args: [0] }), '*'
                 );
                 
-                // Method 3: Try unMute then mute (sometimes fixes stuck state)
+                // Method 3: Extra mute + volume=0 on retries (no unMute — that causes audio leak)
                 if (attempt > 1) {
                     setTimeout(() => {
                         iframe.postMessage(
-                            JSON.stringify({ event: 'command', func: 'unMute', args: [] }), '*'
+                            JSON.stringify({ event: 'command', func: 'mute', args: [] }), '*'
                         );
-                        setTimeout(() => {
-                            iframe.postMessage(
-                                JSON.stringify({ event: 'command', func: 'mute', args: [] }), '*'
-                            );
-                            iframe.postMessage(
-                                JSON.stringify({ event: 'command', func: 'setVolume', args: [0] }), '*'
-                            );
-                        }, 50);
-                    }, 50);
+                        iframe.postMessage(
+                            JSON.stringify({ event: 'command', func: 'setVolume', args: [0] }), '*'
+                        );
+                    }, 100);
                 }
             };
 

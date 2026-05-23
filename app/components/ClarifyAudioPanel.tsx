@@ -71,6 +71,7 @@ export function ClarifyAudioPanel({
 
   const [volume, setVolume] = useState(100); // Default to 100% for maximum clarity
   const [isMuted, setIsMuted] = useState(false);
+  const [processingStage, setProcessingStage] = useState<string>(''); // Progress feedback
 
   // ═══ REFS ═══
   const audioRef = useRef<HTMLAudioElement | null>(null);
@@ -182,13 +183,25 @@ export function ClarifyAudioPanel({
 
     if (cached?.url) {
       if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
-      const a = new Audio(cached.url);
-      a.volume = mutedRef.current ? 0 : volRef.current;
-      a.playbackRate = speedRef.current;
-      audioRef.current = a;
-      a.onended = () => { if (isPlayingRef.current) playSeg(i + 1); };
-      a.onerror = () => { if (isPlayingRef.current) playSeg(i + 1); };
-      a.play().catch(() => {});
+      try {
+        const a = new Audio(cached.url);
+        a.volume = mutedRef.current ? 0 : volRef.current;
+        a.playbackRate = speedRef.current;
+        audioRef.current = a;
+        a.onended = () => { if (isPlayingRef.current) playSeg(i + 1); };
+        a.onerror = () => {
+          // Blob URL may have been revoked — clean it up and skip to next
+          console.warn(`[clarify] Audio error on seg ${i}, skipping`);
+          if (cached.url) { try { URL.revokeObjectURL(cached.url); } catch {} }
+          cached.url = undefined;
+          cached.useClientTTS = true;
+          if (isPlayingRef.current) playSeg(i + 1);
+        };
+        a.play().catch(() => { if (isPlayingRef.current) playSeg(i + 1); });
+      } catch {
+        // URL creation failed — skip to next segment
+        if (isPlayingRef.current) playSeg(i + 1);
+      }
     } else if (cached?.useClientTTS) {
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
@@ -277,6 +290,7 @@ export function ClarifyAudioPanel({
     setSelectedLang(lang);
     setPhase('processing');
     setError('');
+    setProcessingStage('Fetching transcript...');
     cacheRef.current = {};
     genSetRef.current.clear();
     setGeneratedCount(0);
@@ -285,6 +299,7 @@ export function ClarifyAudioPanel({
     // NOTE: YouTube stays UNMUTED during processing. User hears normal video audio.
 
     try {
+      setProcessingStage('Fetching & translating transcript...');
       const res = await fetch('/api/process-video', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -293,6 +308,8 @@ export function ClarifyAudioPanel({
       if (!res.ok) { const d = await res.json(); throw new Error(d.error || `Failed (${res.status})`); }
       const data = await res.json();
       if (!data.transcript?.length) throw new Error('No transcript segments found');
+
+      setProcessingStage(`Got ${data.transcript.length} segments${data.sourceLanguage && data.sourceLanguage !== lang ? ` (translated from ${data.sourceLanguage})` : ''}`);
 
       const segs: ClarifyTranscriptSegment[] = data.transcript.map((s: any, i: number) => ({
         text: s.text || '', start: s.start || 0,
@@ -304,6 +321,7 @@ export function ClarifyAudioPanel({
 
       if (mode !== 'subtitles_only') {
         // Generate first batch of audio segments
+        setProcessingStage('Generating AI audio...');
         const batch = segs.slice(0, 8);
         await Promise.allSettled(batch.map((s, i) => generateSeg(i, s.text)));
         setPhase('ready'); // Show "Play Clarified Audio" button
@@ -380,7 +398,9 @@ export function ClarifyAudioPanel({
       {phase === 'processing' && (
         <div>
           <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#60a5fa', marginBottom: '8px', textAlign: 'center' }}>
-            🔄 Processing Audio...
+            {processingStage.startsWith('Generating') ? '🎵 Generating Audio...' :
+             processingStage.includes('translating') ? '🌐 Translating...' :
+             '📝 Fetching Transcript...'}
           </div>
           <div style={{ marginBottom: '6px' }}>
             <div style={{ width: '100%', height: '8px', backgroundColor: '#374151', borderRadius: '4px', overflow: 'hidden' }}>
@@ -395,7 +415,7 @@ export function ClarifyAudioPanel({
           <div style={{ fontSize: '11px', color: '#9ca3af', textAlign: 'center' }}>
             {transcript.length > 0
               ? `${generatedCount}/${transcript.length} segments generated`
-              : 'Fetching transcript...'}
+              : processingStage || 'Fetching transcript...'}
           </div>
         </div>
       )}
