@@ -36,7 +36,6 @@ function WatchPageContent() {
     const iframeRef = useRef<HTMLIFrameElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const transcriptRef = useRef<HTMLDivElement>(null);
-    const [showNudge, setShowNudge] = useState(false);
     const [showMenu, setShowMenu] = useState(false);
     const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
     const [volume, setVolume] = useState(100);
@@ -100,10 +99,9 @@ function WatchPageContent() {
     const dragStartBottom = useRef(0);
     const dragStartCenterOffset = useRef(0);
     const lastScrollLeft = useRef(0);
-    const firstPauseRef = useRef(false);
-    const nudgeDismissedRef = useRef(false);
-    const nudgeTimerRef = useRef<NodeJS.Timeout | null>(null);
     const controlsPositionOnDragStart = useRef<'above' | 'below'>('above');
+    // Track whether AI audio was playing when spacebar paused (for resume)
+    const aiWasPlayingRef = useRef(false);
 
     const [definitionPopup, setDefinitionPopup] = useState<{
         text: string;
@@ -389,22 +387,6 @@ function WatchPageContent() {
     }, [savedVideos]);
 
     useEffect(() => {
-        if (showNudge) {
-            nudgeTimerRef.current = setTimeout(() => {
-                setShowNudge(false);
-                nudgeDismissedRef.current = true;
-            }, 5000);
-        }
-
-        return () => {
-            if (nudgeTimerRef.current) {
-                clearTimeout(nudgeTimerRef.current);
-                nudgeTimerRef.current = null;
-            }
-        };
-    }, [showNudge]);
-
-    useEffect(() => {
         const interval = setInterval(() => {
             const active = document.activeElement;
             const tag = active?.tagName?.toLowerCase();
@@ -505,35 +487,41 @@ function WatchPageContent() {
                 e.preventDefault();
                 e.stopPropagation();
 
+                console.log(`[watch-spacebar] Pressed. isPlaying=${isPlaying}, aiActive=${clarifyHandlersRef.current?.isPlaying() ?? 'no-ref'}`);
+
                 if (iframeRef.current?.contentWindow) {
                     if (isPlaying) {
-                        // PAUSE video
+                        // ═══ PAUSE everything ═══
                         iframeRef.current.contentWindow.postMessage(
                             JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }),
                             '*'
                         );
                         setIsPlaying(false);
-                        // Also pause AI audio if playing
-                        if (clarifyHandlersRef.current?.isPlaying()) {
-                            clarifyHandlersRef.current.pause();
-                            console.log('[watch] Spacebar: paused both video and AI audio');
-                        }
 
-                        if (!firstPauseRef.current && !nudgeDismissedRef.current) {
-                            firstPauseRef.current = true;
-                            setShowNudge(true);
+                        // Track if AI audio was playing, then pause it
+                        const aiIsPlaying = clarifyHandlersRef.current?.isPlaying() ?? false;
+                        aiWasPlayingRef.current = aiIsPlaying;
+                        if (aiIsPlaying) {
+                            clarifyHandlersRef.current!.pause();
+                            console.log('[watch-spacebar] PAUSED: video + AI audio');
+                        } else {
+                            console.log('[watch-spacebar] PAUSED: video only (AI not active)');
                         }
                     } else {
-                        // PLAY video
+                        // ═══ PLAY/RESUME everything ═══
                         iframeRef.current.contentWindow.postMessage(
                             JSON.stringify({ event: 'command', func: 'playVideo', args: [] }),
                             '*'
                         );
                         setIsPlaying(true);
-                        // Also resume AI audio if it was playing before pause
-                        if (clarifyHandlersRef.current && !clarifyHandlersRef.current.isPlaying()) {
+
+                        // Resume AI audio ONLY if it was playing before we paused
+                        if (aiWasPlayingRef.current && clarifyHandlersRef.current) {
                             clarifyHandlersRef.current.play();
-                            console.log('[watch] Spacebar: resumed both video and AI audio');
+                            aiWasPlayingRef.current = false;
+                            console.log('[watch-spacebar] RESUMED: video + AI audio');
+                        } else {
+                            console.log('[watch-spacebar] RESUMED: video only');
                         }
                     }
                 }
@@ -1048,14 +1036,6 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                 className="flex-1 outline-none relative"
                 style={{ marginRight: '240px' }}
             >
-                {showNudge && (
-                    <div className="absolute bottom-20 right-4 z-40 bg-pink-500 text-white px-4 py-3 rounded-lg shadow-2xl max-w-xs">
-                        <p className="text-sm font-semibold">
-                            👍 Be sure to click the X within the overlay to ensure it does not reappear when using the spacebar.
-                        </p>
-                    </div>
-                )}
-
                 <iframe
                     ref={iframeRef}
                     className="w-full h-full pointer-events-auto"
