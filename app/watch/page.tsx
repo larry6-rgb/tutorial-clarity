@@ -70,9 +70,10 @@ function WatchPageContent() {
         if (typeof window === 'undefined') return 1;
         try {
             const saved = localStorage.getItem(AI_SPEED_KEY);
+            // Only restore if explicitly saved AND valid
             if (saved) { const v = parseFloat(saved); if (v >= 0.5 && v <= 2) return v; }
         } catch {}
-        return 1;
+        return 1; // Default: normal speed
     });
 
     // Clarify bar position/size — persisted to localStorage
@@ -1400,20 +1401,21 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                     value={aiPlaybackSpeed}
                                     onChange={(e) => setAiPlaybackSpeed(parseFloat(e.target.value))}
                                     style={{
-                                        backgroundColor: '#1e293b',
-                                        color: '#93c5fd',
-                                        border: '1px solid #475569',
-                                        borderRadius: '4px',
-                                        padding: '2px 4px',
-                                        fontSize: '11px',
+                                        backgroundColor: '#f97316',
+                                        color: '#ffffff',
+                                        border: '2px solid #fb923c',
+                                        borderRadius: '6px',
+                                        padding: '3px 6px',
+                                        fontSize: '12px',
                                         fontWeight: 'bold',
                                         cursor: 'pointer',
                                         outline: 'none',
+                                        textShadow: '0 1px 2px rgba(0,0,0,0.3)',
                                     }}
                                     title="AI Audio Playback Speed"
                                 >
                                     {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2].map(s => (
-                                        <option key={s} value={s}>{s}x</option>
+                                        <option key={s} value={s}>{s}x AI</option>
                                     ))}
                                 </select>
                             </div>

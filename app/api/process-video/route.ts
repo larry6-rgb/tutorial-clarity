@@ -6,12 +6,15 @@ export const dynamic = 'force-dynamic';
  * /api/process-video — Video Processing, Translation & Transcription
  * 
  * POST — Start video processing
- *   Body: { videoId: string, option: number, targetLanguage: string }
- *   Response: { transcript: TranscriptSegment[], isStreaming: boolean }
+ *   Body: { videoId: string, option: number, targetLanguage: string, startIndex?: number, batchSize?: number }
  * 
- * CRITICAL: This route now TRANSLATES the transcript to the target language
- * using OpenAI before returning it. The German transcript from YouTube gets
- * translated to English (or whatever target language the user selected).
+ *   - Initial call (no startIndex): Fetches transcript, translates first BUFFER_SIZE segments, returns immediately.
+ *     Response includes `originalTranscript` (all segments in source language) and `transcript` (translated buffer).
+ *   - Follow-up calls (startIndex > 0): Translates the next batch of segments.
+ *     Response includes only the newly translated `transcript` segments.
+ * 
+ * PROGRESSIVE TRANSLATION: Translate 30 segments at a time so the user can start
+ * watching immediately. Client requests more batches as playback progresses.
  */
 
 interface TranscriptSegment {
@@ -19,6 +22,11 @@ interface TranscriptSegment {
   start: number;
   end: number;
 }
+
+// In-memory cache for original transcripts (per video) so follow-up batch requests
+// don't re-fetch from YouTube. Expires after 10 minutes.
+const transcriptCache = new Map<string, { segments: TranscriptSegment[]; detectedLang: string; timestamp: number }>();
+const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
 /**
  * Fetch transcript from our /api/transcript endpoint.
@@ -28,7 +36,6 @@ async function fetchTranscript(
   request: NextRequest
 ): Promise<TranscriptSegment[]> {
   const origin = request.nextUrl.origin;
-  // Fetch default transcript (don't specify lang — let YouTube return whatever it has)
   const transcriptUrl = `${origin}/api/transcript?videoId=${videoId}`;
   console.log(`[process-video] Fetching transcript from: ${transcriptUrl}`);
 
@@ -53,10 +60,9 @@ async function fetchTranscript(
 }
 
 /**
- * Translate transcript segments to target language using OpenAI.
- * Batches segments to minimize API calls (translate ~20 at a time).
+ * Translate a batch of transcript segments to target language using OpenAI.
  */
-async function translateSegments(
+async function translateBatch(
   segments: TranscriptSegment[],
   targetLanguage: string
 ): Promise<TranscriptSegment[]> {
@@ -73,13 +79,12 @@ async function translateSegments(
   };
   const langName = langNames[targetLanguage] || targetLanguage;
 
-  console.log(`[process-video] Translating ${segments.length} segments to ${langName}...`);
-
-  const BATCH_SIZE = 25;
+  // Translate in sub-batches of 25 (OpenAI context limit)
+  const SUB_BATCH = 25;
   const translated: TranscriptSegment[] = [];
 
-  for (let i = 0; i < segments.length; i += BATCH_SIZE) {
-    const batch = segments.slice(i, i + BATCH_SIZE);
+  for (let i = 0; i < segments.length; i += SUB_BATCH) {
+    const batch = segments.slice(i, i + SUB_BATCH);
     const textsToTranslate = batch.map((s, idx) => `[${idx}] ${s.text}`).join('\n');
 
     try {
@@ -97,17 +102,13 @@ async function translateSegments(
               role: 'system',
               content: `You are a professional translator. Translate each numbered line to ${langName}. Keep the [N] numbering prefix. Output ONLY the translated lines, one per line. Preserve the meaning and tone. Do not add explanations.`,
             },
-            {
-              role: 'user',
-              content: textsToTranslate,
-            },
+            { role: 'user', content: textsToTranslate },
           ],
         }),
       });
 
       if (!response.ok) {
         console.error(`[process-video] Translation API error (${response.status})`);
-        // On error, return original text for this batch
         translated.push(...batch);
         continue;
       }
@@ -116,91 +117,147 @@ async function translateSegments(
       const translatedText = data.choices?.[0]?.message?.content || '';
       const translatedLines = translatedText.split('\n').filter((l: string) => l.trim());
 
-      // Parse translated lines back to segments
       for (let j = 0; j < batch.length; j++) {
         const seg = batch[j];
-        // Try to find the matching translated line by index
         const matchingLine = translatedLines.find((l: string) => l.startsWith(`[${j}]`));
         if (matchingLine) {
-          // Remove the [N] prefix
           const translatedSegText = matchingLine.replace(/^\[\d+\]\s*/, '').trim();
           translated.push({ ...seg, text: translatedSegText || seg.text });
         } else if (translatedLines[j]) {
-          // Fallback: use position-based matching
           const translatedSegText = translatedLines[j].replace(/^\[\d+\]\s*/, '').trim();
           translated.push({ ...seg, text: translatedSegText || seg.text });
         } else {
-          translated.push(seg); // Keep original if no translation found
+          translated.push(seg);
         }
       }
 
-      console.log(`[process-video] Translated batch ${Math.floor(i / BATCH_SIZE) + 1}/${Math.ceil(segments.length / BATCH_SIZE)}`);
-
+      console.log(`[process-video] Translated sub-batch ${Math.floor(i / SUB_BATCH) + 1}/${Math.ceil(segments.length / SUB_BATCH)}`);
     } catch (err) {
       console.error(`[process-video] Translation batch error:`, err);
-      translated.push(...batch); // Keep originals on error
+      translated.push(...batch);
     }
   }
 
-  console.log(`[process-video] ✓ Translation complete: ${translated.length} segments`);
   return translated;
 }
 
 /**
- * Detect if the transcript is already in the target language.
- * Simple heuristic: check first few segments for common words in the target language.
+ * Detect source language from transcript segments.
  */
 function detectLanguage(segments: TranscriptSegment[]): string {
   const sample = segments.slice(0, 10).map(s => s.text).join(' ').toLowerCase();
-  // Simple German detection
   if (/\b(und|ich|die|der|das|ist|wir|sie|nicht|haben|ein|eine|für|mit|auf|den|dem|von)\b/.test(sample)) {
     return 'de';
   }
-  // Simple English detection
   if (/\b(the|and|is|are|was|were|have|has|with|for|that|this|from|but|not|you|we|they)\b/.test(sample)) {
     return 'en';
   }
   return 'unknown';
 }
 
+const INITIAL_BUFFER = 30; // Translate first 30 segments for quick start
+
 export async function POST(request: NextRequest) {
   try {
     const body = await request.json();
-    const { videoId, option, targetLanguage = 'en' } = body;
+    const { videoId, option, targetLanguage = 'en', startIndex = 0, batchSize = 50 } = body;
 
     if (!videoId || typeof videoId !== 'string') {
       return NextResponse.json({ error: 'Missing or invalid videoId' }, { status: 400 });
     }
 
-    console.log(`[process-video] POST — videoId=${videoId}, option=${option}, targetLang=${targetLanguage}`);
+    console.log(`[process-video] POST — videoId=${videoId}, option=${option}, targetLang=${targetLanguage}, startIndex=${startIndex}, batchSize=${batchSize}`);
 
-    // Step 1: Fetch the transcript (in whatever language YouTube has)
-    let segments = await fetchTranscript(videoId, request);
-    if (segments.length === 0) {
-      return NextResponse.json({ error: 'No transcript segments found' }, { status: 404 });
+    // Clean expired cache entries
+    const now = Date.now();
+    for (const [key, val] of transcriptCache) {
+      if (now - val.timestamp > CACHE_TTL) transcriptCache.delete(key);
     }
 
-    // Step 2: Detect source language and translate if needed
-    const detectedLang = detectLanguage(segments);
-    console.log(`[process-video] Detected source language: ${detectedLang}, target: ${targetLanguage}`);
+    let allOriginalSegments: TranscriptSegment[];
+    let detectedLang: string;
 
-    if (detectedLang !== targetLanguage && targetLanguage !== detectedLang) {
-      // Source and target differ — TRANSLATE!
-      segments = await translateSegments(segments, targetLanguage);
+    // Check cache first (for follow-up batch requests)
+    const cacheKey = `${videoId}_${targetLanguage}`;
+    const cached = transcriptCache.get(cacheKey);
+
+    if (cached && startIndex > 0) {
+      // Follow-up batch request — use cached original segments
+      allOriginalSegments = cached.segments;
+      detectedLang = cached.detectedLang;
+      console.log(`[process-video] Using cached transcript (${allOriginalSegments.length} segments)`);
     } else {
-      console.log(`[process-video] Source matches target (${targetLanguage}) — skipping translation`);
+      // Initial request — fetch from YouTube
+      allOriginalSegments = await fetchTranscript(videoId, request);
+      if (allOriginalSegments.length === 0) {
+        return NextResponse.json({ error: 'No transcript segments found' }, { status: 404 });
+      }
+      detectedLang = detectLanguage(allOriginalSegments);
+      // Cache it for follow-up requests
+      transcriptCache.set(cacheKey, { segments: allOriginalSegments, detectedLang, timestamp: now });
     }
 
-    console.log(`[process-video] ✓ Returning ${segments.length} segments (${targetLanguage})`);
+    const needsTranslation = detectedLang !== targetLanguage && detectedLang !== 'unknown';
+    console.log(`[process-video] Detected: ${detectedLang}, target: ${targetLanguage}, needsTranslation: ${needsTranslation}`);
 
-    return NextResponse.json({
-      transcript: segments,
-      isStreaming: false,
-      totalSegments: segments.length,
-      videoId,
-      translatedTo: targetLanguage,
-      sourceLanguage: detectedLang,
-    });
+    if (startIndex === 0) {
+      // ═══ INITIAL REQUEST ═══
+      // Return original transcript immediately + translated first buffer
+
+      let translatedBuffer: TranscriptSegment[] = [];
+      if (needsTranslation) {
+        const bufferSlice = allOriginalSegments.slice(0, INITIAL_BUFFER);
+        console.log(`[process-video] Translating initial buffer of ${bufferSlice.length} segments...`);
+        translatedBuffer = await translateBatch(bufferSlice, targetLanguage);
+        console.log(`[process-video] ✓ Initial buffer translated (${translatedBuffer.length} segments)`);
+      }
+
+      return NextResponse.json({
+        // Original transcript in source language (ALL segments)
+        originalTranscript: allOriginalSegments,
+        // Translated segments (just the first buffer)
+        transcript: needsTranslation ? translatedBuffer : allOriginalSegments.slice(0, INITIAL_BUFFER),
+        translatedCount: needsTranslation ? translatedBuffer.length : allOriginalSegments.length,
+        totalSegments: allOriginalSegments.length,
+        needsMoreTranslation: needsTranslation && allOriginalSegments.length > INITIAL_BUFFER,
+        isStreaming: false,
+        videoId,
+        translatedTo: targetLanguage,
+        sourceLanguage: detectedLang,
+      });
+    } else {
+      // ═══ FOLLOW-UP BATCH REQUEST ═══
+      // Translate the next batch starting from startIndex
+      const endIndex = Math.min(startIndex + batchSize, allOriginalSegments.length);
+      const batchSlice = allOriginalSegments.slice(startIndex, endIndex);
+
+      if (batchSlice.length === 0) {
+        return NextResponse.json({
+          transcript: [],
+          startIndex,
+          translatedCount: 0,
+          totalSegments: allOriginalSegments.length,
+          done: true,
+          videoId,
+        });
+      }
+
+      console.log(`[process-video] Translating batch [${startIndex}..${endIndex}] (${batchSlice.length} segments)...`);
+      const translatedBatch = needsTranslation
+        ? await translateBatch(batchSlice, targetLanguage)
+        : batchSlice;
+
+      console.log(`[process-video] ✓ Batch translated (${translatedBatch.length} segments)`);
+
+      return NextResponse.json({
+        transcript: translatedBatch,
+        startIndex,
+        translatedCount: translatedBatch.length,
+        totalSegments: allOriginalSegments.length,
+        done: endIndex >= allOriginalSegments.length,
+        videoId,
+      });
+    }
 
   } catch (error) {
     console.error('[process-video] POST error:', error);
