@@ -102,6 +102,8 @@ export function ClarifyAudioPanel({
   const originalTxRef = useRef<ClarifyTranscriptSegment[]>([]);
   const translatedTxRef = useRef<ClarifyTranscriptSegment[]>([]);
   const speedRef = useRef(1);
+  const elasticRateRef = useRef(1); // actual playbackRate = userSpeed × elasticMultiplier
+  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
   const translatingMoreRef = useRef(false);
 
   // Keep refs synced
@@ -111,6 +113,7 @@ export function ClarifyAudioPanel({
   useEffect(() => {
     console.log(`[clarify-speed] Speed changed: ${speedRef.current} → ${aiPlaybackSpeed}`);
     speedRef.current = aiPlaybackSpeed;
+    elasticRateRef.current = aiPlaybackSpeed; // reset elastic to new base speed
     // Also update currently playing audio element immediately
     if (audioRef.current) {
       audioRef.current.playbackRate = aiPlaybackSpeed;
@@ -274,15 +277,16 @@ export function ClarifyAudioPanel({
       if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
       try {
         const a = new Audio(cached.url);
-        const targetSpeed = speedRef.current;
+        const targetSpeed = elasticRateRef.current || speedRef.current;
         a.volume = mutedRef.current ? 0 : volRef.current;
         a.playbackRate = targetSpeed;
         console.log(`[clarify-speed] Seg ${i}: set playbackRate=${targetSpeed}`);
-        // Lock speed — force reset if browser tries to change it
+        // Lock speed — force reset if browser tries to change it (but allow elastic adjustments)
         a.addEventListener('ratechange', () => {
-          if (Math.abs(a.playbackRate - speedRef.current) > 0.01) {
-            console.log(`[clarify-speed] DRIFT on seg ${i}: ${a.playbackRate} → forcing ${speedRef.current}`);
-            a.playbackRate = speedRef.current;
+          const desired = elasticRateRef.current || speedRef.current;
+          if (Math.abs(a.playbackRate - desired) > 0.01) {
+            console.log(`[clarify-speed] DRIFT on seg ${i}: ${a.playbackRate} → forcing ${desired}`);
+            a.playbackRate = desired;
           }
         });
         audioRef.current = a;
@@ -318,10 +322,102 @@ export function ClarifyAudioPanel({
     }
   }, [selectedLang, onMuteYouTube]);
 
-  // Re-sync when user seeks video far from current TTS
+  // ═══ ELASTIC SYNC — smooth speed adjustments instead of jump-back ═══
+  // Monitors drift between video position and AI audio position.
+  // If AI is ahead: slow down slightly. If behind: speed up slightly. No jumps.
+  const currentTimeRef = useRef(currentTime);
+  useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
+
+  useEffect(() => {
+    // Only run elastic sync while playing
+    if (phase !== 'playing') {
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+        // Reset elastic rate to user speed
+        elasticRateRef.current = speedRef.current;
+      }
+      return;
+    }
+
+    const SYNC_THRESHOLD = 0.3;  // seconds — within this is "in sync"
+
+    syncIntervalRef.current = setInterval(() => {
+      if (!isPlayingRef.current) return;
+
+      const audio = audioRef.current;
+      const segIdx = playingIdxRef.current;
+      const segs = translatedTxRef.current;
+
+      if (!audio || segIdx < 0 || segIdx >= segs.length) return;
+      if (audio.paused || !audio.duration || audio.duration === 0) return;
+
+      const seg = segs[segIdx];
+      const segVideoStart = seg.start;
+      const segVideoDuration = seg.end - seg.start;
+      const audioProgress = audio.currentTime / audio.duration; // 0.0 to 1.0
+      const aiVideoPosition = segVideoStart + audioProgress * segVideoDuration;
+      const videoPosition = currentTimeRef.current;
+      const drift = aiVideoPosition - videoPosition; // positive = AI ahead, negative = AI behind
+
+      const userSpeed = speedRef.current;
+      let multiplier = 1.0;
+
+      if (drift > SYNC_THRESHOLD) {
+        // AI is ahead of video — slow down
+        if (drift > 2.0) {
+          multiplier = 0.90; // far ahead, max correction
+        } else if (drift > 1.0) {
+          multiplier = 0.92;
+        } else if (drift > 0.5) {
+          multiplier = 0.95;
+        } else {
+          multiplier = 0.98;
+        }
+      } else if (drift < -SYNC_THRESHOLD) {
+        // AI is behind video — speed up
+        if (drift < -2.0) {
+          multiplier = 1.10; // far behind, max correction
+        } else if (drift < -1.0) {
+          multiplier = 1.08;
+        } else if (drift < -0.5) {
+          multiplier = 1.05;
+        } else {
+          multiplier = 1.02;
+        }
+      }
+      // else: within threshold, multiplier stays 1.0
+
+      const newRate = Math.round(userSpeed * multiplier * 100) / 100; // round to 2 decimals
+      const oldRate = elasticRateRef.current;
+
+      // Only update if rate actually changed (avoid constant ratechange events)
+      if (Math.abs(newRate - oldRate) > 0.005) {
+        elasticRateRef.current = newRate;
+        audio.playbackRate = newRate;
+        if (Math.abs(multiplier - 1.0) > 0.005) {
+          console.log(`[elastic-sync] drift=${drift.toFixed(2)}s, multiplier=${multiplier}, rate=${newRate} (user=${userSpeed})`);
+        } else {
+          console.log(`[elastic-sync] in sync, rate=${newRate}`);
+        }
+      }
+    }, 150); // check every 150ms
+
+    return () => {
+      if (syncIntervalRef.current) {
+        clearInterval(syncIntervalRef.current);
+        syncIntervalRef.current = null;
+      }
+    };
+  }, [phase]);
+
+  // Handle user SEEKING video far from current TTS (manual seek, not drift)
+  // Only jump when user deliberately seeks (drift > 5 segments = clearly a seek)
   useEffect(() => {
     if (phase !== 'playing') return;
-    if (currentSegIdx >= 0 && Math.abs(playingIdxRef.current - currentSegIdx) > 2) {
+    if (currentSegIdx >= 0 && Math.abs(playingIdxRef.current - currentSegIdx) > 5) {
+      console.log(`[elastic-sync] User seeked: AI seg=${playingIdxRef.current} → video seg=${currentSegIdx}, jumping to match`);
+      elasticRateRef.current = speedRef.current; // reset elastic
       playSeg(currentSegIdx);
     }
   }, [currentSegIdx, phase, playSeg]);
@@ -363,6 +459,8 @@ export function ClarifyAudioPanel({
   /** User clicks "Stop" */
   const handleStop = useCallback(() => {
     isPlayingRef.current = false;
+    if (syncIntervalRef.current) { clearInterval(syncIntervalRef.current); syncIntervalRef.current = null; }
+    elasticRateRef.current = speedRef.current;
     if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; audioRef.current = null; }
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     Object.values(cacheRef.current).forEach(e => { if (e.url) URL.revokeObjectURL(e.url); });
@@ -480,6 +578,7 @@ export function ClarifyAudioPanel({
   // Cleanup on unmount ONLY
   useEffect(() => {
     return () => {
+      if (syncIntervalRef.current) { clearInterval(syncIntervalRef.current); syncIntervalRef.current = null; }
       if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
       if ('speechSynthesis' in window) window.speechSynthesis.cancel();
       Object.values(cacheRef.current).forEach(e => { if (e.url) URL.revokeObjectURL(e.url); });
