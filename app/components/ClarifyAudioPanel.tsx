@@ -69,7 +69,7 @@ export function ClarifyAudioPanel({
   const [generatedCount, setGeneratedCount] = useState(0);
   const [useClientTTS, setUseClientTTS] = useState(false);
 
-  const [volume, setVolume] = useState(80);
+  const [volume, setVolume] = useState(100); // Default to 100% for maximum clarity
   const [isMuted, setIsMuted] = useState(false);
 
   // ═══ REFS ═══

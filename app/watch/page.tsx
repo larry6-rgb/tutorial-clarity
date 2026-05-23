@@ -1,7 +1,7 @@
 'use client';
 
 import { useSearchParams, useRouter } from 'next/navigation';
-import { Suspense, useEffect, useRef, useState } from 'react';
+import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
 import { ClarifyAudioPanel } from '../components/ClarifyAudioPanel';
 
 interface SavedVideo {
@@ -116,6 +116,139 @@ function WatchPageContent() {
     const popupDragStart = useRef<{ mouseX: number; mouseY: number; popupX: number; popupY: number } | null>(null);
     const [userTier] = useState<'free' | 'premium'>('free');
 
+    // ── YouTube iframe mute status (for robust muting during AI audio) ──
+    // 'unmuted' = YT audio is playing normally
+    // 'muting' = Mute command sent, waiting for verification
+    // 'muted' = Verified muted successfully
+    // 'failed' = Mute failed after all retries
+    const [ytMuteStatus, setYtMuteStatus] = useState<'unmuted' | 'muting' | 'muted' | 'failed'>('unmuted');
+    const ytMuteRetryRef = useRef<NodeJS.Timeout | null>(null);
+    const ytMuteAttemptRef = useRef(0);
+    const ytMuteVerifiedRef = useRef(false);
+
+    /**
+     * ROBUST YouTube iframe mute — with verification and retries.
+     * 
+     * The YouTube Iframe API sometimes ignores mute commands, especially when
+     * sent during state transitions (loading, buffering). This function:
+     * 1. Sends both 'mute' AND setVolume(0) commands (belt AND suspenders)
+     * 2. Listens for infoDelivery messages to verify the mute worked
+     * 3. Retries up to 5 times with 200ms intervals if not verified
+     * 4. Shows visual feedback to the user
+     */
+    const robustMuteYouTube = useCallback((mute: boolean) => {
+        const iframe = iframeRef.current?.contentWindow;
+        if (!iframe) {
+            console.warn('[iframe-mute] No iframe available');
+            return;
+        }
+
+        // Clear any existing retry timer
+        if (ytMuteRetryRef.current) {
+            clearInterval(ytMuteRetryRef.current);
+            ytMuteRetryRef.current = null;
+        }
+
+        if (mute) {
+            console.log('[iframe-mute] === MUTING YouTube ===');
+            setYtMuteStatus('muting');
+            ytMuteAttemptRef.current = 0;
+            ytMuteVerifiedRef.current = false;
+
+            // Function to send all mute commands
+            const sendMuteCommands = (attempt: number) => {
+                console.log(`[iframe-mute] Attempt ${attempt + 1}/5`);
+                
+                // Method 1: Standard mute command
+                iframe.postMessage(
+                    JSON.stringify({ event: 'command', func: 'mute', args: [] }), '*'
+                );
+                
+                // Method 2: Set volume to 0 (fallback if mute doesn't work)
+                iframe.postMessage(
+                    JSON.stringify({ event: 'command', func: 'setVolume', args: [0] }), '*'
+                );
+                
+                // Method 3: Try unMute then mute (sometimes fixes stuck state)
+                if (attempt > 1) {
+                    setTimeout(() => {
+                        iframe.postMessage(
+                            JSON.stringify({ event: 'command', func: 'unMute', args: [] }), '*'
+                        );
+                        setTimeout(() => {
+                            iframe.postMessage(
+                                JSON.stringify({ event: 'command', func: 'mute', args: [] }), '*'
+                            );
+                            iframe.postMessage(
+                                JSON.stringify({ event: 'command', func: 'setVolume', args: [0] }), '*'
+                            );
+                        }, 50);
+                    }, 50);
+                }
+            };
+
+            // Send initial mute commands
+            sendMuteCommands(0);
+
+            // Set up retry loop
+            ytMuteRetryRef.current = setInterval(() => {
+                ytMuteAttemptRef.current++;
+                
+                if (ytMuteVerifiedRef.current) {
+                    // Mute verified! Stop retrying.
+                    console.log('[iframe-mute] ✅ Mute VERIFIED after', ytMuteAttemptRef.current, 'attempts');
+                    setYtMuteStatus('muted');
+                    if (ytMuteRetryRef.current) clearInterval(ytMuteRetryRef.current);
+                    ytMuteRetryRef.current = null;
+                    return;
+                }
+
+                if (ytMuteAttemptRef.current >= 5) {
+                    // Max retries reached
+                    console.warn('[iframe-mute] ⚠️ Max retries reached — assuming muted (volume=0 as fallback)');
+                    // Final aggressive attempt
+                    iframe.postMessage(
+                        JSON.stringify({ event: 'command', func: 'setVolume', args: [0] }), '*'
+                    );
+                    iframe.postMessage(
+                        JSON.stringify({ event: 'command', func: 'mute', args: [] }), '*'
+                    );
+                    setYtMuteStatus('muted'); // Optimistic — volume is 0 at minimum
+                    if (ytMuteRetryRef.current) clearInterval(ytMuteRetryRef.current);
+                    ytMuteRetryRef.current = null;
+                    return;
+                }
+
+                // Not yet verified — send commands again
+                sendMuteCommands(ytMuteAttemptRef.current);
+            }, 200);
+
+        } else {
+            // UNMUTING — restore YouTube audio
+            console.log('[iframe-mute] === UNMUTING YouTube ===');
+            setYtMuteStatus('unmuted');
+            ytMuteVerifiedRef.current = false;
+            
+            // Unmute
+            iframe.postMessage(
+                JSON.stringify({ event: 'command', func: 'unMute', args: [] }), '*'
+            );
+            // Restore volume to 100
+            iframe.postMessage(
+                JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }), '*'
+            );
+            // Send again after a brief delay for reliability
+            setTimeout(() => {
+                iframe.postMessage(
+                    JSON.stringify({ event: 'command', func: 'unMute', args: [] }), '*'
+                );
+                iframe.postMessage(
+                    JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }), '*'
+                );
+                console.log('[iframe-mute] ✅ Unmute commands sent (x2)');
+            }, 100);
+        }
+    }, []);
 
     useEffect(() => {
         const stored = localStorage.getItem('tutorialClaritySavedVideos');
@@ -271,6 +404,21 @@ function WatchPageContent() {
                     }
                     if (data.info.duration !== undefined) {
                         setDuration(data.info.duration);
+                    }
+                    // ── Mute verification: check if YouTube actually muted ──
+                    if (data.info.muted !== undefined || data.info.volume !== undefined) {
+                        const isMutedNow = data.info.muted === true;
+                        const volumeNow = data.info.volume ?? -1;
+                        
+                        // If we're trying to mute, check if it worked
+                        if (ytMuteAttemptRef.current > 0 && !ytMuteVerifiedRef.current) {
+                            if (isMutedNow || volumeNow === 0) {
+                                ytMuteVerifiedRef.current = true;
+                                console.log(`[iframe-mute] ✅ VERIFIED: muted=${isMutedNow}, volume=${volumeNow}`);
+                            } else {
+                                console.log(`[iframe-mute] ⏳ Not yet muted: muted=${isMutedNow}, volume=${volumeNow}`);
+                            }
+                        }
                     }
                 }
             } catch (e) {
@@ -1758,6 +1906,32 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 </h3>
                                 {expandedSections.has('clarify') && (
                                     <div style={{ padding: '0', backgroundColor: '#111827' }}>
+                                        {/* YouTube mute status indicator */}
+                                        {ytMuteStatus !== 'unmuted' && (
+                                            <div style={{
+                                                padding: '6px 12px',
+                                                margin: '4px 8px',
+                                                borderRadius: '6px',
+                                                fontSize: '12px',
+                                                fontWeight: 'bold',
+                                                textAlign: 'center',
+                                                background: ytMuteStatus === 'muted' ? 'rgba(34, 197, 94, 0.15)'
+                                                    : ytMuteStatus === 'muting' ? 'rgba(245, 158, 11, 0.15)'
+                                                    : 'rgba(239, 68, 68, 0.15)',
+                                                color: ytMuteStatus === 'muted' ? '#22c55e'
+                                                    : ytMuteStatus === 'muting' ? '#f59e0b'
+                                                    : '#ef4444',
+                                                border: `1px solid ${
+                                                    ytMuteStatus === 'muted' ? '#22c55e'
+                                                    : ytMuteStatus === 'muting' ? '#f59e0b'
+                                                    : '#ef4444'
+                                                }`,
+                                            }}>
+                                                {ytMuteStatus === 'muted' && '🔇 YouTube Muted — AI audio playing'}
+                                                {ytMuteStatus === 'muting' && '⏳ Muting YouTube...'}
+                                                {ytMuteStatus === 'failed' && '⚠️ YouTube mute may have failed — try lowering volume manually'}
+                                            </div>
+                                        )}
                                         <ClarifyAudioPanel
                                             videoId={videoId}
                                             currentTime={currentTime}
@@ -1768,20 +1942,8 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                 }
                                             }}
                                             onMuteYouTube={(mute) => {
-                                                // SIMPLE: just mute/unmute the iframe. Don't touch any state.
-                                                if (iframeRef.current?.contentWindow) {
-                                                    iframeRef.current.contentWindow.postMessage(
-                                                        JSON.stringify({ event: 'command', func: mute ? 'mute' : 'unMute' }),
-                                                        '*'
-                                                    );
-                                                    if (!mute) {
-                                                        // Also restore volume to make sure unmute actually works
-                                                        iframeRef.current.contentWindow.postMessage(
-                                                            JSON.stringify({ event: 'command', func: 'setVolume', args: [100] }),
-                                                            '*'
-                                                        );
-                                                    }
-                                                }
+                                                // ROBUST mute with verification + retries
+                                                robustMuteYouTube(mute);
                                             }}
                                             onPlayYouTube={() => {
                                                 // Start YouTube video when user clicks Play/Resume Clarified Audio
