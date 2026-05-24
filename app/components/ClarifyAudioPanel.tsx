@@ -114,14 +114,14 @@ export function ClarifyAudioPanel({
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
   useEffect(() => { txRef.current = transcript; }, [transcript]);
   useEffect(() => {
-    console.log(`[train-sync] User speed changed: ${speedRef.current} → ${aiPlaybackSpeed}`);
+    console.log(`[train-sync] User speed changed: ${speedRef.current} -> ${aiPlaybackSpeed}`);
     speedRef.current = aiPlaybackSpeed;
-    // Recalculate final rate = globalRate × newUserSpeed
-    const finalRate = Math.round(globalRateRef.current * aiPlaybackSpeed * 100) / 100;
+    // Recalculate final rate = globalRate × newUserSpeed (no fine multiplier — elastic will adjust)
+    const finalRate = Math.round(globalRateRef.current * aiPlaybackSpeed * 1000) / 1000;
     elasticRateRef.current = finalRate;
     if (audioRef.current) {
       audioRef.current.playbackRate = finalRate;
-      console.log(`[train-sync] Updated: global=${globalRateRef.current.toFixed(2)} × user=${aiPlaybackSpeed} = ${finalRate}`);
+      console.log(`[train-sync] Updated: global=${globalRateRef.current} x user=${aiPlaybackSpeed} = ${finalRate}`);
     }
   }, [aiPlaybackSpeed]);
   useEffect(() => { originalTxRef.current = originalTranscript; }, [originalTranscript]);
@@ -309,10 +309,10 @@ export function ClarifyAudioPanel({
         audioRef.current = a;
 
         // TRAIN SYNC: Use ONE global rate × user speed for ALL segments
-        const finalRate = Math.round(globalRateRef.current * speedRef.current * 100) / 100;
+        const finalRate = Math.round(globalRateRef.current * speedRef.current * 1000) / 1000;
         elasticRateRef.current = finalRate;
         a.playbackRate = finalRate;
-        console.log(`[train-sync] Seg ${i}: global=${globalRateRef.current} × user=${speedRef.current} = ${finalRate}`);
+        console.log(`[train-sync] Seg ${i}: global=${globalRateRef.current} x user=${speedRef.current} = ${finalRate}`);
 
         // Lock speed — allow elastic fine-tuning but prevent browser drift
         a.addEventListener('ratechange', () => {
@@ -383,11 +383,12 @@ export function ClarifyAudioPanel({
       return;
     }
 
-    console.log(`[train-sync] === ELASTIC FINE-TUNING STARTED (globalRate=${globalRateRef.current}) ===`);
+    console.log(`[train-sync] === ELASTIC SYNC STARTED (globalRate=${globalRateRef.current}) ===`);
     syncTickRef.current = 0;
 
-    const SEEK_THRESHOLD = 5.0;    // seconds — detect user seeking (video time jumps)
-    const FINE_THRESHOLD = 0.5;    // seconds — below this = in sync, no adjustment
+    const SEEK_THRESHOLD = 5.0;       // seconds — detect user seeking (video time jumps between ticks)
+    const LARGE_DRIFT_THRESHOLD = 5.0; // seconds — trigger re-sync jump
+    const FINE_THRESHOLD = 0.5;        // seconds — below this = in sync, no adjustment
     const JUMP_COOLDOWN_MS = 2000;
 
     syncIntervalRef.current = setInterval(() => {
@@ -417,7 +418,7 @@ export function ClarifyAudioPanel({
       // USER SEEK DETECTION: video time jumped >5s in one tick = user seeked
       if (videoTimeDelta > SEEK_THRESHOLD && !cooldownActive) {
         const targetSegIdx = findSegForTime(videoTime, segs);
-        console.log(`[train-sync] ⚡ USER SEEK: video jumped ${videoTimeDelta.toFixed(1)}s, re-aligning to seg ${targetSegIdx} (videoTime=${videoTime.toFixed(1)})`);
+        console.log(`[train-sync] USER SEEK: video jumped ${videoTimeDelta.toFixed(1)}s, re-aligning to seg ${targetSegIdx} (videoTime=${videoTime.toFixed(1)})`);
         jumpCooldownRef.current = now;
         elasticRateRef.current = globalRateRef.current * speedRef.current;
         if (audio) { audio.pause(); audio.onended = null; }
@@ -425,7 +426,7 @@ export function ClarifyAudioPanel({
         return;
       }
 
-      // Calculate drift
+      // Calculate where AI audio is in "video content time"
       let aiVideoPos: number;
       if (audio.duration && audio.duration > 0 && !audio.paused) {
         const segVideoDuration = aiSeg.end - aiSeg.start;
@@ -440,37 +441,51 @@ export function ClarifyAudioPanel({
       const globalRate = globalRateRef.current;
       const userSpeed = speedRef.current;
 
-      // ─── ELASTIC FINE-TUNING: tiny ±2-4% adjustments ───
+      // ─── LARGE DRIFT CORRECTION: jump AI to match video position ───
+      if (absDrift > LARGE_DRIFT_THRESHOLD && !cooldownActive) {
+        const targetSegIdx = findSegForTime(videoTime, segs);
+        console.log(`[train-sync] LARGE DRIFT: ${drift.toFixed(1)}s (AI ${drift > 0 ? 'ahead' : 'behind'}) — RE-SYNCING to seg ${targetSegIdx} (video=${videoTime.toFixed(1)})`);
+        jumpCooldownRef.current = now;
+        elasticRateRef.current = globalRate * userSpeed;
+        if (audio) { audio.pause(); audio.onended = null; }
+        playSeg(targetSegIdx);
+        return;
+      }
+
+      // ─── ELASTIC FINE-TUNING: ±2-8% adjustments based on drift magnitude ───
       let fineMultiplier = 1.0;
 
       if (drift > FINE_THRESHOLD) {
-        // AI ahead — slow down slightly
-        if (drift > 2.0) fineMultiplier = 0.96;
-        else if (drift > 1.0) fineMultiplier = 0.98;
-        else fineMultiplier = 0.99;
+        // AI ahead — slow down
+        if (drift > 3.0) fineMultiplier = 0.92;
+        else if (drift > 2.0) fineMultiplier = 0.94;
+        else if (drift > 1.0) fineMultiplier = 0.96;
+        else fineMultiplier = 0.98;
       } else if (drift < -FINE_THRESHOLD) {
-        // AI behind — speed up slightly
-        if (drift < -2.0) fineMultiplier = 1.04;
-        else if (drift < -1.0) fineMultiplier = 1.02;
-        else fineMultiplier = 1.01;
+        // AI behind — speed up
+        if (drift < -3.0) fineMultiplier = 1.08;
+        else if (drift < -2.0) fineMultiplier = 1.06;
+        else if (drift < -1.0) fineMultiplier = 1.04;
+        else fineMultiplier = 1.02;
       }
 
       // Final rate = globalRate × userSpeed × fineMultiplier
-      const newRate = Math.round(globalRate * userSpeed * fineMultiplier * 100) / 100;
+      const newRate = Math.round(globalRate * userSpeed * fineMultiplier * 1000) / 1000;
       const oldRate = elasticRateRef.current;
 
       if (verbose) {
-        const status = absDrift > FINE_THRESHOLD ? 'FINE-TUNE' : 'IN-SYNC';
+        const status = absDrift > LARGE_DRIFT_THRESHOLD ? 'JUMP-PENDING' :
+                       absDrift > FINE_THRESHOLD ? 'FINE-TUNE' : 'IN-SYNC';
         console.log(`[train-sync] tick ${syncTickRef.current}: [${status}] video=${videoTime.toFixed(1)}, aiPos=${aiVideoPos.toFixed(1)}, drift=${drift.toFixed(2)}s, global=${globalRate}, fine=${fineMultiplier}, final=${newRate} (user=${userSpeed})`);
       }
 
-      if (Math.abs(newRate - oldRate) > 0.005) {
+      if (Math.abs(newRate - oldRate) > 0.003) {
         elasticRateRef.current = newRate;
         if (audio && !audio.paused) {
           audio.playbackRate = newRate;
         }
         if (Math.abs(fineMultiplier - 1.0) > 0.005) {
-          console.log(`[train-sync] FINE: drift=${drift.toFixed(2)}s, ${globalRate} × ${userSpeed} × ${fineMultiplier} = ${newRate}`);
+          console.log(`[train-sync] FINE: drift=${drift.toFixed(2)}s, ${globalRate} x ${userSpeed} x ${fineMultiplier} = ${newRate}`);
         }
       }
     }, 150);
@@ -553,11 +568,15 @@ export function ClarifyAudioPanel({
   }, [onMuteYouTube, onTranscriptReady]);
 
   // ═══ GLOBAL RATE CALCULATION — the "train speed matching" ═══
+  // GlobalRate = totalAiDuration / totalVideoDuration
+  // If AI audio is shorter than video (fast TTS, slow speech) → rate < 1 → slow down playback
+  // If AI audio is longer than video (slow TTS, fast speech) → rate > 1 → speed up playback
   const calculateGlobalRate = useCallback((segs: ClarifyTranscriptSegment[]) => {
     let totalAiDuration = 0;
     let totalVideoDuration = 0;
     let measuredCount = 0;
 
+    console.log(`[train-sync] ─── Per-segment durations ───`);
     for (let i = 0; i < segs.length; i++) {
       const cached = cacheRef.current[i];
       if (cached?.audioDuration && cached.audioDuration > 0) {
@@ -566,6 +585,8 @@ export function ClarifyAudioPanel({
           totalAiDuration += cached.audioDuration;
           totalVideoDuration += videoDur;
           measuredCount++;
+          const segRatio = cached.audioDuration / videoDur;
+          console.log(`[train-sync]   Seg ${i}: ai=${cached.audioDuration.toFixed(2)}s, video=${videoDur.toFixed(2)}s, ratio=${segRatio.toFixed(3)}`);
         }
       }
     }
@@ -577,27 +598,30 @@ export function ClarifyAudioPanel({
     }
 
     // Global rate = how fast to play AI audio so it fits the video timeline
-    let rate = totalAiDuration / totalVideoDuration;
+    const rawRate = totalAiDuration / totalVideoDuration;
+    let rate = rawRate;
 
-    // Cap to sane range
-    if (rate > 2.0) {
-      console.warn(`[train-sync] Global rate ${rate.toFixed(2)} capped to 2.0`);
-      rate = 2.0;
-    } else if (rate < 0.5) {
-      console.warn(`[train-sync] Global rate ${rate.toFixed(2)} capped to 0.5`);
-      rate = 0.5;
+    // Cap to sane range — 0.25x to 2.5x (wide range to handle slow-speech videos)
+    if (rate > 2.5) {
+      console.warn(`[train-sync] Global rate ${rate.toFixed(3)} capped to 2.5`);
+      rate = 2.5;
+    } else if (rate < 0.25) {
+      console.warn(`[train-sync] Global rate ${rate.toFixed(3)} capped to 0.25`);
+      rate = 0.25;
     }
 
-    rate = Math.round(rate * 100) / 100;
+    rate = Math.round(rate * 1000) / 1000; // 3 decimal precision
     globalRateRef.current = rate;
 
     console.log(`[train-sync] ═══ GLOBAL RATE CALCULATED ═══`);
     console.log(`[train-sync]   ${measuredCount} segments measured`);
     console.log(`[train-sync]   Total AI audio: ${totalAiDuration.toFixed(2)}s`);
     console.log(`[train-sync]   Total video time: ${totalVideoDuration.toFixed(2)}s`);
-    console.log(`[train-sync]   Global rate: ${rate} (AI is ${rate > 1 ? 'slower' : 'faster'} than video)`);
+    console.log(`[train-sync]   Raw rate: ${rawRate.toFixed(4)}`);
+    console.log(`[train-sync]   Final global rate: ${rate}`);
+    console.log(`[train-sync]   Meaning: AI audio is ${rate < 1 ? 'shorter' : 'longer'} than video segments`);
     console.log(`[train-sync]   At user 1x: play at ${rate}x`);
-    console.log(`[train-sync]   At user 1.5x: play at ${(rate * 1.5).toFixed(2)}x`);
+    console.log(`[train-sync]   At user 1.25x: play at ${(rate * 1.25).toFixed(3)}x`);
 
     return rate;
   }, []);
