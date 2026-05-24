@@ -12,6 +12,8 @@
  * 6. stopped:     Back to start
  * 
  * KEY FEATURES:
+ * - SCHEDULER APPROACH: AI audio plays at natural speed (user's chosen speed)
+ *   Each segment triggers when video reaches its timestamp. No rate-matching.
  * - Progressive translation: 30-segment buffer, then translate ahead of playback
  * - Dual transcript: original (source lang) + translated, switchable by audio mode
  * - Single consistent voice (no male/female switching)
@@ -33,7 +35,6 @@ interface AudioCache {
     url?: string;
     useClientTTS?: boolean;
     generating?: boolean;
-    audioDuration?: number;  // actual duration of the TTS audio blob in seconds
   };
 }
 
@@ -103,26 +104,19 @@ export function ClarifyAudioPanel({
   const originalTxRef = useRef<ClarifyTranscriptSegment[]>([]);
   const translatedTxRef = useRef<ClarifyTranscriptSegment[]>([]);
   const speedRef = useRef(1);
-  const globalRateRef = useRef(1);  // TRAIN SYNC: raw rate from words/sec matching
-  const playRateRef = useRef(1);   // Actual playback rate = max(globalRate, MIN_SPEECH_RATE)
-  const elasticRateRef = useRef(1); // final playbackRate = playRate × userSpeed × fineMultiplier
-  const syncIntervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
+  const schedulerRef = useRef<ReturnType<typeof setInterval> | null>(null);  // SCHEDULER: timing-based sync loop
+  const lastScheduledSegRef = useRef(-1);  // SCHEDULER: last segment we triggered playback for
   const translatingMoreRef = useRef(false);
-  const initialHookupDoneRef = useRef(false); // true after first play alignment
 
   // Keep refs synced
   useEffect(() => { volRef.current = volume / 100; }, [volume]);
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
   useEffect(() => { txRef.current = transcript; }, [transcript]);
   useEffect(() => {
-    console.log(`[train-sync] User speed changed: ${speedRef.current} -> ${aiPlaybackSpeed}`);
+    console.log(`[scheduler] User speed changed: ${speedRef.current} -> ${aiPlaybackSpeed}`);
     speedRef.current = aiPlaybackSpeed;
-    // Recalculate: playRate x userSpeed (elastic will fine-tune from here)
-    const finalRate = Math.round(playRateRef.current * aiPlaybackSpeed * 1000) / 1000;
-    elasticRateRef.current = finalRate;
     if (audioRef.current) {
-      audioRef.current.playbackRate = finalRate;
-      console.log(`[train-sync] Updated: playRate=${playRateRef.current} x user=${aiPlaybackSpeed} = ${finalRate}`);
+      audioRef.current.playbackRate = aiPlaybackSpeed;
     }
   }, [aiPlaybackSpeed]);
   useEffect(() => { originalTxRef.current = originalTranscript; }, [originalTranscript]);
@@ -164,21 +158,7 @@ export function ClarifyAudioPanel({
     }
   }, [currentTime, transcript, currentSegIdx, onSubtitleChange, onSegmentChange]);
 
-  // ═══ AUDIO DURATION PROBE — measure blob duration for global rate calc ═══
-  const probeAudioDuration = useCallback((url: string): Promise<number> => {
-    return new Promise((resolve) => {
-      const temp = new Audio(url);
-      const timeout = setTimeout(() => { resolve(0); }, 3000); // 3s timeout
-      temp.addEventListener('loadedmetadata', () => {
-        clearTimeout(timeout);
-        resolve(temp.duration && isFinite(temp.duration) ? temp.duration : 0);
-      }, { once: true });
-      temp.addEventListener('error', () => { clearTimeout(timeout); resolve(0); }, { once: true });
-      temp.load();
-    });
-  }, []);
-
-  // ═══ TTS GENERATION (single voice) — now probes audio duration ═══
+  // ═══ TTS GENERATION (single voice) ═══
   const generateSeg = useCallback(async (i: number, text: string) => {
     if (cacheRef.current[i]?.url || cacheRef.current[i]?.useClientTTS || cacheRef.current[i]?.generating) return;
     if (genSetRef.current.has(i)) return;
@@ -212,12 +192,7 @@ export function ClarifyAudioPanel({
         const blob = await res.blob();
         if (blob.size > 0) {
           const url = URL.createObjectURL(blob);
-          // Probe audio duration for global rate calculation
-          const audioDuration = await probeAudioDuration(url);
-          cacheRef.current[i] = { url, audioDuration };
-          if (audioDuration > 0) {
-            console.log(`[train-sync] Seg ${i}: audio=${audioDuration.toFixed(2)}s probed`);
-          }
+          cacheRef.current[i] = { url };
         } else {
           cacheRef.current[i] = { useClientTTS: true };
           setUseClientTTS(true);
@@ -230,7 +205,7 @@ export function ClarifyAudioPanel({
 
     genSetRef.current.delete(i);
     setGeneratedCount(prev => prev + 1);
-  }, [videoId, selectedLang, probeAudioDuration]);
+  }, [videoId, selectedLang]);
 
   // ═══ PRE-GENERATE AHEAD + PROGRESSIVE TRANSLATION ═══
   useEffect(() => {
@@ -289,126 +264,14 @@ export function ClarifyAudioPanel({
     setIsTranslatingMore(false);
   }, [videoId, selectedLang, translatedUpTo]);
 
-  // ═══ AUDIO PLAYBACK — HYBRID: play at natural speed, wait when AI finishes early ═══
-  // MIN_SPEECH_RATE = 0.75x — below this, speech sounds unnatural/robotic.
-  // When globalRate < 0.75 (AI shorter than video), we play at 0.75x and WAIT
-  // for video to catch up between segments. This gives natural-sounding speech.
-  const MIN_SPEECH_RATE = 0.75;
+  // ═══ AUDIO PLAYBACK — SCHEDULER APPROACH ═══
+  // Play each segment at the user's chosen speed (NEVER distorted).
+  // The scheduler watches video time and triggers segments when video reaches their timestamp.
+  // Gaps between segments are natural pauses — no rate-matching needed.
 
-  // Schedule next segment — waits for video to catch up if AI finished early
-  const scheduleNextSeg = useCallback((i: number) => {
-    if (!isPlayingRef.current) return;
-    const segs = translatedTxRef.current;
-    const nextIdx = i + 1;
-    if (nextIdx >= segs.length) {
-      isPlayingRef.current = false;
-      setPhase('paused');
-      if (onMuteYouTube) onMuteYouTube(false);
-      return;
-    }
-
-    // If playRate > globalRate (we're playing faster than needed), wait for video
-    if (playRateRef.current > globalRateRef.current) {
-      const nextSegStart = segs[nextIdx].start;
-      const videoTime = currentTimeRef.current;
-
-      if (videoTime < nextSegStart - 0.3) {
-        // Video hasn't reached next segment — poll until it does
-        console.log(`[train-sync] Seg ${i} done early, video=${videoTime.toFixed(1)}, waiting for seg${nextIdx}.start=${nextSegStart.toFixed(1)}`);
-        const pollId = setInterval(() => {
-          if (!isPlayingRef.current) { clearInterval(pollId); return; }
-          if (currentTimeRef.current >= nextSegStart - 0.3) {
-            clearInterval(pollId);
-            console.log(`[train-sync] Video reached ${currentTimeRef.current.toFixed(1)}, playing seg ${nextIdx}`);
-            playSeg(nextIdx);
-          }
-        }, 100);
-        // Safety timeout
-        const waitMs = Math.min(((nextSegStart - videoTime) / speedRef.current) * 1000 + 500, 8000);
-        setTimeout(() => {
-          clearInterval(pollId);
-          if (isPlayingRef.current && playingIdxRef.current === i) {
-            console.log(`[train-sync] Wait timeout, playing seg ${nextIdx} anyway`);
-            playSeg(nextIdx);
-          }
-        }, waitMs);
-        return;
-      }
-    }
-
-    // No wait needed — play immediately
-    playSeg(nextIdx);
-  }, [onMuteYouTube]);
-
-  const playSeg = useCallback((i: number) => {
-    if (i < 0 || i >= translatedTxRef.current.length) {
-      isPlayingRef.current = false;
-      setPhase('paused');
-      if (onMuteYouTube) onMuteYouTube(false);
-      return;
-    }
-
-    playingIdxRef.current = i;
-    const cached = cacheRef.current[i];
-
-    if (cached?.url) {
-      if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
-      try {
-        const a = new Audio(cached.url);
-        a.volume = mutedRef.current ? 0 : volRef.current;
-        audioRef.current = a;
-
-        // HYBRID: play at playRate (never below MIN_SPEECH_RATE) x userSpeed
-        const finalRate = Math.round(playRateRef.current * speedRef.current * 1000) / 1000;
-        elasticRateRef.current = finalRate;
-        a.playbackRate = finalRate;
-        console.log(`[train-sync] Seg ${i}: playRate=${playRateRef.current} x user=${speedRef.current} = ${finalRate} (raw global=${globalRateRef.current})`);
-
-        // Lock speed — allow elastic fine-tuning but prevent browser drift
-        a.addEventListener('ratechange', () => {
-          const desired = elasticRateRef.current;
-          if (desired && Math.abs(a.playbackRate - desired) > 0.01) {
-            a.playbackRate = desired;
-          }
-        });
-
-        a.onended = () => { scheduleNextSeg(i); };
-        a.onerror = () => {
-          console.warn(`[clarify] Audio error on seg ${i}, skipping`);
-          if (cached.url) { try { URL.revokeObjectURL(cached.url); } catch {} }
-          cached.url = undefined;
-          cached.useClientTTS = true;
-          if (isPlayingRef.current) scheduleNextSeg(i);
-        };
-        a.play().catch(() => { if (isPlayingRef.current) scheduleNextSeg(i); });
-      } catch {
-        if (isPlayingRef.current) scheduleNextSeg(i);
-      }
-    } else if (cached?.useClientTTS) {
-      if ('speechSynthesis' in window) {
-        window.speechSynthesis.cancel();
-        const u = new SpeechSynthesisUtterance(translatedTxRef.current[i].text);
-        u.lang = selectedLang === 'en' ? 'en-US' : selectedLang;
-        u.volume = mutedRef.current ? 0 : volRef.current;
-        u.rate = playRateRef.current * speedRef.current;
-        u.onend = () => { scheduleNextSeg(i); };
-        u.onerror = () => { if (isPlayingRef.current) scheduleNextSeg(i); };
-        window.speechSynthesis.speak(u);
-      }
-    } else if (i >= translatedTxRef.current.length) {
-      setTimeout(() => { if (isPlayingRef.current) playSeg(i); }, 800);
-    } else {
-      setTimeout(() => { if (isPlayingRef.current) playSeg(i); }, 400);
-    }
-  }, [selectedLang, onMuteYouTube, scheduleNextSeg]);
-
-  // ═══ ELASTIC SYNC: drift correction + seek detection ═══
-  // Rate matching handles ~95% of sync. This loop handles residual drift + user seeking.
   const currentTimeRef = useRef(currentTime);
   const prevVideoTimeRef = useRef(currentTime);
   useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
-  const syncTickRef = useRef(0);
-  const jumpCooldownRef = useRef(0);
 
   // Helper: find the segment index that covers a given video time
   const findSegForTime = useCallback((videoTime: number, segs: ClarifyTranscriptSegment[]): number => {
@@ -421,130 +284,118 @@ export function ClarifyAudioPanel({
     return segs.length - 1;
   }, []);
 
+  // Play a single segment at user's chosen speed — no rate math, no onended chaining
+  const playSeg = useCallback((i: number) => {
+    if (i < 0 || i >= translatedTxRef.current.length) return;
+
+    playingIdxRef.current = i;
+    lastScheduledSegRef.current = i;
+    const cached = cacheRef.current[i];
+
+    if (cached?.url) {
+      if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
+      try {
+        const a = new Audio(cached.url);
+        a.volume = mutedRef.current ? 0 : volRef.current;
+        a.playbackRate = speedRef.current;
+        audioRef.current = a;
+
+        console.log(`[scheduler] Playing seg ${i} at ${speedRef.current}x (video=${currentTimeRef.current.toFixed(1)}, seg.start=${translatedTxRef.current[i].start.toFixed(1)})`);
+
+        a.onended = () => {
+          // Segment finished naturally — scheduler will pick up next one
+          playingIdxRef.current = -1;
+        };
+        a.onerror = () => {
+          console.warn(`[scheduler] Audio error on seg ${i}, marking for client TTS`);
+          if (cached.url) { try { URL.revokeObjectURL(cached.url); } catch {} }
+          cached.url = undefined;
+          cached.useClientTTS = true;
+          playingIdxRef.current = -1;
+        };
+        a.play().catch(() => { playingIdxRef.current = -1; });
+      } catch {
+        playingIdxRef.current = -1;
+      }
+    } else if (cached?.useClientTTS) {
+      if ('speechSynthesis' in window) {
+        window.speechSynthesis.cancel();
+        const u = new SpeechSynthesisUtterance(translatedTxRef.current[i].text);
+        u.lang = selectedLang === 'en' ? 'en-US' : selectedLang;
+        u.volume = mutedRef.current ? 0 : volRef.current;
+        u.rate = speedRef.current;
+        u.onend = () => { playingIdxRef.current = -1; };
+        u.onerror = () => { playingIdxRef.current = -1; };
+        window.speechSynthesis.speak(u);
+      }
+    }
+    // If no cached audio yet, do nothing — scheduler will retry when cache is ready
+  }, [selectedLang]);
+
+  // ═══ SCHEDULER LOOP — watches video time, triggers segments ═══
   useEffect(() => {
     if (phase !== 'playing') {
-      if (syncIntervalRef.current) {
-        clearInterval(syncIntervalRef.current);
-        syncIntervalRef.current = null;
-        elasticRateRef.current = speedRef.current;
-        console.log(`[train-sync] Elastic stopped (phase=${phase})`);
+      if (schedulerRef.current) {
+        clearInterval(schedulerRef.current);
+        schedulerRef.current = null;
+        console.log(`[scheduler] Stopped (phase=${phase})`);
       }
       return;
     }
 
-    console.log(`[train-sync] === ELASTIC SYNC STARTED (globalRate=${globalRateRef.current}) ===`);
-    syncTickRef.current = 0;
+    console.log(`[scheduler] === SCHEDULER STARTED ===`);
+    const SEEK_THRESHOLD = 2.0;  // seconds — detect user seeking
 
-    const SEEK_THRESHOLD = 5.0;       // seconds — detect user seeking (video time jumps between ticks)
-    const LARGE_DRIFT_THRESHOLD = 5.0; // seconds — trigger re-sync jump
-    const FINE_THRESHOLD = 0.5;        // seconds — below this = in sync, no adjustment
-    const JUMP_COOLDOWN_MS = 2000;
-
-    syncIntervalRef.current = setInterval(() => {
-      syncTickRef.current++;
-      const verbose = syncTickRef.current % 20 === 1; // ~3s
-
+    schedulerRef.current = setInterval(() => {
       if (!isPlayingRef.current) return;
 
-      const audio = audioRef.current;
-      const aiSegIdx = playingIdxRef.current;
       const segs = translatedTxRef.current;
+      if (segs.length === 0) return;
 
-      if (!audio || aiSegIdx < 0 || aiSegIdx >= segs.length) {
-        if (verbose) console.log(`[train-sync] tick ${syncTickRef.current}: waiting (audio=${!!audio}, seg=${aiSegIdx}/${segs.length})`);
-        return;
-      }
-
-      const aiSeg = segs[aiSegIdx];
       const videoTime = currentTimeRef.current;
-
-      // Detect user seeking: video time jumped significantly since last check
-      const videoTimeDelta = Math.abs(videoTime - prevVideoTimeRef.current);
+      const prevVideoTime = prevVideoTimeRef.current;
       prevVideoTimeRef.current = videoTime;
-      const now = Date.now();
-      const cooldownActive = (now - jumpCooldownRef.current) < JUMP_COOLDOWN_MS;
 
-      // USER SEEK DETECTION: video time jumped >5s in one tick = user seeked
-      if (videoTimeDelta > SEEK_THRESHOLD && !cooldownActive) {
-        const targetSegIdx = findSegForTime(videoTime, segs);
-        console.log(`[train-sync] USER SEEK: video jumped ${videoTimeDelta.toFixed(1)}s, re-aligning to seg ${targetSegIdx} (videoTime=${videoTime.toFixed(1)})`);
-        jumpCooldownRef.current = now;
-        elasticRateRef.current = globalRateRef.current * speedRef.current;
-        if (audio) { audio.pause(); audio.onended = null; }
-        playSeg(targetSegIdx);
-        return;
+      // ─── USER SEEK DETECTION ───
+      if (Math.abs(videoTime - prevVideoTime) > SEEK_THRESHOLD) {
+        console.log(`[scheduler] USER SEEK detected: ${prevVideoTime.toFixed(1)} -> ${videoTime.toFixed(1)}`);
+        // Stop current audio, reset scheduler to find new matching segment
+        if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
+        if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+        playingIdxRef.current = -1;
+        lastScheduledSegRef.current = -1;  // Reset so scheduler finds new segment
       }
 
-      // Calculate where AI audio is in "video content time"
-      let aiVideoPos: number;
-      if (audio.duration && audio.duration > 0 && !audio.paused) {
-        const segVideoDuration = aiSeg.end - aiSeg.start;
-        const audioFraction = audio.currentTime / audio.duration;
-        aiVideoPos = aiSeg.start + audioFraction * segVideoDuration;
-      } else {
-        aiVideoPos = aiSeg.start;
-      }
+      // ─── If audio is currently playing, don't interrupt it ───
+      if (playingIdxRef.current >= 0) return;
 
-      const drift = aiVideoPos - videoTime; // + = AI ahead, - = AI behind
-      const absDrift = Math.abs(drift);
-      const globalRate = globalRateRef.current;
-      const userSpeed = speedRef.current;
+      // ─── Find which segment the video is currently in ───
+      const targetIdx = findSegForTime(videoTime, segs);
+      if (targetIdx < 0) return;
 
-      // ─── LARGE DRIFT CORRECTION: jump AI to match video position ───
-      if (absDrift > LARGE_DRIFT_THRESHOLD && !cooldownActive) {
-        const targetSegIdx = findSegForTime(videoTime, segs);
-        console.log(`[train-sync] LARGE DRIFT: ${drift.toFixed(1)}s (AI ${drift > 0 ? 'ahead' : 'behind'}) — RE-SYNCING to seg ${targetSegIdx} (video=${videoTime.toFixed(1)})`);
-        jumpCooldownRef.current = now;
-        elasticRateRef.current = globalRate * userSpeed;
-        if (audio) { audio.pause(); audio.onended = null; }
-        playSeg(targetSegIdx);
-        return;
-      }
+      // ─── Don't replay the same segment we just played ───
+      if (targetIdx === lastScheduledSegRef.current) return;
 
-      // ─── ELASTIC FINE-TUNING: ±2-8% adjustments based on drift magnitude ───
-      const playRate = playRateRef.current;
-      let fineMultiplier = 1.0;
-
-      if (drift > FINE_THRESHOLD) {
-        // AI ahead — slow down
-        if (drift > 3.0) fineMultiplier = 0.92;
-        else if (drift > 2.0) fineMultiplier = 0.94;
-        else if (drift > 1.0) fineMultiplier = 0.96;
-        else fineMultiplier = 0.98;
-      } else if (drift < -FINE_THRESHOLD) {
-        // AI behind — speed up
-        if (drift < -3.0) fineMultiplier = 1.08;
-        else if (drift < -2.0) fineMultiplier = 1.06;
-        else if (drift < -1.0) fineMultiplier = 1.04;
-        else fineMultiplier = 1.02;
-      }
-
-      // Final rate = playRate x userSpeed x fineMultiplier
-      const newRate = Math.round(playRate * userSpeed * fineMultiplier * 1000) / 1000;
-      const oldRate = elasticRateRef.current;
-
-      if (verbose) {
-        const status = absDrift > LARGE_DRIFT_THRESHOLD ? 'JUMP-PENDING' :
-                       absDrift > FINE_THRESHOLD ? 'FINE-TUNE' : 'IN-SYNC';
-        console.log(`[train-sync] tick ${syncTickRef.current}: [${status}] video=${videoTime.toFixed(1)}, aiPos=${aiVideoPos.toFixed(1)}, drift=${drift.toFixed(2)}s, playRate=${playRate}, fine=${fineMultiplier}, final=${newRate} (user=${userSpeed})`);
-      }
-
-      if (Math.abs(newRate - oldRate) > 0.003) {
-        elasticRateRef.current = newRate;
-        if (audio && !audio.paused) {
-          audio.playbackRate = newRate;
-        }
-        if (Math.abs(fineMultiplier - 1.0) > 0.005) {
-          console.log(`[train-sync] FINE: drift=${drift.toFixed(2)}s, ${playRate} x ${userSpeed} x ${fineMultiplier} = ${newRate}`);
+      // ─── Check if video has reached this segment's start (with small tolerance) ───
+      const seg = segs[targetIdx];
+      if (videoTime >= seg.start - 0.2) {
+        // Check if TTS is ready
+        const cached = cacheRef.current[targetIdx];
+        if (cached?.url || cached?.useClientTTS) {
+          playSeg(targetIdx);
+        } else {
+          // TTS not ready yet — skip this segment, scheduler will try next one
+          console.log(`[scheduler] Seg ${targetIdx} not cached yet, skipping`);
+          lastScheduledSegRef.current = targetIdx;
         }
       }
-    }, 150);
+    }, 100);
 
     return () => {
-      if (syncIntervalRef.current) {
-        clearInterval(syncIntervalRef.current);
-        syncIntervalRef.current = null;
-        console.log(`[train-sync] Elastic cleanup`);
+      if (schedulerRef.current) {
+        clearInterval(schedulerRef.current);
+        schedulerRef.current = null;
+        console.log(`[scheduler] Cleanup`);
       }
     };
   }, [phase, playSeg, findSegForTime]);
@@ -553,24 +404,18 @@ export function ClarifyAudioPanel({
 
   // Speed changes are applied in the aiPlaybackSpeed ref sync useEffect above
 
-  /** User clicks "Play Clarified Audio" or "Resume" — TRAIN SYNC: ONE initial hookup */
+  /** User clicks "Play Clarified Audio" or "Resume" — scheduler handles timing */
   const handlePlay = useCallback(() => {
     if (onMuteYouTube) onMuteYouTube(true);
     if (onPlayYouTube) onPlayYouTube();
     isPlayingRef.current = true;
+    playingIdxRef.current = -1;
+    lastScheduledSegRef.current = -1;  // Let scheduler find the right segment
 
-    // Calculate initial rate = playRate x userSpeed
-    const initialRate = Math.round(playRateRef.current * speedRef.current * 1000) / 1000;
-    elasticRateRef.current = initialRate;
-
+    console.log(`[scheduler] === PLAY === speed=${speedRef.current}x, videoTime=${currentTimeRef.current.toFixed(1)}`);
     setPhase('playing');
-
-    // Jump to segment matching current video position
-    const startIdx = currentSegIdx >= 0 ? currentSegIdx : 0;
-    initialHookupDoneRef.current = true;
-    console.log(`[train-sync] === INITIAL HOOKUP === seg ${startIdx}, globalRate=${globalRateRef.current}, playRate=${playRateRef.current}, finalRate=${initialRate} (user=${speedRef.current})`);
-    playSeg(startIdx);
-  }, [currentSegIdx, playSeg, onMuteYouTube, onPlayYouTube]);
+    // Scheduler loop (started by phase useEffect) will pick up the first segment
+  }, [onMuteYouTube, onPlayYouTube]);
 
   /** User clicks "Pause" */
   const handlePause = useCallback(() => {
@@ -595,11 +440,8 @@ export function ClarifyAudioPanel({
   /** User clicks "Stop" */
   const handleStop = useCallback(() => {
     isPlayingRef.current = false;
-    if (syncIntervalRef.current) { clearInterval(syncIntervalRef.current); syncIntervalRef.current = null; }
-    globalRateRef.current = 1;
-    playRateRef.current = 1;
-    initialHookupDoneRef.current = false;
-    elasticRateRef.current = speedRef.current;
+    if (schedulerRef.current) { clearInterval(schedulerRef.current); schedulerRef.current = null; }
+    lastScheduledSegRef.current = -1;
     if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; audioRef.current = null; }
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     Object.values(cacheRef.current).forEach(e => { if (e.url) URL.revokeObjectURL(e.url); });
@@ -618,105 +460,6 @@ export function ClarifyAudioPanel({
     if (onTranscriptReady) onTranscriptReady([]);
   }, [onMuteYouTube, onTranscriptReady]);
 
-  // ═══ GLOBAL RATE CALCULATION — words/sec rate matching + MIN SPEECH RATE ═══
-  //
-  // STEP 1: Calculate raw globalRate from words/sec matching
-  //   videoWPS = totalWords / totalVideoDuration (how fast video speaks)
-  //   aiWPS    = totalWords / totalAiDuration    (how fast AI speaks at 1.0x)
-  //   globalRate = videoWPS / aiWPS              (rate to match paces)
-  //
-  // STEP 2: Set playRate = max(globalRate, MIN_SPEECH_RATE)
-  //   If globalRate < 0.75, play at 0.75x and use waiting to fill the gap.
-  //   Speech below 0.75x sounds unnatural and robotic.
-  //
-  const calculateGlobalRate = useCallback((segs: ClarifyTranscriptSegment[]) => {
-    console.log('[train-sync] ===== GLOBAL RATE CALCULATION START =====');
-    const sampleSize = Math.min(8, segs.length);
-    console.log(`[train-sync] Sampling first ${sampleSize} of ${segs.length} segments`);
-
-    let totalWords = 0;
-    let totalAiDuration = 0;
-    let totalVideoDuration = 0;
-    let measuredCount = 0;
-
-    for (let i = 0; i < sampleSize; i++) {
-      const cached = cacheRef.current[i];
-      const videoDur = segs[i].end - segs[i].start;
-      const aiDur = cached?.audioDuration || 0;
-      const words = segs[i].text.split(/\s+/).filter((w: string) => w.length > 0).length;
-
-      if (aiDur > 0 && videoDur > 0.1) {
-        totalWords += words;
-        totalAiDuration += aiDur;
-        totalVideoDuration += videoDur;
-        measuredCount++;
-        console.log(`[train-sync]   Seg ${i}: "${segs[i].text.substring(0, 50)}" ${words}w, videoDur=${videoDur.toFixed(2)}s, aiDur=${aiDur.toFixed(2)}s, ratio=${(aiDur/videoDur).toFixed(3)}`);
-      } else {
-        console.log(`[train-sync]   Seg ${i}: SKIPPED (aiDur=${aiDur.toFixed(2)}, videoDur=${videoDur.toFixed(2)})`);
-      }
-    }
-
-    console.log('[train-sync] === TOTALS ===');
-    console.log(`[train-sync]   Measured segments: ${measuredCount}`);
-    console.log(`[train-sync]   Total words: ${totalWords}`);
-    console.log(`[train-sync]   Total video duration: ${totalVideoDuration.toFixed(2)}s`);
-    console.log(`[train-sync]   Total AI duration: ${totalAiDuration.toFixed(2)}s`);
-
-    if (measuredCount < 2 || totalVideoDuration === 0 || totalAiDuration === 0 || totalWords === 0) {
-      console.log(`[train-sync] Not enough data, using globalRate=1.0, playRate=1.0`);
-      globalRateRef.current = 1;
-      playRateRef.current = 1;
-      return 1;
-    }
-
-    // Calculate speaking rates
-    const videoWPS = totalWords / totalVideoDuration;
-    const aiWPS = totalWords / totalAiDuration;
-
-    console.log(`[train-sync]   Video WPS: ${totalWords} / ${totalVideoDuration.toFixed(2)} = ${videoWPS.toFixed(3)} words/sec`);
-    console.log(`[train-sync]   AI WPS:    ${totalWords} / ${totalAiDuration.toFixed(2)} = ${aiWPS.toFixed(3)} words/sec`);
-
-    // globalRate = videoWPS / aiWPS (how to match paces)
-    let rawRate = videoWPS / aiWPS;
-    console.log(`[train-sync]   Raw rate:  ${videoWPS.toFixed(3)} / ${aiWPS.toFixed(3)} = ${rawRate.toFixed(4)}`);
-
-    // Cross-check: totalAiDuration / totalVideoDuration should equal rawRate
-    const durationRatio = totalAiDuration / totalVideoDuration;
-    console.log(`[train-sync]   Cross-check: aiDur/videoDur = ${totalAiDuration.toFixed(2)}/${totalVideoDuration.toFixed(2)} = ${durationRatio.toFixed(4)} (should equal raw rate)`);
-
-    // Cap to safe browser range
-    if (rawRate > 2.5) { console.warn(`[train-sync] Raw rate ${rawRate.toFixed(3)} capped to 2.5`); rawRate = 2.5; }
-    else if (rawRate < 0.25) { console.warn(`[train-sync] Raw rate ${rawRate.toFixed(3)} capped to 0.25`); rawRate = 0.25; }
-
-    const globalRate = Math.round(rawRate * 1000) / 1000;
-    globalRateRef.current = globalRate;
-
-    // playRate = actual rate used for audio playback (min 0.75x for natural speech)
-    const playRate = Math.max(globalRate, MIN_SPEECH_RATE);
-    playRateRef.current = playRate;
-
-    // Verification
-    const aiAtGlobal = aiWPS * globalRate;
-    const aiAtPlay = aiWPS * playRate;
-    const needsWaiting = playRate > globalRate;
-
-    console.log('[train-sync] ===== RESULTS =====');
-    console.log(`[train-sync]   Global rate: ${globalRate}x (raw pace-matching rate)`);
-    console.log(`[train-sync]   Play rate:   ${playRate}x (actual audio playback, min ${MIN_SPEECH_RATE}x)`);
-    console.log(`[train-sync]   AI at global: ${aiWPS.toFixed(2)} x ${globalRate} = ${aiAtGlobal.toFixed(2)} wps ${Math.abs(aiAtGlobal - videoWPS) < 0.1 ? '= MATCHED' : '(close to video ' + videoWPS.toFixed(2) + ')'}`);
-    console.log(`[train-sync]   AI at play:   ${aiWPS.toFixed(2)} x ${playRate} = ${aiAtPlay.toFixed(2)} wps`);
-    if (needsWaiting) {
-      console.log(`[train-sync]   MODE: HYBRID - play at ${playRate}x + wait between segments`);
-      console.log(`[train-sync]   (globalRate ${globalRate} < min ${MIN_SPEECH_RATE}, so waiting fills the gap)`);
-    } else {
-      console.log(`[train-sync]   MODE: DIRECT - play at ${playRate}x, no waiting needed`);
-    }
-    console.log(`[train-sync]   At user 1.25x: play at ${(playRate * 1.25).toFixed(3)}x`);
-    console.log('[train-sync] ===== END =====');
-
-    return globalRate;
-  }, []);
-
   /** User selects options from modal -> start processing */
   const handleSelectOption = useCallback(async (mode: OutputMode, lang: string) => {
     setSelectedMode(mode);
@@ -728,9 +471,6 @@ export function ClarifyAudioPanel({
     genSetRef.current.clear();
     setGeneratedCount(0);
     setUseClientTTS(false);
-    globalRateRef.current = 1;
-    playRateRef.current = 1;
-    initialHookupDoneRef.current = false;
 
     try {
       setProcessingStage('Fetching & translating transcript...');
@@ -774,17 +514,14 @@ export function ClarifyAudioPanel({
       setProcessingStage(`Ready! ${translated}/${total} segments translated`);
 
       if (mode !== 'subtitles_only') {
-        // Generate first batch of TTS audio (with duration probing)
+        // Generate first batch of TTS audio
         setProcessingStage('Generating AI audio...');
         const segsForTTS = data.transcript || [];
         const batch = segsForTTS.slice(0, 8);
         const parsedBatch = batch.map((s: any) => s.text || '');
         await Promise.allSettled(parsedBatch.map((text: string, i: number) => generateSeg(i, text)));
 
-        // ═══ TRAIN SYNC: Calculate global rate from first batch ═══
-        const globalRate = calculateGlobalRate(transSegs);
-        setProcessingStage(`Ready! Play rate: ${playRateRef.current}x (global: ${globalRate}x)`);
-
+        setProcessingStage('Ready! Scheduler mode - natural speed playback');
         setPhase('ready');
       } else {
         setPhase('ready');
@@ -793,7 +530,7 @@ export function ClarifyAudioPanel({
       setError(e instanceof Error ? e.message : 'Processing failed');
       setPhase('error');
     }
-  }, [videoId, onTranscriptReady, generateSeg, calculateGlobalRate]);
+  }, [videoId, onTranscriptReady, generateSeg]);
 
   /** handleRestart — full restart (re-choose options) */
   const handleRestart = useCallback(() => {
@@ -825,7 +562,7 @@ export function ClarifyAudioPanel({
   // Cleanup on unmount ONLY
   useEffect(() => {
     return () => {
-      if (syncIntervalRef.current) { clearInterval(syncIntervalRef.current); syncIntervalRef.current = null; }
+      if (schedulerRef.current) { clearInterval(schedulerRef.current); schedulerRef.current = null; }
       if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; }
       if ('speechSynthesis' in window) window.speechSynthesis.cancel();
       Object.values(cacheRef.current).forEach(e => { if (e.url) URL.revokeObjectURL(e.url); });
