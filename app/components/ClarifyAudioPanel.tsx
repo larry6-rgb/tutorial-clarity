@@ -60,17 +60,44 @@ interface ClarifyAudioPanelProps {
 }
 
 // ═══ MULTI-VOICE SYSTEM ═══
-// Assign different voices based on detected speaker changes in transcript.
+// Voice pools for same-gender variety — speakers cycle through these.
 // OpenAI voices: 'onyx' (deep male), 'echo' (male), 'fable' (male),
 //                'nova' (female), 'shimmer' (female), 'alloy' (neutral)
-const VOICE_MAP: Record<string, string> = {
-  male: 'onyx',      // Deep male voice
-  female: 'nova',    // Clear female voice
-  neutral: 'alloy',  // Neutral fallback
-};
+export const FEMALE_VOICES = ['nova', 'shimmer', 'alloy'];
+export const MALE_VOICES   = ['onyx', 'fable', 'echo'];
 
 // Default voice when no speaker detection is possible
 const DEFAULT_VOICE = 'onyx';
+
+/**
+ * Compute a deterministic voice assignment for every speaker in the config.
+ * Speakers are sorted numerically so the mapping is stable regardless of
+ * object-key iteration order.  Same-gender speakers cycle through their pool:
+ *   Female: nova -> shimmer -> alloy -> nova ...
+ *   Male:   onyx -> fable   -> echo  -> onyx ...
+ */
+export function assignVoicesToSpeakers(config: SpeakerConfig): Record<string, string> {
+  const assignments: Record<string, string> = {};
+  let femaleIdx = 0;
+  let maleIdx = 0;
+
+  const sorted = Object.keys(config).sort((a, b) => {
+    const na = parseInt(a.match(/\d+/)?.[0] || '0');
+    const nb = parseInt(b.match(/\d+/)?.[0] || '0');
+    return na - nb;
+  });
+
+  for (const id of sorted) {
+    if (config[id] === 'female') {
+      assignments[id] = FEMALE_VOICES[femaleIdx % FEMALE_VOICES.length];
+      femaleIdx++;
+    } else {
+      assignments[id] = MALE_VOICES[maleIdx % MALE_VOICES.length];
+      maleIdx++;
+    }
+  }
+  return assignments;
+}
 
 /**
  * Detect speaker changes in transcript using timing gaps.
@@ -116,23 +143,23 @@ function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscript
 }
 
 /**
- * Get the appropriate TTS voice for a segment based on speaker config or auto-detection.
- * If speakerConfig is provided, uses that. Otherwise auto-assigns:
- * Even speaker IDs (0, 2, ...) = male voice, Odd (1, 3, ...) = female voice.
+ * Get the appropriate TTS voice for a segment.
+ * When a manual speaker config exists, uses assignVoicesToSpeakers() so that
+ * multiple speakers of the same gender get distinct voices from the pool.
+ * Falls back to auto-detect: even speaker IDs = male[0], odd = female[0].
  */
 function getVoiceForSegment(segment: ClarifyTranscriptSegment, config?: SpeakerConfig): string {
   const speakerId = segment.speaker || 'speaker_0';
 
-  // If manual config exists for this speaker, use it
-  if (config && config[speakerId]) {
-    const gender = config[speakerId];
-    return gender === 'female' ? VOICE_MAP.female : VOICE_MAP.male;
+  // If manual config exists, compute full voice assignment map (cheap — config is small)
+  if (config && Object.keys(config).length > 0) {
+    const assignments = assignVoicesToSpeakers(config);
+    return assignments[speakerId] || DEFAULT_VOICE;
   }
 
-  // Auto-detect: even = male, odd = female
+  // Auto-detect fallback: even = first male voice, odd = first female voice
   const speakerNum = parseInt(speakerId.match(/\d+/)?.[0] || '0');
-  const isMale = speakerNum % 2 === 0;
-  return isMale ? VOICE_MAP.male : VOICE_MAP.female;
+  return speakerNum % 2 === 0 ? MALE_VOICES[0] : FEMALE_VOICES[0];
 }
 
 function fmtTime(sec: number): string {
@@ -266,7 +293,7 @@ export function ClarifyAudioPanel({
       const gender = configGender || (speakerNum % 2 === 0 ? 'male' : 'female');
       const source = configGender ? 'config' : 'auto';
 
-      console.log(`[multi-voice] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> ${voice}`);
+      console.log(`[voice-variety] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`);
 
       const res = await fetch('/api/multi-voice-tts', {
         method: 'POST',

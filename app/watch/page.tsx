@@ -2,7 +2,7 @@
 
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { ClarifyAudioPanel, SpeakerConfig } from '../components/ClarifyAudioPanel';
+import { ClarifyAudioPanel, SpeakerConfig, assignVoicesToSpeakers, FEMALE_VOICES, MALE_VOICES } from '../components/ClarifyAudioPanel';
 
 interface SavedVideo {
     id: string;
@@ -2043,59 +2043,78 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                     {detectedSpeakers.length} speakers detected. Assign male/female voices for a more natural experience.
                                                     {Object.keys(speakerConfig).length === 0 && ' Currently using auto-detect.'}
                                                 </div>
-                                                {detectedSpeakers.map((speakerId, idx) => {
-                                                    const speakerNum = parseInt(speakerId.match(/\d+/)?.[0] || '0');
-                                                    const currentGender = speakerConfig[speakerId] || (speakerNum % 2 === 0 ? 'male' : 'female');
-                                                    const isConfigured = !!speakerConfig[speakerId];
-                                                    return (
-                                                        <div key={speakerId} style={{
-                                                            display: 'flex', alignItems: 'center', gap: '8px',
-                                                            marginBottom: idx < detectedSpeakers.length - 1 ? '6px' : '0',
-                                                            padding: '4px 6px', borderRadius: '4px',
-                                                            backgroundColor: isConfigured ? 'rgba(59,130,246,0.1)' : 'transparent',
-                                                        }}>
-                                                            <span style={{
-                                                                fontSize: '11px', color: '#cbd5e1',
-                                                                minWidth: '70px', fontWeight: isConfigured ? 'bold' : 'normal',
+                                                {(() => {
+                                                    // Build a full preview config so we can show voice assignments
+                                                    const previewConfig: SpeakerConfig = {};
+                                                    detectedSpeakers.forEach(sid => {
+                                                        const num = parseInt(sid.match(/\d+/)?.[0] || '0');
+                                                        previewConfig[sid] = speakerConfig[sid] || (num % 2 === 0 ? 'male' : 'female');
+                                                    });
+                                                    const voiceMap = assignVoicesToSpeakers(previewConfig);
+
+                                                    return detectedSpeakers.map((speakerId, idx) => {
+                                                        const currentGender = previewConfig[speakerId];
+                                                        const assignedVoice = voiceMap[speakerId] || 'onyx';
+                                                        const isConfigured = !!speakerConfig[speakerId];
+
+                                                        // Preview what voice would be assigned if toggled
+                                                        const altGender = currentGender === 'male' ? 'female' : 'male';
+                                                        const altConfig = { ...previewConfig, [speakerId]: altGender as 'male' | 'female' };
+                                                        const altMap = assignVoicesToSpeakers(altConfig);
+                                                        const maleVoice = currentGender === 'male' ? assignedVoice : altMap[speakerId];
+                                                        const femaleVoice = currentGender === 'female' ? assignedVoice : altMap[speakerId];
+
+                                                        return (
+                                                            <div key={speakerId} style={{
+                                                                display: 'flex', alignItems: 'center', gap: '8px',
+                                                                marginBottom: idx < detectedSpeakers.length - 1 ? '6px' : '0',
+                                                                padding: '4px 6px', borderRadius: '4px',
+                                                                backgroundColor: isConfigured ? 'rgba(59,130,246,0.1)' : 'transparent',
                                                             }}>
-                                                                Speaker {idx}
-                                                            </span>
-                                                            <label style={{
-                                                                display: 'flex', alignItems: 'center', gap: '3px',
-                                                                fontSize: '11px', color: currentGender === 'male' ? '#60a5fa' : '#9ca3af',
-                                                                cursor: 'pointer',
-                                                            }}>
-                                                                <input
-                                                                    type="radio"
-                                                                    name={`speaker-voice-${idx}`}
-                                                                    checked={currentGender === 'male'}
-                                                                    onChange={() => handleSpeakerGenderChange(speakerId, 'male')}
-                                                                    style={{ accentColor: '#3b82f6', width: '12px', height: '12px' }}
-                                                                />
-                                                                Male
-                                                            </label>
-                                                            <label style={{
-                                                                display: 'flex', alignItems: 'center', gap: '3px',
-                                                                fontSize: '11px', color: currentGender === 'female' ? '#f472b6' : '#9ca3af',
-                                                                cursor: 'pointer',
-                                                            }}>
-                                                                <input
-                                                                    type="radio"
-                                                                    name={`speaker-voice-${idx}`}
-                                                                    checked={currentGender === 'female'}
-                                                                    onChange={() => handleSpeakerGenderChange(speakerId, 'female')}
-                                                                    style={{ accentColor: '#ec4899', width: '12px', height: '12px' }}
-                                                                />
-                                                                Female
-                                                            </label>
-                                                            <span style={{
-                                                                fontSize: '9px', color: '#475569', marginLeft: 'auto',
-                                                            }}>
-                                                                {currentGender === 'male' ? 'onyx' : 'nova'}
-                                                            </span>
-                                                        </div>
-                                                    );
-                                                })}
+                                                                <span style={{
+                                                                    fontSize: '11px', color: '#cbd5e1',
+                                                                    minWidth: '70px', fontWeight: isConfigured ? 'bold' : 'normal',
+                                                                }}>
+                                                                    Speaker {idx}
+                                                                </span>
+                                                                <label style={{
+                                                                    display: 'flex', alignItems: 'center', gap: '3px',
+                                                                    fontSize: '11px', color: currentGender === 'male' ? '#60a5fa' : '#9ca3af',
+                                                                    cursor: 'pointer',
+                                                                }}>
+                                                                    <input
+                                                                        type="radio"
+                                                                        name={`speaker-voice-${idx}`}
+                                                                        checked={currentGender === 'male'}
+                                                                        onChange={() => handleSpeakerGenderChange(speakerId, 'male')}
+                                                                        style={{ accentColor: '#3b82f6', width: '12px', height: '12px' }}
+                                                                    />
+                                                                    Male ({maleVoice})
+                                                                </label>
+                                                                <label style={{
+                                                                    display: 'flex', alignItems: 'center', gap: '3px',
+                                                                    fontSize: '11px', color: currentGender === 'female' ? '#f472b6' : '#9ca3af',
+                                                                    cursor: 'pointer',
+                                                                }}>
+                                                                    <input
+                                                                        type="radio"
+                                                                        name={`speaker-voice-${idx}`}
+                                                                        checked={currentGender === 'female'}
+                                                                        onChange={() => handleSpeakerGenderChange(speakerId, 'female')}
+                                                                        style={{ accentColor: '#ec4899', width: '12px', height: '12px' }}
+                                                                    />
+                                                                    Female ({femaleVoice})
+                                                                </label>
+                                                                <span style={{
+                                                                    fontSize: '9px', color: '#94a3b8', marginLeft: 'auto',
+                                                                    fontWeight: 'bold', textTransform: 'capitalize',
+                                                                }}>
+                                                                    {assignedVoice}
+                                                                </span>
+                                                            </div>
+                                                        );
+                                                    });
+                                                })()}
                                                 {Object.keys(speakerConfig).length > 0 && (
                                                     <div style={{
                                                         fontSize: '9px', color: '#60a5fa', marginTop: '6px',
