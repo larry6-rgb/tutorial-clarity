@@ -42,10 +42,15 @@ interface AudioCache {
   };
 }
 
+// Speaker voice configuration: maps speaker IDs to 'male' | 'female'
+export type SpeakerConfig = Record<string, 'male' | 'female'>;
+
 interface ClarifyAudioPanelProps {
   videoId: string;
   currentTime: number;
   aiPlaybackSpeed?: number;
+  speakerConfig?: SpeakerConfig;           // Optional manual voice config per speaker
+  onSpeakersDetected?: (speakers: string[]) => void;  // Callback when speakers are detected
   onSubtitleChange?: (subtitle: string | null) => void;
   onMuteYouTube?: (mute: boolean) => void;
   onPlayYouTube?: () => void;
@@ -111,15 +116,23 @@ function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscript
 }
 
 /**
- * Get the appropriate TTS voice for a segment based on its speaker ID.
+ * Get the appropriate TTS voice for a segment based on speaker config or auto-detection.
+ * If speakerConfig is provided, uses that. Otherwise auto-assigns:
  * Even speaker IDs (0, 2, ...) = male voice, Odd (1, 3, ...) = female voice.
  */
-function getVoiceForSegment(segment: ClarifyTranscriptSegment): string {
+function getVoiceForSegment(segment: ClarifyTranscriptSegment, config?: SpeakerConfig): string {
   const speakerId = segment.speaker || 'speaker_0';
+
+  // If manual config exists for this speaker, use it
+  if (config && config[speakerId]) {
+    const gender = config[speakerId];
+    return gender === 'female' ? VOICE_MAP.female : VOICE_MAP.male;
+  }
+
+  // Auto-detect: even = male, odd = female
   const speakerNum = parseInt(speakerId.match(/\d+/)?.[0] || '0');
   const isMale = speakerNum % 2 === 0;
-  const voice = isMale ? VOICE_MAP.male : VOICE_MAP.female;
-  return voice;
+  return isMale ? VOICE_MAP.male : VOICE_MAP.female;
 }
 
 function fmtTime(sec: number): string {
@@ -129,7 +142,7 @@ function fmtTime(sec: number): string {
 }
 
 export function ClarifyAudioPanel({
-  videoId, currentTime, aiPlaybackSpeed = 1, onSubtitleChange, onMuteYouTube, onPlayYouTube, onTranscriptReady, onSegmentChange, registerHandlers,
+  videoId, currentTime, aiPlaybackSpeed = 1, speakerConfig, onSpeakersDetected, onSubtitleChange, onMuteYouTube, onPlayYouTube, onTranscriptReady, onSegmentChange, registerHandlers,
 }: ClarifyAudioPanelProps) {
 
   // ═══ STATE ═══
@@ -171,6 +184,7 @@ export function ClarifyAudioPanel({
   const originalTxRef = useRef<ClarifyTranscriptSegment[]>([]);
   const translatedTxRef = useRef<ClarifyTranscriptSegment[]>([]);
   const speedRef = useRef(1);
+  const speakerConfigRef = useRef<SpeakerConfig | undefined>(speakerConfig);
   const schedulerRef = useRef<ReturnType<typeof setInterval> | null>(null);  // SCHEDULER: timing-based sync loop
   const lastScheduledSegRef = useRef(-1);  // SCHEDULER: last segment we triggered playback for
   const translatingMoreRef = useRef(false);
@@ -192,6 +206,12 @@ export function ClarifyAudioPanel({
   }, [aiPlaybackSpeed]);
   useEffect(() => { originalTxRef.current = originalTranscript; }, [originalTranscript]);
   useEffect(() => { translatedTxRef.current = translatedTranscript; }, [translatedTranscript]);
+  useEffect(() => {
+    speakerConfigRef.current = speakerConfig;
+    if (speakerConfig && Object.keys(speakerConfig).length > 0) {
+      console.log('[speaker-config] Config updated:', speakerConfig);
+    }
+  }, [speakerConfig]);
 
   // Update audio element volume in real-time
   useEffect(() => {
@@ -238,13 +258,15 @@ export function ClarifyAudioPanel({
 
     try {
       const seg = translatedTxRef.current[i] || txRef.current[i];
-      // Multi-voice: pick voice based on detected speaker
-      const voice = seg ? getVoiceForSegment(seg) : DEFAULT_VOICE;
+      // Multi-voice: pick voice based on speaker config or auto-detection
+      const voice = seg ? getVoiceForSegment(seg, speakerConfigRef.current) : DEFAULT_VOICE;
       const speakerId = seg?.speaker || 'speaker_0';
+      const configGender = speakerConfigRef.current?.[speakerId];
       const speakerNum = parseInt(speakerId.match(/\d+/)?.[0] || '0');
-      const gender = speakerNum % 2 === 0 ? 'male' : 'female';
+      const gender = configGender || (speakerNum % 2 === 0 ? 'male' : 'female');
+      const source = configGender ? 'config' : 'auto';
 
-      console.log(`[multi-voice] Seg ${i}: ${speakerId} -> ${gender} -> ${voice}`);
+      console.log(`[multi-voice] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> ${voice}`);
 
       const res = await fetch('/api/multi-voice-tts', {
         method: 'POST',
@@ -590,6 +612,14 @@ export function ClarifyAudioPanel({
         setTranslatedTranscript(transSegs);
         translatedTxRef.current = transSegs;
         setTranslatedUpTo(transSegs.length);
+
+        // Notify parent about detected speakers for voice config UI
+        if (onSpeakersDetected) {
+          const uniqueSpeakers = [...new Set(transSegs.map(s => s.speaker).filter(Boolean))] as string[];
+          uniqueSpeakers.sort();
+          console.log(`[speaker-config] Detected ${uniqueSpeakers.length} speakers:`, uniqueSpeakers);
+          onSpeakersDetected(uniqueSpeakers);
+        }
       }
 
       setNeedsMoreTranslation(data.needsMoreTranslation || false);
@@ -616,7 +646,7 @@ export function ClarifyAudioPanel({
       setError(e instanceof Error ? e.message : 'Processing failed');
       setPhase('error');
     }
-  }, [videoId, onTranscriptReady, generateSeg]);
+  }, [videoId, onTranscriptReady, onSpeakersDetected, generateSeg]);
 
   /** handleRestart — full restart (re-choose options) */
   const handleRestart = useCallback(() => {
