@@ -101,20 +101,24 @@ export function assignVoicesToSpeakers(config: SpeakerConfig): Record<string, st
 
 /**
  * Detect speaker changes in transcript using timing gaps.
- * A gap > 1.5s between segments often indicates a speaker change.
- * Assigns alternating speaker IDs: speaker_0, speaker_1, etc.
+ * A gap > 1.0s between segments suggests a speaker change.
+ * Each gap increments to a NEW speaker (no mod-2 cap).
  */
 function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscriptSegment[] {
   if (segments.length === 0) return segments;
 
-  const GAP_THRESHOLD = 1.5; // seconds — gap that suggests speaker change
+  const GAP_THRESHOLD = 1.0; // seconds — lowered from 1.5 to catch more speaker changes
   let currentSpeaker = 0;
+  let maxSpeaker = 0;
   const result: ClarifyTranscriptSegment[] = [];
+  const gapLog: string[] = [];
+
+  console.log(`[speaker-detection] Analyzing ${segments.length} segments (gap threshold: ${GAP_THRESHOLD}s)...`);
 
   for (let i = 0; i < segments.length; i++) {
     const seg = { ...segments[i] };
 
-    // If segment already has a speaker tag, use it
+    // If segment already has a speaker tag from API, keep it
     if (seg.speaker) {
       result.push(seg);
       continue;
@@ -125,9 +129,10 @@ function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscript
     } else {
       const prevEnd = segments[i - 1].end;
       const gap = seg.start - prevEnd;
-      // Large gap = likely a different speaker
       if (gap > GAP_THRESHOLD) {
-        currentSpeaker = (currentSpeaker + 1) % 2; // Alternate between 0 and 1
+        currentSpeaker++;          // Always increment — no mod cap
+        maxSpeaker = Math.max(maxSpeaker, currentSpeaker);
+        gapLog.push(`seg ${i}: gap ${gap.toFixed(1)}s -> speaker_${currentSpeaker}`);
       }
       seg.speaker = `speaker_${currentSpeaker}`;
     }
@@ -137,7 +142,13 @@ function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscript
   // Log speaker distribution
   const speakerCounts: Record<string, number> = {};
   result.forEach(s => { speakerCounts[s.speaker || 'unknown'] = (speakerCounts[s.speaker || 'unknown'] || 0) + 1; });
-  console.log(`[multi-voice] Speaker detection complete:`, speakerCounts);
+  console.log(`[speaker-detection] Found ${maxSpeaker + 1} speakers:`, speakerCounts);
+  if (gapLog.length <= 20) {
+    gapLog.forEach(g => console.log(`[speaker-detection]   ${g}`));
+  } else {
+    console.log(`[speaker-detection]   ${gapLog.length} gaps found (showing first 10)`);
+    gapLog.slice(0, 10).forEach(g => console.log(`[speaker-detection]   ${g}`));
+  }
 
   return result;
 }
@@ -146,20 +157,20 @@ function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscript
  * Get the appropriate TTS voice for a segment.
  * When a manual speaker config exists, uses assignVoicesToSpeakers() so that
  * multiple speakers of the same gender get distinct voices from the pool.
- * Falls back to auto-detect: even speaker IDs = male[0], odd = female[0].
+ * WITHOUT config: uses a single default voice for ALL speakers (safe default —
+ * no guessing genders from speaker IDs).
  */
 function getVoiceForSegment(segment: ClarifyTranscriptSegment, config?: SpeakerConfig): string {
   const speakerId = segment.speaker || 'speaker_0';
 
-  // If manual config exists, compute full voice assignment map (cheap — config is small)
+  // If manual config exists, compute full voice assignment map
   if (config && Object.keys(config).length > 0) {
     const assignments = assignVoicesToSpeakers(config);
     return assignments[speakerId] || DEFAULT_VOICE;
   }
 
-  // Auto-detect fallback: even = first male voice, odd = first female voice
-  const speakerNum = parseInt(speakerId.match(/\d+/)?.[0] || '0');
-  return speakerNum % 2 === 0 ? MALE_VOICES[0] : FEMALE_VOICES[0];
+  // No config — single default voice for everyone (don't guess genders)
+  return DEFAULT_VOICE;
 }
 
 function fmtTime(sec: number): string {
@@ -285,13 +296,13 @@ export function ClarifyAudioPanel({
 
     try {
       const seg = translatedTxRef.current[i] || txRef.current[i];
-      // Multi-voice: pick voice based on speaker config or auto-detection
+      // Multi-voice: pick voice based on speaker config (or single default)
       const voice = seg ? getVoiceForSegment(seg, speakerConfigRef.current) : DEFAULT_VOICE;
       const speakerId = seg?.speaker || 'speaker_0';
+      const hasConfig = speakerConfigRef.current && Object.keys(speakerConfigRef.current).length > 0;
       const configGender = speakerConfigRef.current?.[speakerId];
-      const speakerNum = parseInt(speakerId.match(/\d+/)?.[0] || '0');
-      const gender = configGender || (speakerNum % 2 === 0 ? 'male' : 'female');
-      const source = configGender ? 'config' : 'auto';
+      const gender = configGender || 'unconfigured';
+      const source = hasConfig ? 'config' : 'default';
 
       console.log(`[voice-variety] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`);
 

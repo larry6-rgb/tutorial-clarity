@@ -85,7 +85,14 @@ function WatchPageContent() {
         } catch {}
         return {};
     });
-    const [detectedSpeakers, setDetectedSpeakers] = useState<string[]>([]);
+    const [detectedSpeakers, setDetectedSpeakers] = useState<string[]>(() => {
+        if (typeof window === 'undefined') return [];
+        try {
+            const saved = localStorage.getItem(`detected-speakers-${videoId}`);
+            if (saved) { const parsed = JSON.parse(saved); console.log('[speaker-ui] Loaded detectedSpeakers from localStorage:', parsed); return parsed; }
+        } catch {}
+        return [];
+    });
 
     // Clarify bar position/size — persisted to localStorage
     const CLARIFY_BAR_KEY = 'clarifyBarLayout';
@@ -936,11 +943,16 @@ function WatchPageContent() {
         }
     }, [speakerConfig, videoId]);
 
-    // Callbacks for speaker config
+    // Callbacks for speaker config — only GROW the list, never shrink
     const handleSpeakersDetected = useCallback((speakers: string[]) => {
-        setDetectedSpeakers(speakers);
-        console.log(`[speaker-config] ${speakers.length} speakers detected for voice config UI`);
-    }, []);
+        setDetectedSpeakers(prev => {
+            const merged = [...new Set([...prev, ...speakers])].sort();
+            console.log(`[speaker-ui] Speakers detected: ${speakers.length} new, ${merged.length} total`, merged);
+            // Persist so UI survives remounts / page reload
+            try { localStorage.setItem(`detected-speakers-${videoId}`, JSON.stringify(merged)); } catch {}
+            return merged;
+        });
+    }, [videoId]);
 
     const handleSpeakerGenderChange = useCallback((speakerId: string, gender: 'male' | 'female') => {
         setSpeakerConfig(prev => {
@@ -953,7 +965,8 @@ function WatchPageContent() {
     const handleResetSpeakerConfig = useCallback(() => {
         setSpeakerConfig({});
         try { localStorage.removeItem(`speaker-config-${videoId}`); } catch {}
-        console.log('[speaker-config] Reset to auto-detect');
+        // Keep detectedSpeakers — only clear voice assignments, not speaker list
+        console.log('[speaker-config] Reset to default single voice');
     }, [videoId]);
 
     // Clarify bar drag handler
@@ -2030,7 +2043,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                     fontSize: '12px', fontWeight: 'bold', color: '#94a3b8',
                                                     marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
                                                 }}>
-                                                    <span>Speaker Voices (Optional)</span>
+                                                    <span>{'🎭'} Configure Speaker Voices</span>
                                                     {Object.keys(speakerConfig).length > 0 && (
                                                         <button onClick={handleResetSpeakerConfig} style={{
                                                             background: 'none', border: '1px solid #475569',
@@ -2040,15 +2053,17 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                     )}
                                                 </div>
                                                 <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '8px' }}>
-                                                    {detectedSpeakers.length} speakers detected. Assign male/female voices for a more natural experience.
-                                                    {Object.keys(speakerConfig).length === 0 && ' Currently using auto-detect.'}
+                                                    {detectedSpeakers.length} speakers detected.
+                                                    {Object.keys(speakerConfig).length === 0
+                                                        ? ' Using single default voice. Assign male/female below for distinct voices.'
+                                                        : ' Voices configured — each speaker gets a distinct voice.'}
                                                 </div>
                                                 {(() => {
                                                     // Build a full preview config so we can show voice assignments
                                                     const previewConfig: SpeakerConfig = {};
                                                     detectedSpeakers.forEach(sid => {
-                                                        const num = parseInt(sid.match(/\d+/)?.[0] || '0');
-                                                        previewConfig[sid] = speakerConfig[sid] || (num % 2 === 0 ? 'male' : 'female');
+                                                        // Default to 'male' (matching single default voice) until user configures
+                                                        previewConfig[sid] = speakerConfig[sid] || 'male';
                                                     });
                                                     const voiceMap = assignVoicesToSpeakers(previewConfig);
 
@@ -2121,7 +2136,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                         padding: '3px 6px', backgroundColor: 'rgba(59,130,246,0.08)',
                                                         borderRadius: '3px', textAlign: 'center',
                                                     }}>
-                                                        Config saved. Will apply to upcoming segments.
+                                                        {'✅'} Voice config saved! Will apply to upcoming segments.
                                                     </div>
                                                 )}
                                             </div>
