@@ -14,9 +14,11 @@
  * KEY FEATURES:
  * - SCHEDULER APPROACH: AI audio plays at natural speed (user's chosen speed)
  *   Each segment triggers when video reaches its timestamp. No rate-matching.
+ * - MULTI-VOICE: Detects speaker changes via timing gaps, assigns male (onyx)
+ *   and female (nova) voices automatically. Voices change when speakers change.
+ * - LIVE OPTIONS: Speed changes apply immediately to playing audio.
  * - Progressive translation: 30-segment buffer, then translate ahead of playback
  * - Dual transcript: original (source lang) + translated, switchable by audio mode
- * - Single consistent voice (no male/female switching)
  * - Speed control with bright orange styling
  * - Options button opens settings without restarting translation
  */
@@ -28,6 +30,7 @@ export interface ClarifyTranscriptSegment {
   text: string;
   start: number;
   end: number;
+  speaker?: string;  // Speaker ID (e.g., 'speaker_0', 'speaker_1')
 }
 
 interface AudioCache {
@@ -35,6 +38,7 @@ interface AudioCache {
     url?: string;
     useClientTTS?: boolean;
     generating?: boolean;
+    voice?: string;  // Which TTS voice was used for this segment
   };
 }
 
@@ -50,10 +54,73 @@ interface ClarifyAudioPanelProps {
   registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean }) => void;
 }
 
-// Use a SINGLE consistent voice for all segments
-// 'onyx' = deep male voice (good for male speakers, which is the common case)
-// Other options: 'echo' (male), 'fable' (male), 'nova' (female), 'shimmer' (female), 'alloy' (neutral)
-const TTS_VOICE = 'onyx';
+// ═══ MULTI-VOICE SYSTEM ═══
+// Assign different voices based on detected speaker changes in transcript.
+// OpenAI voices: 'onyx' (deep male), 'echo' (male), 'fable' (male),
+//                'nova' (female), 'shimmer' (female), 'alloy' (neutral)
+const VOICE_MAP: Record<string, string> = {
+  male: 'onyx',      // Deep male voice
+  female: 'nova',    // Clear female voice
+  neutral: 'alloy',  // Neutral fallback
+};
+
+// Default voice when no speaker detection is possible
+const DEFAULT_VOICE = 'onyx';
+
+/**
+ * Detect speaker changes in transcript using timing gaps.
+ * A gap > 1.5s between segments often indicates a speaker change.
+ * Assigns alternating speaker IDs: speaker_0, speaker_1, etc.
+ */
+function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscriptSegment[] {
+  if (segments.length === 0) return segments;
+
+  const GAP_THRESHOLD = 1.5; // seconds — gap that suggests speaker change
+  let currentSpeaker = 0;
+  const result: ClarifyTranscriptSegment[] = [];
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = { ...segments[i] };
+
+    // If segment already has a speaker tag, use it
+    if (seg.speaker) {
+      result.push(seg);
+      continue;
+    }
+
+    if (i === 0) {
+      seg.speaker = `speaker_${currentSpeaker}`;
+    } else {
+      const prevEnd = segments[i - 1].end;
+      const gap = seg.start - prevEnd;
+      // Large gap = likely a different speaker
+      if (gap > GAP_THRESHOLD) {
+        currentSpeaker = (currentSpeaker + 1) % 2; // Alternate between 0 and 1
+      }
+      seg.speaker = `speaker_${currentSpeaker}`;
+    }
+    result.push(seg);
+  }
+
+  // Log speaker distribution
+  const speakerCounts: Record<string, number> = {};
+  result.forEach(s => { speakerCounts[s.speaker || 'unknown'] = (speakerCounts[s.speaker || 'unknown'] || 0) + 1; });
+  console.log(`[multi-voice] Speaker detection complete:`, speakerCounts);
+
+  return result;
+}
+
+/**
+ * Get the appropriate TTS voice for a segment based on its speaker ID.
+ * Even speaker IDs (0, 2, ...) = male voice, Odd (1, 3, ...) = female voice.
+ */
+function getVoiceForSegment(segment: ClarifyTranscriptSegment): string {
+  const speakerId = segment.speaker || 'speaker_0';
+  const speakerNum = parseInt(speakerId.match(/\d+/)?.[0] || '0');
+  const isMale = speakerNum % 2 === 0;
+  const voice = isMale ? VOICE_MAP.male : VOICE_MAP.female;
+  return voice;
+}
 
 function fmtTime(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -113,10 +180,14 @@ export function ClarifyAudioPanel({
   useEffect(() => { mutedRef.current = isMuted; }, [isMuted]);
   useEffect(() => { txRef.current = transcript; }, [transcript]);
   useEffect(() => {
-    console.log(`[scheduler] User speed changed: ${speedRef.current} -> ${aiPlaybackSpeed}`);
+    const oldSpeed = speedRef.current;
     speedRef.current = aiPlaybackSpeed;
-    if (audioRef.current) {
+    // Apply immediately to currently playing audio (live update)
+    if (audioRef.current && !audioRef.current.paused) {
       audioRef.current.playbackRate = aiPlaybackSpeed;
+      console.log(`[options-update] Speed changed ${oldSpeed}x -> ${aiPlaybackSpeed}x, applied to current audio`);
+    } else if (oldSpeed !== aiPlaybackSpeed) {
+      console.log(`[options-update] Speed changed ${oldSpeed}x -> ${aiPlaybackSpeed}x, will apply to next segment`);
     }
   }, [aiPlaybackSpeed]);
   useEffect(() => { originalTxRef.current = originalTranscript; }, [originalTranscript]);
@@ -158,7 +229,7 @@ export function ClarifyAudioPanel({
     }
   }, [currentTime, transcript, currentSegIdx, onSubtitleChange, onSegmentChange]);
 
-  // ═══ TTS GENERATION (single voice) ═══
+  // ═══ TTS GENERATION (multi-voice) ═══
   const generateSeg = useCallback(async (i: number, text: string) => {
     if (cacheRef.current[i]?.url || cacheRef.current[i]?.useClientTTS || cacheRef.current[i]?.generating) return;
     if (genSetRef.current.has(i)) return;
@@ -167,13 +238,21 @@ export function ClarifyAudioPanel({
 
     try {
       const seg = translatedTxRef.current[i] || txRef.current[i];
+      // Multi-voice: pick voice based on detected speaker
+      const voice = seg ? getVoiceForSegment(seg) : DEFAULT_VOICE;
+      const speakerId = seg?.speaker || 'speaker_0';
+      const speakerNum = parseInt(speakerId.match(/\d+/)?.[0] || '0');
+      const gender = speakerNum % 2 === 0 ? 'male' : 'female';
+
+      console.log(`[multi-voice] Seg ${i}: ${speakerId} -> ${gender} -> ${voice}`);
+
       const res = await fetch('/api/multi-voice-tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           text,
-          voice: { id: TTS_VOICE, name: TTS_VOICE, gender: 'neutral', provider: 'openai' },
-          videoId, segmentId: `seg_${i}`, speakerId: 'spk_0',
+          voice: { id: voice, name: voice, gender, provider: 'openai' },
+          videoId, segmentId: `seg_${i}`, speakerId,
           targetDuration: seg ? seg.end - seg.start : undefined,
           targetLanguage: selectedLang, ttsModel: 'tts-1',
         }),
@@ -185,16 +264,16 @@ export function ClarifyAudioPanel({
       if (ct?.includes('application/json')) {
         const data = await res.json();
         if (data.useClientSideTTS) {
-          cacheRef.current[i] = { useClientTTS: true };
+          cacheRef.current[i] = { useClientTTS: true, voice };
           setUseClientTTS(true);
         }
       } else {
         const blob = await res.blob();
         if (blob.size > 0) {
           const url = URL.createObjectURL(blob);
-          cacheRef.current[i] = { url };
+          cacheRef.current[i] = { url, voice };
         } else {
-          cacheRef.current[i] = { useClientTTS: true };
+          cacheRef.current[i] = { useClientTTS: true, voice };
           setUseClientTTS(true);
         }
       }
@@ -241,14 +320,19 @@ export function ClarifyAudioPanel({
       const data = await res.json();
 
       if (data.transcript?.length > 0) {
-        const newSegs: ClarifyTranscriptSegment[] = data.transcript.map((s: any, i: number) => ({
+        const rawNewSegs: ClarifyTranscriptSegment[] = data.transcript.map((s: any, i: number) => ({
           text: s.text || '', start: s.start || 0,
           end: s.end || (data.transcript[i + 1]?.start || (s.start || 0) + 3),
+          speaker: s.speaker || undefined,
         }));
+        // Detect speakers for new batch (uses gap-based detection)
+        const newSegs = detectSpeakers(rawNewSegs);
         setTranslatedTranscript(prev => {
-          const updated = [...prev, ...newSegs];
-          translatedTxRef.current = updated;
-          return updated;
+          // Re-detect speakers across the full combined transcript for continuity
+          const combined = [...prev, ...newSegs];
+          const withSpeakers = detectSpeakers(combined);
+          translatedTxRef.current = withSpeakers;
+          return withSpeakers;
         });
         setTranslatedUpTo(prev => prev + newSegs.length);
         setNeedsMoreTranslation(!data.done);
@@ -494,13 +578,15 @@ export function ClarifyAudioPanel({
         if (onTranscriptReady) onTranscriptReady(origSegs);
       }
 
-      // Store translated buffer
+      // Store translated buffer (with speaker detection for multi-voice)
       let transSegs: ClarifyTranscriptSegment[] = [];
       if (data.transcript?.length) {
-        transSegs = data.transcript.map((s: any, i: number) => ({
+        const rawTransSegs: ClarifyTranscriptSegment[] = data.transcript.map((s: any, i: number) => ({
           text: s.text || '', start: s.start || 0,
           end: s.end || (data.transcript[i + 1]?.start || (s.start || 0) + 3),
+          speaker: s.speaker || undefined,
         }));
+        transSegs = detectSpeakers(rawTransSegs);
         setTranslatedTranscript(transSegs);
         translatedTxRef.current = transSegs;
         setTranslatedUpTo(transSegs.length);
