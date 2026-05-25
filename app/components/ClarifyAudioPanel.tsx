@@ -319,12 +319,17 @@ export function ClarifyAudioPanel({
         }),
       });
 
-      if (!res.ok) throw new Error(`TTS ${res.status}`);
+      if (!res.ok) {
+        console.warn(`[voice-variety] Seg ${i}: TTS API returned ${res.status}`);
+        throw new Error(`TTS ${res.status}`);
+      }
 
       const ct = res.headers.get('content-type');
+      const returnedVoice = res.headers.get('x-voice-id');
       if (ct?.includes('application/json')) {
         const data = await res.json();
         if (data.useClientSideTTS) {
+          console.log(`[voice-variety] Seg ${i}: API returned useClientSideTTS=true (no OpenAI key?), voice="${voice}"`);
           cacheRef.current[i] = { useClientTTS: true, voice };
           setUseClientTTS(true);
         }
@@ -333,12 +338,15 @@ export function ClarifyAudioPanel({
         if (blob.size > 0) {
           const url = URL.createObjectURL(blob);
           cacheRef.current[i] = { url, voice };
+          console.log(`[voice-variety] Seg ${i}: Got OpenAI audio (${blob.size} bytes), requested="${voice}", server-used="${returnedVoice}"`);
         } else {
+          console.warn(`[voice-variety] Seg ${i}: Empty audio blob, falling back to client TTS`);
           cacheRef.current[i] = { useClientTTS: true, voice };
           setUseClientTTS(true);
         }
       }
-    } catch {
+    } catch (err) {
+      console.error(`[voice-variety] Seg ${i}: TTS generation failed, falling back to client TTS`, err);
       cacheRef.current[i] = { useClientTTS: true };
       setUseClientTTS(true);
     }
@@ -445,7 +453,8 @@ export function ClarifyAudioPanel({
         a.playbackRate = speedRef.current;
         audioRef.current = a;
 
-        console.log(`[scheduler] Playing seg ${i} at ${speedRef.current}x (video=${currentTimeRef.current.toFixed(1)}, seg.start=${translatedTxRef.current[i].start.toFixed(1)})`);
+        const seg = translatedTxRef.current[i];
+        console.log(`[scheduler] Playing seg ${i} at ${speedRef.current}x (video=${currentTimeRef.current.toFixed(1)}, seg.start=${seg?.start.toFixed(1)}) | voice="${cached.voice || '?'}" speaker=${seg?.speaker || '?'} | source=OpenAI-audio`);
 
         a.onended = () => {
           // Segment finished naturally — scheduler will pick up next one
@@ -463,12 +472,29 @@ export function ClarifyAudioPanel({
         playingIdxRef.current = -1;
       }
     } else if (cached?.useClientTTS) {
+      const seg = translatedTxRef.current[i];
+      console.log(`[scheduler] Playing seg ${i} via BROWSER TTS | voice="${cached.voice || 'browser-default'}" speaker=${seg?.speaker || '?'} | source=client-TTS`);
       if ('speechSynthesis' in window) {
         window.speechSynthesis.cancel();
         const u = new SpeechSynthesisUtterance(translatedTxRef.current[i].text);
         u.lang = selectedLang === 'en' ? 'en-US' : selectedLang;
         u.volume = mutedRef.current ? 0 : volRef.current;
         u.rate = speedRef.current;
+
+        // Try to match the assigned voice with a browser voice
+        if (cached.voice) {
+          const voices = window.speechSynthesis.getVoices();
+          const voiceGender = FEMALE_VOICES.includes(cached.voice) ? 'female' : 'male';
+          // Pick a browser voice that matches the language and approximate gender
+          const langVoices = voices.filter(v => v.lang.startsWith(selectedLang === 'en' ? 'en' : selectedLang));
+          if (langVoices.length > 0) {
+            // Try to alternate voices for different speakers
+            const speakerNum = parseInt(seg?.speaker?.match(/\d+/)?.[0] || '0');
+            u.voice = langVoices[speakerNum % langVoices.length];
+            console.log(`[scheduler] Browser voice picked: "${u.voice.name}" for ${seg?.speaker} (${voiceGender})`);
+          }
+        }
+
         u.onend = () => { playingIdxRef.current = -1; };
         u.onerror = () => { playingIdxRef.current = -1; };
         window.speechSynthesis.speak(u);
