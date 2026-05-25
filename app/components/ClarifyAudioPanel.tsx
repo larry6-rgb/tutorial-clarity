@@ -56,7 +56,7 @@ interface ClarifyAudioPanelProps {
   onPlayYouTube?: () => void;
   onTranscriptReady?: (segments: ClarifyTranscriptSegment[]) => void;
   onSegmentChange?: (index: number) => void;
-  registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean }) => void;
+  registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: () => void }) => void;
 }
 
 // ═══ MULTI-VOICE SYSTEM ═══
@@ -570,17 +570,6 @@ export function ClarifyAudioPanel({
     if (onMuteYouTube) onMuteYouTube(false);
   }, [onMuteYouTube]);
 
-  // Register external handlers
-  useEffect(() => {
-    if (registerHandlers) {
-      registerHandlers({
-        play: () => handlePlay(),
-        pause: () => handlePause(),
-        isPlaying: () => isPlayingRef.current,
-      });
-    }
-  }, [registerHandlers, handlePlay, handlePause]);
-
   /** User clicks "Stop" */
   const handleStop = useCallback(() => {
     isPlayingRef.current = false;
@@ -603,6 +592,56 @@ export function ClarifyAudioPanel({
     if (onMuteYouTube) onMuteYouTube(false);
     if (onTranscriptReady) onTranscriptReady([]);
   }, [onMuteYouTube, onTranscriptReady]);
+
+  /** Clear audio cache and regenerate TTS with current speaker voice config.
+   *  Called when the user applies new voice assignments from the speaker config UI.
+   *  Keeps transcripts intact — only regenerates the audio. */
+  const handleRegenerateVoices = useCallback(async () => {
+    console.log('[voice-variety] === REGENERATING VOICES ===');
+    console.log('[voice-variety] Current speaker config:', speakerConfigRef.current);
+
+    // 1. Stop current playback
+    isPlayingRef.current = false;
+    if (schedulerRef.current) { clearInterval(schedulerRef.current); schedulerRef.current = null; }
+    lastScheduledSegRef.current = -1;
+    if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; audioRef.current = null; }
+    if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+
+    // 2. Revoke old audio URLs and clear cache (keep transcripts!)
+    Object.values(cacheRef.current).forEach(e => { if (e.url) URL.revokeObjectURL(e.url); });
+    cacheRef.current = {};
+    genSetRef.current.clear();
+    setGeneratedCount(0);
+
+    // 3. Regenerate first batch of TTS with new voice assignments
+    const segs = translatedTxRef.current;
+    if (segs.length > 0) {
+      console.log(`[voice-variety] Regenerating TTS for ${Math.min(8, segs.length)} segments...`);
+      const batch = segs.slice(0, 8);
+      await Promise.allSettled(batch.map((s, i) => generateSeg(i, s.text)));
+      console.log('[voice-variety] First batch regenerated. Ready to resume.');
+    }
+
+    // 4. Set phase to paused (user can click Resume)
+    if (phase === 'playing') {
+      setPhase('paused');
+    }
+    if (onMuteYouTube) onMuteYouTube(false);
+
+    console.log('[voice-variety] === REGENERATION COMPLETE ===');
+  }, [generateSeg, phase, onMuteYouTube]);
+
+  // Register external handlers
+  useEffect(() => {
+    if (registerHandlers) {
+      registerHandlers({
+        play: () => handlePlay(),
+        pause: () => handlePause(),
+        isPlaying: () => isPlayingRef.current,
+        regenerateVoices: () => handleRegenerateVoices(),
+      });
+    }
+  }, [registerHandlers, handlePlay, handlePause, handleRegenerateVoices]);
 
   /** User selects options from modal -> start processing */
   const handleSelectOption = useCallback(async (mode: OutputMode, lang: string) => {
