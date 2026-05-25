@@ -78,25 +78,40 @@ const DEFAULT_VOICE = 'onyx';
  *   Male:   onyx -> fable   -> echo  -> onyx ...
  */
 export function assignVoicesToSpeakers(config: SpeakerConfig): Record<string, string> {
+  console.log('[voice-assign] === ASSIGNING VOICES ===');
+  console.log('[voice-assign] Config:', config);
+  console.log('[voice-assign] Female pool:', FEMALE_VOICES);
+  console.log('[voice-assign] Male pool:', MALE_VOICES);
+
   const assignments: Record<string, string> = {};
   let femaleIdx = 0;
   let maleIdx = 0;
 
+  // Sort speaker IDs numerically for consistent assignment order
   const sorted = Object.keys(config).sort((a, b) => {
     const na = parseInt(a.match(/\d+/)?.[0] || '0');
     const nb = parseInt(b.match(/\d+/)?.[0] || '0');
     return na - nb;
   });
 
+  console.log('[voice-assign] Processing speakers in order:', sorted);
+
   for (const id of sorted) {
-    if (config[id] === 'female') {
-      assignments[id] = FEMALE_VOICES[femaleIdx % FEMALE_VOICES.length];
+    const gender = config[id];
+    if (gender === 'female') {
+      const voice = FEMALE_VOICES[femaleIdx % FEMALE_VOICES.length];
+      assignments[id] = voice;
+      console.log(`[voice-assign] ${id} (${gender}) -> ${voice} [female #${femaleIdx}]`);
       femaleIdx++;
     } else {
-      assignments[id] = MALE_VOICES[maleIdx % MALE_VOICES.length];
+      const voice = MALE_VOICES[maleIdx % MALE_VOICES.length];
+      assignments[id] = voice;
+      console.log(`[voice-assign] ${id} (${gender}) -> ${voice} [male #${maleIdx}]`);
       maleIdx++;
     }
   }
+
+  console.log('[voice-assign] === FINAL MAPPING ===', assignments);
   return assignments;
 }
 
@@ -171,14 +186,23 @@ function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscript
  * multiple speakers of the same gender get distinct voices from the pool.
  * WITHOUT config: uses a single default voice for ALL speakers (safe default —
  * no guessing genders from speaker IDs).
+ *
+ * Caches the assignment map to avoid recomputing for every segment.
  */
+let _cachedConfig: string = '';
+let _cachedAssignments: Record<string, string> = {};
+
 function getVoiceForSegment(segment: ClarifyTranscriptSegment, config?: SpeakerConfig): string {
   const speakerId = segment.speaker || 'speaker_0';
 
-  // If manual config exists, compute full voice assignment map
+  // If manual config exists, compute full voice assignment map (cached)
   if (config && Object.keys(config).length > 0) {
-    const assignments = assignVoicesToSpeakers(config);
-    return assignments[speakerId] || DEFAULT_VOICE;
+    const configKey = JSON.stringify(config);
+    if (configKey !== _cachedConfig) {
+      _cachedAssignments = assignVoicesToSpeakers(config);
+      _cachedConfig = configKey;
+    }
+    return _cachedAssignments[speakerId] || DEFAULT_VOICE;
   }
 
   // No config — single default voice for everyone (don't guess genders)
