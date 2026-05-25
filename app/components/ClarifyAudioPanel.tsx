@@ -56,7 +56,7 @@ interface ClarifyAudioPanelProps {
   onPlayYouTube?: () => void;
   onTranscriptReady?: (segments: ClarifyTranscriptSegment[]) => void;
   onSegmentChange?: (index: number) => void;
-  registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: () => void }) => void;
+  registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => void }) => void;
 }
 
 // ═══ MULTI-VOICE SYSTEM ═══
@@ -304,7 +304,8 @@ export function ClarifyAudioPanel({
       const gender = configGender || 'unconfigured';
       const source = hasConfig ? 'config' : 'default';
 
-      console.log(`[voice-variety] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`);
+      console.log(`[voice-variety] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`,
+        hasConfig ? `| config keys: ${Object.keys(speakerConfigRef.current!).join(',')}` : '');
 
       const res = await fetch('/api/multi-voice-tts', {
         method: 'POST',
@@ -595,10 +596,16 @@ export function ClarifyAudioPanel({
 
   /** Clear audio cache and regenerate TTS with current speaker voice config.
    *  Called when the user applies new voice assignments from the speaker config UI.
-   *  Keeps transcripts intact — only regenerates the audio. */
-  const handleRegenerateVoices = useCallback(async () => {
+   *  Keeps transcripts intact — only regenerates the audio.
+   *  @param configOverride — If provided, updates the ref immediately (avoids useEffect timing gap) */
+  const handleRegenerateVoices = useCallback(async (configOverride?: SpeakerConfig) => {
+    // If caller passed config directly, update ref immediately (no waiting for useEffect)
+    if (configOverride) {
+      speakerConfigRef.current = configOverride;
+      console.log('[voice-variety] Config override applied directly to ref:', configOverride);
+    }
     console.log('[voice-variety] === REGENERATING VOICES ===');
-    console.log('[voice-variety] Current speaker config:', speakerConfigRef.current);
+    console.log('[voice-variety] Active speaker config:', speakerConfigRef.current);
 
     // 1. Stop current playback
     isPlayingRef.current = false;
@@ -638,7 +645,7 @@ export function ClarifyAudioPanel({
         play: () => handlePlay(),
         pause: () => handlePause(),
         isPlaying: () => isPlayingRef.current,
-        regenerateVoices: () => handleRegenerateVoices(),
+        regenerateVoices: (config?: SpeakerConfig) => handleRegenerateVoices(config),
       });
     }
   }, [registerHandlers, handlePlay, handlePause, handleRegenerateVoices]);

@@ -254,7 +254,7 @@ function WatchPageContent() {
     }, []);
 
     // ── Ref to ClarifyAudioPanel handlers (for spacebar + video sync control) ──
-    const clarifyHandlersRef = useRef<{ play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: () => void } | null>(null);
+    const clarifyHandlersRef = useRef<{ play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => void } | null>(null);
 
     // ── Stable callbacks for ClarifyAudioPanel (prevent re-render unmute bug) ──
     const handleClarifySubtitle = useCallback((subtitle: string | null) => {
@@ -280,7 +280,7 @@ function WatchPageContent() {
         setClarifySegmentIndex(idx);
     }, []);
 
-    const handleClarifyRegisterHandlers = useCallback((handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: () => void }) => {
+    const handleClarifyRegisterHandlers = useCallback((handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => void }) => {
         clarifyHandlersRef.current = handlers;
         console.log('[watch] ClarifyAudioPanel handlers registered (incl. regenerateVoices)');
     }, []);
@@ -994,16 +994,25 @@ function WatchPageContent() {
 
     const handleApplyAndRegenerate = useCallback(async () => {
         console.log('[speaker-ui] === APPLY & REGENERATE ===');
-        console.log('[speaker-ui] Config:', speakerConfig);
+
+        // Build COMPLETE config: include defaults ('male') for any speaker not explicitly set
+        const fullConfig: SpeakerConfig = {};
+        detectedSpeakers.forEach(sid => {
+            fullConfig[sid] = speakerConfig[sid] || 'male';
+        });
+        console.log('[speaker-ui] Full config (with defaults):', fullConfig);
 
         setIsRegenerating(true);
 
-        // Save to localStorage immediately
-        try { localStorage.setItem(`speaker-config-${videoId}`, JSON.stringify(speakerConfig)); } catch {}
+        // Update React state to the full config so prop flows to ClarifyAudioPanel
+        setSpeakerConfig(fullConfig);
 
-        // Call ClarifyAudioPanel to clear cache and regenerate
+        // Save full config to localStorage immediately
+        try { localStorage.setItem(`speaker-config-${videoId}`, JSON.stringify(fullConfig)); } catch {}
+
+        // Call ClarifyAudioPanel to clear cache and regenerate — pass config directly
         if (clarifyHandlersRef.current?.regenerateVoices) {
-            await clarifyHandlersRef.current.regenerateVoices();
+            await clarifyHandlersRef.current.regenerateVoices(fullConfig);
             console.log('[speaker-ui] Regeneration triggered via handler');
         } else {
             console.warn('[speaker-ui] No regenerateVoices handler available');
@@ -1012,7 +1021,7 @@ function WatchPageContent() {
         setHasUnsavedVoiceConfig(false);
         setIsRegenerating(false);
         console.log('[speaker-ui] Configuration applied, audio will regenerate');
-    }, [speakerConfig, videoId]);
+    }, [speakerConfig, detectedSpeakers, videoId]);
 
     // Clarify bar drag handler
     useEffect(() => {
