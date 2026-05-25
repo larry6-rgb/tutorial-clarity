@@ -78,11 +78,6 @@ const DEFAULT_VOICE = 'onyx';
  *   Male:   onyx -> fable   -> echo  -> onyx ...
  */
 export function assignVoicesToSpeakers(config: SpeakerConfig): Record<string, string> {
-  console.log('[voice-assign] === ASSIGNING VOICES ===');
-  console.log('[voice-assign] Config:', config);
-  console.log('[voice-assign] Female pool:', FEMALE_VOICES);
-  console.log('[voice-assign] Male pool:', MALE_VOICES);
-
   const assignments: Record<string, string> = {};
   let femaleIdx = 0;
   let maleIdx = 0;
@@ -94,24 +89,20 @@ export function assignVoicesToSpeakers(config: SpeakerConfig): Record<string, st
     return na - nb;
   });
 
-  console.log('[voice-assign] Processing speakers in order:', sorted);
-
   for (const id of sorted) {
     const gender = config[id];
     if (gender === 'female') {
-      const voice = FEMALE_VOICES[femaleIdx % FEMALE_VOICES.length];
-      assignments[id] = voice;
-      console.log(`[voice-assign] ${id} (${gender}) -> ${voice} [female #${femaleIdx}]`);
+      assignments[id] = FEMALE_VOICES[femaleIdx % FEMALE_VOICES.length];
       femaleIdx++;
     } else {
-      const voice = MALE_VOICES[maleIdx % MALE_VOICES.length];
-      assignments[id] = voice;
-      console.log(`[voice-assign] ${id} (${gender}) -> ${voice} [male #${maleIdx}]`);
+      assignments[id] = MALE_VOICES[maleIdx % MALE_VOICES.length];
       maleIdx++;
     }
   }
 
-  console.log('[voice-assign] === FINAL MAPPING ===', assignments);
+  // Single summary log line
+  const summary = sorted.map(id => `${id}(${config[id]})→${assignments[id]}`).join(', ');
+  console.log(`[TRACE-5-ASSIGN] ${summary}`);
   return assignments;
 }
 
@@ -345,12 +336,7 @@ export function ClarifyAudioPanel({
       const gender = configGender || 'unconfigured';
       const source = hasConfig ? 'config' : 'default';
 
-      // Debug: log raw segment speaker field
-      if (i < 15 || (seg?.speaker && seg.speaker !== 'speaker_0')) {
-        console.log(`[voice-variety] Seg ${i}: speaker_raw="${seg?.speaker}" -> ${gender} (${source}) -> voice="${voice}" | text="${(seg?.text || text).substring(0, 25)}..."`);
-      } else {
-        console.log(`[voice-variety] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`);
-      }
+      console.log(`[TRACE-6-TTS] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`);
 
       const res = await fetch('/api/multi-voice-tts', {
         method: 'POST',
@@ -505,8 +491,8 @@ export function ClarifyAudioPanel({
         audioRef.current = a;
 
         const seg = translatedTxRef.current[i];
-        const age = cached.generatedAt ? `${((Date.now() - cached.generatedAt) / 1000).toFixed(0)}s ago` : 'unknown';
-        console.log(`[scheduler] Playing seg ${i} at ${speedRef.current}x (video=${currentTimeRef.current.toFixed(1)}, seg.start=${seg?.start.toFixed(1)}) | voice="${cached.voice || '?'}" speaker=${seg?.speaker || '?'} | source=OpenAI-audio | generated=${age}`);
+        const age = cached.generatedAt ? `${((Date.now() - cached.generatedAt) / 1000).toFixed(0)}s ago` : '?';
+        console.log(`[TRACE-7-PLAY] Seg ${i}: voice="${cached.voice || '?'}" speaker=${seg?.speaker || '?'} | OpenAI (${age})`);
 
         a.onended = () => {
           // Segment finished naturally — scheduler will pick up next one

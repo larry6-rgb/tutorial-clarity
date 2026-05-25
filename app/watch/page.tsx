@@ -972,9 +972,10 @@ function WatchPageContent() {
     }, [videoId]);
 
     const handleSpeakerGenderChange = useCallback((speakerId: string, gender: 'male' | 'female') => {
+        console.log(`[TRACE-1-UI] Radio clicked: ${speakerId} -> ${gender}`);
         setSpeakerConfig(prev => {
             const updated = { ...prev, [speakerId]: gender };
-            console.log(`[speaker-config] Updated: ${speakerId} -> ${gender}`, updated);
+            console.log(`[TRACE-2-STATE] speakerConfig updated:`, updated);
             return updated;
         });
         setHasUnsavedVoiceConfig(true);
@@ -993,14 +994,16 @@ function WatchPageContent() {
     }, [videoId]);
 
     const handleApplyAndRegenerate = useCallback(async () => {
-        console.log('[speaker-ui] === APPLY & REGENERATE ===');
+        console.log('[TRACE-3-APPLY] === APPLY & REGENERATE CLICKED ===');
+        console.log('[TRACE-3-APPLY] Current speakerConfig state:', speakerConfig);
+        console.log('[TRACE-3-APPLY] Detected speakers:', detectedSpeakers);
 
         // Build COMPLETE config: include defaults ('male') for any speaker not explicitly set
         const fullConfig: SpeakerConfig = {};
         detectedSpeakers.forEach(sid => {
             fullConfig[sid] = speakerConfig[sid] || 'male';
         });
-        console.log('[speaker-ui] Full config (with defaults):', fullConfig);
+        console.log('[TRACE-3-APPLY] Full config to save:', fullConfig);
 
         setIsRegenerating(true);
 
@@ -1008,19 +1011,28 @@ function WatchPageContent() {
         setSpeakerConfig(fullConfig);
 
         // Save full config to localStorage immediately
-        try { localStorage.setItem(`speaker-config-${videoId}`, JSON.stringify(fullConfig)); } catch {}
+        const storageKey = `speaker-config-${videoId}`;
+        try {
+            localStorage.setItem(storageKey, JSON.stringify(fullConfig));
+            // Verify it was saved correctly
+            const readBack = localStorage.getItem(storageKey);
+            console.log('[TRACE-3-APPLY] Verified localStorage:', readBack);
+        } catch (e) {
+            console.error('[TRACE-3-APPLY] localStorage save failed:', e);
+        }
 
         // Call ClarifyAudioPanel to clear cache and regenerate — pass config directly
         if (clarifyHandlersRef.current?.regenerateVoices) {
+            console.log('[TRACE-4-REGEN] Calling regenerateVoices with:', fullConfig);
             await clarifyHandlersRef.current.regenerateVoices(fullConfig);
-            console.log('[speaker-ui] Regeneration triggered via handler');
+            console.log('[TRACE-4-REGEN] Regeneration complete');
         } else {
-            console.warn('[speaker-ui] No regenerateVoices handler available');
+            console.error('[TRACE-4-REGEN] ERROR: regenerateVoices handler not found!');
         }
 
         setHasUnsavedVoiceConfig(false);
         setIsRegenerating(false);
-        console.log('[speaker-ui] Configuration applied, audio will regenerate');
+        console.log('[TRACE-3-APPLY] Configuration applied successfully');
     }, [speakerConfig, detectedSpeakers, videoId]);
 
     // Clarify bar drag handler
