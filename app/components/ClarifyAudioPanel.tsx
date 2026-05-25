@@ -108,32 +108,38 @@ export function assignVoicesToSpeakers(config: SpeakerConfig): Record<string, st
 function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscriptSegment[] {
   if (segments.length === 0) return segments;
 
-  const GAP_THRESHOLD = 1.0; // seconds — lowered from 1.5 to catch more speaker changes
+  // Log ALL gaps for first 30 segments to understand timing
+  console.log(`[speaker-detection] === ANALYZING ${segments.length} SEGMENTS ===`);
+  const allGaps: string[] = [];
+  for (let i = 1; i < Math.min(segments.length, 30); i++) {
+    const gap = segments[i].start - segments[i - 1].end;
+    allGaps.push(`seg${i}: gap=${gap.toFixed(2)}s (${segments[i-1].end.toFixed(1)}->${segments[i].start.toFixed(1)})`);
+  }
+  console.log(`[speaker-detection] First 30 gaps:`, allGaps.join(' | '));
+
+  // Use multiple signals for speaker detection:
+  // 1. Timing gaps (primary signal for videos with natural pauses)
+  // 2. Large gaps even if < 1.0s suggest a different thought/speaker
+  const GAP_THRESHOLD = 0.5; // Lowered to 0.5s to catch more speaker changes
   let currentSpeaker = 0;
   let maxSpeaker = 0;
   const result: ClarifyTranscriptSegment[] = [];
   const gapLog: string[] = [];
 
-  console.log(`[speaker-detection] Analyzing ${segments.length} segments (gap threshold: ${GAP_THRESHOLD}s)...`);
-
   for (let i = 0; i < segments.length; i++) {
     const seg = { ...segments[i] };
 
-    // If segment already has a speaker tag from API, keep it
-    if (seg.speaker) {
-      result.push(seg);
-      continue;
-    }
-
+    // IMPORTANT: Always re-detect speakers from timing — don't trust existing tags
+    // (The combined re-detection in progressive translation was inheriting stale assignments)
     if (i === 0) {
       seg.speaker = `speaker_${currentSpeaker}`;
     } else {
-      const prevEnd = segments[i - 1].end;
+      const prevEnd = result[result.length - 1].end;  // Use result (not input) for prev
       const gap = seg.start - prevEnd;
       if (gap > GAP_THRESHOLD) {
-        currentSpeaker++;          // Always increment — no mod cap
+        currentSpeaker++;
         maxSpeaker = Math.max(maxSpeaker, currentSpeaker);
-        gapLog.push(`seg ${i}: gap ${gap.toFixed(1)}s -> speaker_${currentSpeaker}`);
+        gapLog.push(`seg ${i}: gap=${gap.toFixed(2)}s -> speaker_${currentSpeaker}`);
       }
       seg.speaker = `speaker_${currentSpeaker}`;
     }
@@ -143,12 +149,17 @@ function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscript
   // Log speaker distribution
   const speakerCounts: Record<string, number> = {};
   result.forEach(s => { speakerCounts[s.speaker || 'unknown'] = (speakerCounts[s.speaker || 'unknown'] || 0) + 1; });
-  console.log(`[speaker-detection] Found ${maxSpeaker + 1} speakers:`, speakerCounts);
-  if (gapLog.length <= 20) {
-    gapLog.forEach(g => console.log(`[speaker-detection]   ${g}`));
+  console.log(`[speaker-detection] Found ${maxSpeaker + 1} speakers (threshold=${GAP_THRESHOLD}s):`, speakerCounts);
+  if (gapLog.length > 0) {
+    console.log(`[speaker-detection] ${gapLog.length} speaker changes:`);
+    gapLog.slice(0, 20).forEach(g => console.log(`  ${g}`));
+    if (gapLog.length > 20) console.log(`  ... and ${gapLog.length - 20} more`);
   } else {
-    console.log(`[speaker-detection]   ${gapLog.length} gaps found (showing first 10)`);
-    gapLog.slice(0, 10).forEach(g => console.log(`[speaker-detection]   ${g}`));
+    console.warn(`[speaker-detection] ⚠️ NO speaker changes detected! All segments assigned to speaker_0`);
+    console.warn(`[speaker-detection] Largest gaps in first 30:`, allGaps.filter(g => {
+      const match = g.match(/gap=(\d+\.\d+)s/);
+      return match && parseFloat(match[1]) > 0.2;
+    }).slice(0, 10));
   }
 
   return result;
@@ -310,7 +321,12 @@ export function ClarifyAudioPanel({
       const gender = configGender || 'unconfigured';
       const source = hasConfig ? 'config' : 'default';
 
-      console.log(`[voice-variety] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`);
+      // Debug: log raw segment speaker field
+      if (i < 15 || (seg?.speaker && seg.speaker !== 'speaker_0')) {
+        console.log(`[voice-variety] Seg ${i}: speaker_raw="${seg?.speaker}" -> ${gender} (${source}) -> voice="${voice}" | text="${(seg?.text || text).substring(0, 25)}..."`);
+      } else {
+        console.log(`[voice-variety] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`);
+      }
 
       const res = await fetch('/api/multi-voice-tts', {
         method: 'POST',
