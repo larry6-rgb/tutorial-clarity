@@ -943,6 +943,12 @@ function WatchPageContent() {
         }
     }, [speakerConfig, videoId]);
 
+    // Debug: track detectedSpeakers state changes
+    useEffect(() => {
+        console.log(`[speaker-ui] detectedSpeakers changed -> ${detectedSpeakers.length} speakers:`, detectedSpeakers);
+        console.log(`[speaker-ui] UI visible: ${detectedSpeakers.length > 1}`);
+    }, [detectedSpeakers]);
+
     // Callbacks for speaker config — only GROW the list, never shrink
     const handleSpeakersDetected = useCallback((speakers: string[]) => {
         setDetectedSpeakers(prev => {
@@ -1520,6 +1526,108 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                     {showMenu ? 'Hide Menu' : 'Show Menu'}
                 </button>
 
+                {/* ─── SPEAKER VOICE CONFIG — always visible when speakers detected ─── */}
+                {detectedSpeakers.length > 1 && (
+                    <div style={{
+                        width: '90%', marginBottom: '12px', padding: '10px',
+                        backgroundColor: '#1e293b', borderRadius: '8px',
+                        border: '1px solid #6366f1',
+                        boxShadow: '0 0 12px rgba(99,102,241,0.25)',
+                    }}>
+                        <div style={{
+                            fontSize: '13px', fontWeight: 'bold', color: '#c7d2fe',
+                            marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
+                        }}>
+                            <span>{'🎭'} Speaker Voices</span>
+                            {Object.keys(speakerConfig).length > 0 && (
+                                <button onClick={handleResetSpeakerConfig} style={{
+                                    background: 'none', border: '1px solid #475569',
+                                    color: '#9ca3af', cursor: 'pointer', fontSize: '10px',
+                                    padding: '2px 6px', borderRadius: '4px',
+                                }}>Reset</button>
+                            )}
+                        </div>
+                        <div style={{ fontSize: '10px', color: '#94a3b8', marginBottom: '8px' }}>
+                            {detectedSpeakers.length} speakers detected.
+                            {Object.keys(speakerConfig).length === 0
+                                ? ' Assign male/female for distinct voices.'
+                                : ' Each speaker has a distinct voice.'}
+                        </div>
+                        {(() => {
+                            const previewConfig: SpeakerConfig = {};
+                            detectedSpeakers.forEach(sid => {
+                                previewConfig[sid] = speakerConfig[sid] || 'male';
+                            });
+                            const voiceMap = assignVoicesToSpeakers(previewConfig);
+
+                            return detectedSpeakers.map((speakerId, idx) => {
+                                const currentGender = previewConfig[speakerId];
+                                const assignedVoice = voiceMap[speakerId] || 'onyx';
+                                const isConfigured = !!speakerConfig[speakerId];
+
+                                const altGender = currentGender === 'male' ? 'female' : 'male';
+                                const altConfig = { ...previewConfig, [speakerId]: altGender as 'male' | 'female' };
+                                const altMap = assignVoicesToSpeakers(altConfig);
+                                const maleVoice = currentGender === 'male' ? assignedVoice : altMap[speakerId];
+                                const femaleVoice = currentGender === 'female' ? assignedVoice : altMap[speakerId];
+
+                                return (
+                                    <div key={speakerId} style={{
+                                        display: 'flex', alignItems: 'center', gap: '6px',
+                                        marginBottom: idx < detectedSpeakers.length - 1 ? '6px' : '0',
+                                        padding: '5px 6px', borderRadius: '4px',
+                                        backgroundColor: isConfigured ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)',
+                                    }}>
+                                        <span style={{
+                                            fontSize: '11px', color: '#e2e8f0',
+                                            minWidth: '62px', fontWeight: isConfigured ? 'bold' : 'normal',
+                                        }}>
+                                            Speaker {idx}
+                                        </span>
+                                        <label style={{
+                                            display: 'flex', alignItems: 'center', gap: '3px',
+                                            fontSize: '11px', color: currentGender === 'male' ? '#93c5fd' : '#9ca3af',
+                                            cursor: 'pointer',
+                                        }}>
+                                            <input
+                                                type="radio"
+                                                name={`speaker-voice-${idx}`}
+                                                checked={currentGender === 'male'}
+                                                onChange={() => handleSpeakerGenderChange(speakerId, 'male')}
+                                                style={{ accentColor: '#6366f1', width: '12px', height: '12px' }}
+                                            />
+                                            {'♂'} ({maleVoice})
+                                        </label>
+                                        <label style={{
+                                            display: 'flex', alignItems: 'center', gap: '3px',
+                                            fontSize: '11px', color: currentGender === 'female' ? '#f9a8d4' : '#9ca3af',
+                                            cursor: 'pointer',
+                                        }}>
+                                            <input
+                                                type="radio"
+                                                name={`speaker-voice-${idx}`}
+                                                checked={currentGender === 'female'}
+                                                onChange={() => handleSpeakerGenderChange(speakerId, 'female')}
+                                                style={{ accentColor: '#ec4899', width: '12px', height: '12px' }}
+                                            />
+                                            {'♀'} ({femaleVoice})
+                                        </label>
+                                    </div>
+                                );
+                            });
+                        })()}
+                        {Object.keys(speakerConfig).length > 0 && (
+                            <div style={{
+                                fontSize: '9px', color: '#a5b4fc', marginTop: '6px',
+                                padding: '3px 6px', backgroundColor: 'rgba(99,102,241,0.1)',
+                                borderRadius: '3px', textAlign: 'center',
+                            }}>
+                                {'✅'} Saved! Applies to upcoming segments.
+                            </div>
+                        )}
+                    </div>
+                )}
+
                 {showMenu && (
                     <div style={{
                         color: 'white',
@@ -2032,115 +2140,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             registerHandlers={handleClarifyRegisterHandlers}
                                         />
 
-                                        {/* ─── SPEAKER VOICE CONFIGURATION (Optional) ─── */}
-                                        {detectedSpeakers.length > 1 && (
-                                            <div style={{
-                                                marginTop: '10px', padding: '10px',
-                                                backgroundColor: '#1e293b', borderRadius: '8px',
-                                                border: '1px solid #334155',
-                                            }}>
-                                                <div style={{
-                                                    fontSize: '12px', fontWeight: 'bold', color: '#94a3b8',
-                                                    marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                                }}>
-                                                    <span>{'🎭'} Configure Speaker Voices</span>
-                                                    {Object.keys(speakerConfig).length > 0 && (
-                                                        <button onClick={handleResetSpeakerConfig} style={{
-                                                            background: 'none', border: '1px solid #475569',
-                                                            color: '#9ca3af', cursor: 'pointer', fontSize: '10px',
-                                                            padding: '2px 6px', borderRadius: '4px',
-                                                        }}>Reset</button>
-                                                    )}
-                                                </div>
-                                                <div style={{ fontSize: '10px', color: '#64748b', marginBottom: '8px' }}>
-                                                    {detectedSpeakers.length} speakers detected.
-                                                    {Object.keys(speakerConfig).length === 0
-                                                        ? ' Using single default voice. Assign male/female below for distinct voices.'
-                                                        : ' Voices configured — each speaker gets a distinct voice.'}
-                                                </div>
-                                                {(() => {
-                                                    // Build a full preview config so we can show voice assignments
-                                                    const previewConfig: SpeakerConfig = {};
-                                                    detectedSpeakers.forEach(sid => {
-                                                        // Default to 'male' (matching single default voice) until user configures
-                                                        previewConfig[sid] = speakerConfig[sid] || 'male';
-                                                    });
-                                                    const voiceMap = assignVoicesToSpeakers(previewConfig);
-
-                                                    return detectedSpeakers.map((speakerId, idx) => {
-                                                        const currentGender = previewConfig[speakerId];
-                                                        const assignedVoice = voiceMap[speakerId] || 'onyx';
-                                                        const isConfigured = !!speakerConfig[speakerId];
-
-                                                        // Preview what voice would be assigned if toggled
-                                                        const altGender = currentGender === 'male' ? 'female' : 'male';
-                                                        const altConfig = { ...previewConfig, [speakerId]: altGender as 'male' | 'female' };
-                                                        const altMap = assignVoicesToSpeakers(altConfig);
-                                                        const maleVoice = currentGender === 'male' ? assignedVoice : altMap[speakerId];
-                                                        const femaleVoice = currentGender === 'female' ? assignedVoice : altMap[speakerId];
-
-                                                        return (
-                                                            <div key={speakerId} style={{
-                                                                display: 'flex', alignItems: 'center', gap: '8px',
-                                                                marginBottom: idx < detectedSpeakers.length - 1 ? '6px' : '0',
-                                                                padding: '4px 6px', borderRadius: '4px',
-                                                                backgroundColor: isConfigured ? 'rgba(59,130,246,0.1)' : 'transparent',
-                                                            }}>
-                                                                <span style={{
-                                                                    fontSize: '11px', color: '#cbd5e1',
-                                                                    minWidth: '70px', fontWeight: isConfigured ? 'bold' : 'normal',
-                                                                }}>
-                                                                    Speaker {idx}
-                                                                </span>
-                                                                <label style={{
-                                                                    display: 'flex', alignItems: 'center', gap: '3px',
-                                                                    fontSize: '11px', color: currentGender === 'male' ? '#60a5fa' : '#9ca3af',
-                                                                    cursor: 'pointer',
-                                                                }}>
-                                                                    <input
-                                                                        type="radio"
-                                                                        name={`speaker-voice-${idx}`}
-                                                                        checked={currentGender === 'male'}
-                                                                        onChange={() => handleSpeakerGenderChange(speakerId, 'male')}
-                                                                        style={{ accentColor: '#3b82f6', width: '12px', height: '12px' }}
-                                                                    />
-                                                                    Male ({maleVoice})
-                                                                </label>
-                                                                <label style={{
-                                                                    display: 'flex', alignItems: 'center', gap: '3px',
-                                                                    fontSize: '11px', color: currentGender === 'female' ? '#f472b6' : '#9ca3af',
-                                                                    cursor: 'pointer',
-                                                                }}>
-                                                                    <input
-                                                                        type="radio"
-                                                                        name={`speaker-voice-${idx}`}
-                                                                        checked={currentGender === 'female'}
-                                                                        onChange={() => handleSpeakerGenderChange(speakerId, 'female')}
-                                                                        style={{ accentColor: '#ec4899', width: '12px', height: '12px' }}
-                                                                    />
-                                                                    Female ({femaleVoice})
-                                                                </label>
-                                                                <span style={{
-                                                                    fontSize: '9px', color: '#94a3b8', marginLeft: 'auto',
-                                                                    fontWeight: 'bold', textTransform: 'capitalize',
-                                                                }}>
-                                                                    {assignedVoice}
-                                                                </span>
-                                                            </div>
-                                                        );
-                                                    });
-                                                })()}
-                                                {Object.keys(speakerConfig).length > 0 && (
-                                                    <div style={{
-                                                        fontSize: '9px', color: '#60a5fa', marginTop: '6px',
-                                                        padding: '3px 6px', backgroundColor: 'rgba(59,130,246,0.08)',
-                                                        borderRadius: '3px', textAlign: 'center',
-                                                    }}>
-                                                        {'✅'} Voice config saved! Will apply to upcoming segments.
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )}
+                                        {/* Speaker config UI moved to persistent location above menu */}
                                     </div>
                                 )}
                             </div>
