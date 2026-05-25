@@ -166,10 +166,14 @@ function getVoiceForSegment(segment: ClarifyTranscriptSegment, config?: SpeakerC
   // If manual config exists, compute full voice assignment map
   if (config && Object.keys(config).length > 0) {
     const assignments = assignVoicesToSpeakers(config);
-    return assignments[speakerId] || DEFAULT_VOICE;
+    const voice = assignments[speakerId] || DEFAULT_VOICE;
+    // Debug: log the full assignment map for first call
+    console.log(`[voice-select] speaker="${speakerId}" config=${JSON.stringify(config)} assignments=${JSON.stringify(assignments)} -> "${voice}"`);
+    return voice;
   }
 
   // No config — single default voice for everyone (don't guess genders)
+  console.log(`[voice-select] speaker="${speakerId}" NO CONFIG -> default "${DEFAULT_VOICE}"`);
   return DEFAULT_VOICE;
 }
 
@@ -650,7 +654,12 @@ export function ClarifyAudioPanel({
     const segs = translatedTxRef.current;
     if (segs.length > 0) {
       console.log(`[voice-variety] Regenerating TTS for ${Math.min(8, segs.length)} segments...`);
+      console.log(`[voice-variety] speakerConfigRef.current =`, JSON.stringify(speakerConfigRef.current));
       const batch = segs.slice(0, 8);
+      // Log each segment's speaker field
+      batch.forEach((s, i) => {
+        console.log(`[voice-variety] Seg ${i}: text="${s.text.substring(0, 30)}..." speaker="${s.speaker}" start=${s.start}`);
+      });
       await Promise.allSettled(batch.map((s, i) => generateSeg(i, s.text)));
       console.log('[voice-variety] First batch regenerated. Ready to resume.');
     }
