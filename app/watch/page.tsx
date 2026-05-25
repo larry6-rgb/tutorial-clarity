@@ -76,23 +76,11 @@ function WatchPageContent() {
     });
 
     // Speaker voice configuration — persisted per videoId to localStorage
+    // NOTE: initialized empty to avoid hydration mismatch, loaded in useEffect below
     const SPEAKER_CONFIG_KEY = `speaker-config-${videoId}`;
-    const [speakerConfig, setSpeakerConfig] = useState<SpeakerConfig>(() => {
-        if (typeof window === 'undefined') return {};
-        try {
-            const saved = localStorage.getItem(`speaker-config-${videoId}`);
-            if (saved) { const parsed = JSON.parse(saved); console.log('[speaker-config] Loaded from localStorage:', parsed); return parsed; }
-        } catch {}
-        return {};
-    });
-    const [detectedSpeakers, setDetectedSpeakers] = useState<string[]>(() => {
-        if (typeof window === 'undefined') return [];
-        try {
-            const saved = localStorage.getItem(`detected-speakers-${videoId}`);
-            if (saved) { const parsed = JSON.parse(saved); console.log('[speaker-ui] Loaded detectedSpeakers from localStorage:', parsed); return parsed; }
-        } catch {}
-        return [];
-    });
+    const [speakerConfig, setSpeakerConfig] = useState<SpeakerConfig>({});
+    const [detectedSpeakers, setDetectedSpeakers] = useState<string[]>([]);
+    const [speakerStateHydrated, setSpeakerStateHydrated] = useState(false);
 
     // Clarify bar position/size — persisted to localStorage
     const CLARIFY_BAR_KEY = 'clarifyBarLayout';
@@ -934,14 +922,35 @@ function WatchPageContent() {
         try { localStorage.setItem(AI_SPEED_KEY, String(aiPlaybackSpeed)); } catch {}
     }, [aiPlaybackSpeed]);
 
-    // Save speaker config to localStorage when it changes
+    // Hydrate speaker state from localStorage AFTER mount (avoids SSR mismatch)
     useEffect(() => {
-        if (typeof window === 'undefined') return;
+        try {
+            const savedConfig = localStorage.getItem(`speaker-config-${videoId}`);
+            if (savedConfig) {
+                const parsed = JSON.parse(savedConfig);
+                console.log('[speaker-config] Hydrated from localStorage:', parsed);
+                setSpeakerConfig(parsed);
+            }
+        } catch {}
+        try {
+            const savedSpeakers = localStorage.getItem(`detected-speakers-${videoId}`);
+            if (savedSpeakers) {
+                const parsed = JSON.parse(savedSpeakers);
+                console.log('[speaker-ui] Hydrated detectedSpeakers from localStorage:', parsed);
+                setDetectedSpeakers(parsed);
+            }
+        } catch {}
+        setSpeakerStateHydrated(true);
+    }, [videoId]);
+
+    // Save speaker config to localStorage when it changes (skip initial empty state)
+    useEffect(() => {
+        if (!speakerStateHydrated) return;
         if (Object.keys(speakerConfig).length > 0) {
             try { localStorage.setItem(`speaker-config-${videoId}`, JSON.stringify(speakerConfig)); } catch {}
             console.log('[speaker-config] Saved to localStorage:', speakerConfig);
         }
-    }, [speakerConfig, videoId]);
+    }, [speakerConfig, videoId, speakerStateHydrated]);
 
     // Debug: track detectedSpeakers state changes
     useEffect(() => {
