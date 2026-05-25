@@ -166,14 +166,10 @@ function getVoiceForSegment(segment: ClarifyTranscriptSegment, config?: SpeakerC
   // If manual config exists, compute full voice assignment map
   if (config && Object.keys(config).length > 0) {
     const assignments = assignVoicesToSpeakers(config);
-    const voice = assignments[speakerId] || DEFAULT_VOICE;
-    // Debug: log the full assignment map for first call
-    console.log(`[voice-select] speaker="${speakerId}" config=${JSON.stringify(config)} assignments=${JSON.stringify(assignments)} -> "${voice}"`);
-    return voice;
+    return assignments[speakerId] || DEFAULT_VOICE;
   }
 
   // No config — single default voice for everyone (don't guess genders)
-  console.log(`[voice-select] speaker="${speakerId}" NO CONFIG -> default "${DEFAULT_VOICE}"`);
   return DEFAULT_VOICE;
 }
 
@@ -650,18 +646,25 @@ export function ClarifyAudioPanel({
     genSetRef.current.clear();
     setGeneratedCount(0);
 
-    // 3. Regenerate first batch of TTS with new voice assignments
+    // 3. Regenerate ALL translated segments with new voice assignments
+    //    (not just first 8 — the first N segments often belong to the same speaker,
+    //     so the user wouldn't hear the voice difference until much later)
     const segs = translatedTxRef.current;
     if (segs.length > 0) {
-      console.log(`[voice-variety] Regenerating TTS for ${Math.min(8, segs.length)} segments...`);
+      console.log(`[voice-variety] Regenerating TTS for ALL ${segs.length} translated segments...`);
       console.log(`[voice-variety] speakerConfigRef.current =`, JSON.stringify(speakerConfigRef.current));
-      const batch = segs.slice(0, 8);
-      // Log each segment's speaker field
-      batch.forEach((s, i) => {
-        console.log(`[voice-variety] Seg ${i}: text="${s.text.substring(0, 30)}..." speaker="${s.speaker}" start=${s.start}`);
-      });
-      await Promise.allSettled(batch.map((s, i) => generateSeg(i, s.text)));
-      console.log('[voice-variety] First batch regenerated. Ready to resume.');
+
+      // Log speaker distribution
+      const dist: Record<string, number> = {};
+      segs.forEach(s => { dist[s.speaker || '?'] = (dist[s.speaker || '?'] || 0) + 1; });
+      console.log(`[voice-variety] Speaker distribution:`, dist);
+
+      // Generate in parallel batches of 8 to avoid overwhelming the API
+      for (let start = 0; start < segs.length; start += 8) {
+        const batch = segs.slice(start, Math.min(start + 8, segs.length));
+        await Promise.allSettled(batch.map((s, j) => generateSeg(start + j, s.text)));
+      }
+      console.log(`[voice-variety] All ${segs.length} segments regenerated. Ready to resume.`);
     }
 
     // 4. Set phase to paused (user can click Resume)
