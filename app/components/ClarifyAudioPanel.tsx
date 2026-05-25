@@ -39,6 +39,7 @@ interface AudioCache {
     useClientTTS?: boolean;
     generating?: boolean;
     voice?: string;  // Which TTS voice was used for this segment
+    generatedAt?: number;  // Timestamp when this entry was created
   };
 }
 
@@ -226,6 +227,7 @@ export function ClarifyAudioPanel({
   const schedulerRef = useRef<ReturnType<typeof setInterval> | null>(null);  // SCHEDULER: timing-based sync loop
   const lastScheduledSegRef = useRef(-1);  // SCHEDULER: last segment we triggered playback for
   const translatingMoreRef = useRef(false);
+  const regenEpochRef = useRef(0);  // Incremented on each regeneration to invalidate stale generations
 
   // Keep refs synced
   useEffect(() => { volRef.current = volume / 100; }, [volume]);
@@ -291,6 +293,10 @@ export function ClarifyAudioPanel({
   const generateSeg = useCallback(async (i: number, text: string) => {
     if (cacheRef.current[i]?.url || cacheRef.current[i]?.useClientTTS || cacheRef.current[i]?.generating) return;
     if (genSetRef.current.has(i)) return;
+
+    // Capture epoch at start — if it changes during generation, discard results
+    const startEpoch = regenEpochRef.current;
+
     genSetRef.current.add(i);
     cacheRef.current[i] = { generating: true };
 
@@ -304,8 +310,7 @@ export function ClarifyAudioPanel({
       const gender = configGender || 'unconfigured';
       const source = hasConfig ? 'config' : 'default';
 
-      console.log(`[voice-variety] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`,
-        hasConfig ? `| config keys: ${Object.keys(speakerConfigRef.current!).join(',')}` : '');
+      console.log(`[voice-variety] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`);
 
       const res = await fetch('/api/multi-voice-tts', {
         method: 'POST',
@@ -319,6 +324,13 @@ export function ClarifyAudioPanel({
         }),
       });
 
+      // Check epoch — if regeneration happened while we were awaiting, discard this result
+      if (regenEpochRef.current !== startEpoch) {
+        console.log(`[voice-variety] Seg ${i}: DISCARDED (epoch ${startEpoch} -> ${regenEpochRef.current})`);
+        genSetRef.current.delete(i);
+        return;
+      }
+
       if (!res.ok) {
         console.warn(`[voice-variety] Seg ${i}: TTS API returned ${res.status}`);
         throw new Error(`TTS ${res.status}`);
@@ -326,28 +338,27 @@ export function ClarifyAudioPanel({
 
       const ct = res.headers.get('content-type');
       const returnedVoice = res.headers.get('x-voice-id');
+      const now = Date.now();
       if (ct?.includes('application/json')) {
         const data = await res.json();
         if (data.useClientSideTTS) {
-          console.log(`[voice-variety] Seg ${i}: API returned useClientSideTTS=true (no OpenAI key?), voice="${voice}"`);
-          cacheRef.current[i] = { useClientTTS: true, voice };
+          cacheRef.current[i] = { useClientTTS: true, voice, generatedAt: now };
           setUseClientTTS(true);
         }
       } else {
         const blob = await res.blob();
         if (blob.size > 0) {
           const url = URL.createObjectURL(blob);
-          cacheRef.current[i] = { url, voice };
-          console.log(`[voice-variety] Seg ${i}: Got OpenAI audio (${blob.size} bytes), requested="${voice}", server-used="${returnedVoice}"`);
+          cacheRef.current[i] = { url, voice, generatedAt: now };
+          console.log(`[voice-variety] Seg ${i}: ✓ OpenAI audio (${blob.size}B) voice="${voice}" server="${returnedVoice}"`);
         } else {
-          console.warn(`[voice-variety] Seg ${i}: Empty audio blob, falling back to client TTS`);
-          cacheRef.current[i] = { useClientTTS: true, voice };
+          cacheRef.current[i] = { useClientTTS: true, voice, generatedAt: now };
           setUseClientTTS(true);
         }
       }
     } catch (err) {
-      console.error(`[voice-variety] Seg ${i}: TTS generation failed, falling back to client TTS`, err);
-      cacheRef.current[i] = { useClientTTS: true };
+      console.error(`[voice-variety] Seg ${i}: TTS failed, client TTS fallback`, err);
+      cacheRef.current[i] = { useClientTTS: true, generatedAt: Date.now() };
       setUseClientTTS(true);
     }
 
@@ -454,7 +465,8 @@ export function ClarifyAudioPanel({
         audioRef.current = a;
 
         const seg = translatedTxRef.current[i];
-        console.log(`[scheduler] Playing seg ${i} at ${speedRef.current}x (video=${currentTimeRef.current.toFixed(1)}, seg.start=${seg?.start.toFixed(1)}) | voice="${cached.voice || '?'}" speaker=${seg?.speaker || '?'} | source=OpenAI-audio`);
+        const age = cached.generatedAt ? `${((Date.now() - cached.generatedAt) / 1000).toFixed(0)}s ago` : 'unknown';
+        console.log(`[scheduler] Playing seg ${i} at ${speedRef.current}x (video=${currentTimeRef.current.toFixed(1)}, seg.start=${seg?.start.toFixed(1)}) | voice="${cached.voice || '?'}" speaker=${seg?.speaker || '?'} | source=OpenAI-audio | generated=${age}`);
 
         a.onended = () => {
           // Segment finished naturally — scheduler will pick up next one
@@ -625,56 +637,77 @@ export function ClarifyAudioPanel({
    *  Keeps transcripts intact — only regenerates the audio.
    *  @param configOverride — If provided, updates the ref immediately (avoids useEffect timing gap) */
   const handleRegenerateVoices = useCallback(async (configOverride?: SpeakerConfig) => {
-    // If caller passed config directly, update ref immediately (no waiting for useEffect)
+    console.log('[regenerate] === STARTING REGENERATION ===');
+
+    // 0. Update config ref FIRST (before anything else)
     if (configOverride) {
       speakerConfigRef.current = configOverride;
-      console.log('[voice-variety] Config override applied directly to ref:', configOverride);
+      console.log('[regenerate] Config override applied:', configOverride);
     }
-    console.log('[voice-variety] === REGENERATING VOICES ===');
-    console.log('[voice-variety] Active speaker config:', speakerConfigRef.current);
 
-    // 1. Stop current playback
+    // 1. IMMEDIATELY set phase to paused — prevents scheduler useEffect from interfering
+    setPhase('paused');
+
+    // 2. Stop ALL current playback
     isPlayingRef.current = false;
     if (schedulerRef.current) { clearInterval(schedulerRef.current); schedulerRef.current = null; }
     lastScheduledSegRef.current = -1;
-    if (audioRef.current) { audioRef.current.pause(); audioRef.current.onended = null; audioRef.current = null; }
+    playingIdxRef.current = -1;
+    if (audioRef.current) {
+      audioRef.current.pause();
+      audioRef.current.onended = null;
+      audioRef.current.src = '';  // Force release of audio resource
+      audioRef.current = null;
+    }
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
+    if (onMuteYouTube) onMuteYouTube(false);
+    console.log('[regenerate] Playback stopped, scheduler cleared');
 
-    // 2. Revoke old audio URLs and clear cache (keep transcripts!)
-    Object.values(cacheRef.current).forEach(e => { if (e.url) URL.revokeObjectURL(e.url); });
+    // 3. NUCLEAR CACHE CLEAR — revoke ALL blob URLs, then create fresh objects
+    const oldCacheSize = Object.keys(cacheRef.current).length;
+    const oldGenSetSize = genSetRef.current.size;
+    Object.values(cacheRef.current).forEach(e => {
+      if (e.url) { try { URL.revokeObjectURL(e.url); } catch {} }
+    });
+    // Create NEW object/set instances (not just clearing — ensures no stale references)
     cacheRef.current = {};
-    genSetRef.current.clear();
+    genSetRef.current = new Set();
     setGeneratedCount(0);
 
-    // 3. Regenerate ALL translated segments with new voice assignments
-    //    (not just first 8 — the first N segments often belong to the same speaker,
-    //     so the user wouldn't hear the voice difference until much later)
+    // Increment epoch — any in-flight generateSeg calls from the old epoch will be discarded
+    regenEpochRef.current++;
+    const thisEpoch = regenEpochRef.current;
+
+    console.log(`[regenerate] Cache cleared: ${oldCacheSize} entries removed, genSet: ${oldGenSetSize} cleared`);
+    console.log(`[regenerate] Cache size after clear: ${Object.keys(cacheRef.current).length}`);
+    console.log(`[regenerate] Epoch: ${thisEpoch}`);
+    console.log('[regenerate] Active config:', JSON.stringify(speakerConfigRef.current));
+
+    // 4. Regenerate ALL translated segments with new voice assignments
     const segs = translatedTxRef.current;
     if (segs.length > 0) {
-      console.log(`[voice-variety] Regenerating TTS for ALL ${segs.length} translated segments...`);
-      console.log(`[voice-variety] speakerConfigRef.current =`, JSON.stringify(speakerConfigRef.current));
-
       // Log speaker distribution
       const dist: Record<string, number> = {};
       segs.forEach(s => { dist[s.speaker || '?'] = (dist[s.speaker || '?'] || 0) + 1; });
-      console.log(`[voice-variety] Speaker distribution:`, dist);
+      console.log(`[regenerate] Regenerating ALL ${segs.length} segments. Speaker distribution:`, dist);
 
-      // Generate in parallel batches of 8 to avoid overwhelming the API
-      for (let start = 0; start < segs.length; start += 8) {
-        const batch = segs.slice(start, Math.min(start + 8, segs.length));
-        await Promise.allSettled(batch.map((s, j) => generateSeg(start + j, s.text)));
+      // Generate in parallel batches of 8
+      for (let batchStart = 0; batchStart < segs.length; batchStart += 8) {
+        // Check if a newer regeneration has started — abort if stale
+        if (regenEpochRef.current !== thisEpoch) {
+          console.log(`[regenerate] Epoch ${thisEpoch} superseded by ${regenEpochRef.current}, aborting`);
+          return;
+        }
+        const batch = segs.slice(batchStart, Math.min(batchStart + 8, segs.length));
+        await Promise.allSettled(batch.map((s, j) => generateSeg(batchStart + j, s.text)));
+        console.log(`[regenerate] Batch ${batchStart}-${batchStart + batch.length - 1} done`);
       }
-      console.log(`[voice-variety] All ${segs.length} segments regenerated. Ready to resume.`);
+      console.log(`[regenerate] All ${segs.length} segments regenerated`);
     }
 
-    // 4. Set phase to paused (user can click Resume)
-    if (phase === 'playing') {
-      setPhase('paused');
-    }
-    if (onMuteYouTube) onMuteYouTube(false);
-
-    console.log('[voice-variety] === REGENERATION COMPLETE ===');
-  }, [generateSeg, phase, onMuteYouTube]);
+    console.log(`[regenerate] Final cache size: ${Object.keys(cacheRef.current).length}`);
+    console.log('[regenerate] === REGENERATION COMPLETE ===');
+  }, [generateSeg, onMuteYouTube]);
 
   // Register external handlers
   useEffect(() => {
