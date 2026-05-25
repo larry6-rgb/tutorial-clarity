@@ -254,6 +254,7 @@ export function ClarifyAudioPanel({
   const lastScheduledSegRef = useRef(-1);  // SCHEDULER: last segment we triggered playback for
   const translatingMoreRef = useRef(false);
   const regenEpochRef = useRef(0);  // Incremented on each regeneration to invalidate stale generations
+  const frozenVoiceMapRef = useRef<Record<string, string> | null>(null);  // FROZEN voice assignments — set once at regen, used for ALL segments
 
   // Keep refs synced
   useEffect(() => { volRef.current = volume / 100; }, [volume]);
@@ -273,9 +274,11 @@ export function ClarifyAudioPanel({
   useEffect(() => { originalTxRef.current = originalTranscript; }, [originalTranscript]);
   useEffect(() => { translatedTxRef.current = translatedTranscript; }, [translatedTranscript]);
   useEffect(() => {
+    // Only update the ref if we're NOT in the middle of a regeneration
+    // (frozenVoiceMapRef being set means regen calculated assignments — don't overwrite)
     speakerConfigRef.current = speakerConfig;
     if (speakerConfig && Object.keys(speakerConfig).length > 0) {
-      console.log('[speaker-config] Config updated:', speakerConfig);
+      console.log('[speaker-config] Config prop updated:', speakerConfig);
     }
   }, [speakerConfig]);
 
@@ -328,13 +331,24 @@ export function ClarifyAudioPanel({
 
     try {
       const seg = translatedTxRef.current[i] || txRef.current[i];
-      // Multi-voice: pick voice based on speaker config (or single default)
-      const voice = seg ? getVoiceForSegment(seg, speakerConfigRef.current) : DEFAULT_VOICE;
       const speakerId = seg?.speaker || 'speaker_0';
-      const hasConfig = speakerConfigRef.current && Object.keys(speakerConfigRef.current).length > 0;
-      const configGender = speakerConfigRef.current?.[speakerId];
-      const gender = configGender || 'unconfigured';
-      const source = hasConfig ? 'config' : 'default';
+
+      // FROZEN voice: always use the frozen map (computed once at regen time)
+      // Falls back to getVoiceForSegment only if no frozen map exists (initial load)
+      let voice: string;
+      let source: string;
+      if (frozenVoiceMapRef.current && frozenVoiceMapRef.current[speakerId]) {
+        voice = frozenVoiceMapRef.current[speakerId];
+        source = 'frozen';
+      } else if (frozenVoiceMapRef.current) {
+        voice = DEFAULT_VOICE;
+        source = 'frozen-fallback';
+      } else {
+        voice = seg ? getVoiceForSegment(seg, speakerConfigRef.current) : DEFAULT_VOICE;
+        source = 'live';
+      }
+      const configGender = speakerConfigRef.current?.[speakerId] || 'unconfigured';
+      const gender = configGender;
 
       console.log(`[TRACE-6-TTS] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`);
 
@@ -665,16 +679,28 @@ export function ClarifyAudioPanel({
   const handleRegenerateVoices = useCallback(async (configOverride?: SpeakerConfig) => {
     console.log('[regenerate] === STARTING REGENERATION ===');
 
-    // 0. Update config ref FIRST (before anything else)
-    if (configOverride) {
-      speakerConfigRef.current = configOverride;
-      console.log('[regenerate] Config override applied:', configOverride);
-    }
+    // 0. FREEZE config: take a snapshot so nothing can change it during generation
+    const frozenConfig: SpeakerConfig = configOverride
+      ? { ...configOverride }
+      : { ...(speakerConfigRef.current || {}) };
+    speakerConfigRef.current = frozenConfig;
+    console.log('[regenerate] Config FROZEN:', JSON.stringify(frozenConfig));
 
-    // 1. IMMEDIATELY set phase to paused — prevents scheduler useEffect from interfering
+    // 1. FREEZE voice assignments: compute ONCE, use for ALL segments
+    const voiceMap = assignVoicesToSpeakers(frozenConfig);
+    frozenVoiceMapRef.current = voiceMap;
+    console.log('[FREEZE] === VOICE ASSIGNMENTS FROZEN ===');
+    console.log('[FREEZE] Map:', JSON.stringify(voiceMap));
+    console.log('[FREEZE] These assignments will be used for ALL segments');
+
+    // Also update the module-level cache so getVoiceForSegment stays consistent
+    _cachedConfig = JSON.stringify(frozenConfig);
+    _cachedAssignments = { ...voiceMap };
+
+    // 2. IMMEDIATELY set phase to paused — prevents scheduler useEffect from interfering
     setPhase('paused');
 
-    // 2. Stop ALL current playback
+    // 3. Stop ALL current playback
     isPlayingRef.current = false;
     if (schedulerRef.current) { clearInterval(schedulerRef.current); schedulerRef.current = null; }
     lastScheduledSegRef.current = -1;
@@ -689,7 +715,7 @@ export function ClarifyAudioPanel({
     if (onMuteYouTube) onMuteYouTube(false);
     console.log('[regenerate] Playback stopped, scheduler cleared');
 
-    // 3. NUCLEAR CACHE CLEAR — revoke ALL blob URLs, then create fresh objects
+    // 4. NUCLEAR CACHE CLEAR — revoke ALL blob URLs, then create fresh objects
     const oldCacheSize = Object.keys(cacheRef.current).length;
     const oldGenSetSize = genSetRef.current.size;
     Object.values(cacheRef.current).forEach(e => {
@@ -705,9 +731,7 @@ export function ClarifyAudioPanel({
     const thisEpoch = regenEpochRef.current;
 
     console.log(`[regenerate] Cache cleared: ${oldCacheSize} entries removed, genSet: ${oldGenSetSize} cleared`);
-    console.log(`[regenerate] Cache size after clear: ${Object.keys(cacheRef.current).length}`);
     console.log(`[regenerate] Epoch: ${thisEpoch}`);
-    console.log('[regenerate] Active config:', JSON.stringify(speakerConfigRef.current));
 
     // 4. Regenerate ALL translated segments with new voice assignments
     const segs = translatedTxRef.current;
