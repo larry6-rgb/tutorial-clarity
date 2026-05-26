@@ -61,26 +61,37 @@ interface ClarifyAudioPanelProps {
   registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => void; detectWithAssemblyAI: () => Promise<string[]> }) => void;
 }
 
-// ═══ MULTI-VOICE SYSTEM ═══
-// Voice pools for same-gender variety — speakers cycle through these.
-// OpenAI voices: 'onyx' (deep male), 'echo' (male), 'fable' (male),
-//                'nova' (female), 'shimmer' (female), 'alloy' (neutral)
-export const FEMALE_VOICES = ['nova', 'shimmer', 'alloy'];
-export const MALE_VOICES   = ['onyx', 'fable', 'echo'];
+// ═══ MULTI-VOICE SYSTEM — SMART ROTATION ═══
+// All 6 OpenAI voices:
+//   Female: nova, shimmer, fable
+//   Male:   onyx, echo
+//   Neutral: alloy
+//
+// Strategy:
+//   Speakers 0-2: User picks male/female → deterministic voice from pool
+//   Speakers 3+:  Auto-cycle through whichever voices weren't used by 0-2
+//
+// This keeps the main speakers distinct while providing variety for extras.
+export const FEMALE_VOICES = ['nova', 'shimmer', 'fable'];
+export const MALE_VOICES   = ['onyx', 'echo'];
+const ALL_VOICES = ['nova', 'alloy', 'echo', 'fable', 'onyx', 'shimmer'];
 
 // Default voice when no speaker detection is possible
 const DEFAULT_VOICE = 'onyx';
 
 /**
  * Compute a deterministic voice assignment for every speaker in the config.
- * 
+ *
  * ⚠️  THIS FUNCTION MUST ONLY BE CALLED ONCE — inside handleRegenerateVoices.
  *     If you see the call-counter exceed 1 in the logs, something is wrong.
  *
- * Speakers are sorted numerically so the mapping is stable regardless of
- * object-key iteration order.  Same-gender speakers cycle through their pool:
- *   Female: nova -> shimmer -> alloy -> nova ...
- *   Male:   onyx -> fable   -> echo  -> onyx ...
+ * SMART ROTATION:
+ *   1. Speakers 0-2 get voices from male/female pools based on user config
+ *   2. Track which voices were used for speakers 0-2
+ *   3. Speakers 3+ auto-cycle through the UNUSED voices (no overlap with main)
+ *
+ * Example: If user picks Nova(♀), Onyx(♂), Shimmer(♀) for speakers 0-2,
+ *   speakers 3+ cycle through: alloy, fable, echo (the 3 unused voices)
  */
 let _assignCallCounter = 0;  // GUARD: tracks how many times this is called per session
 
@@ -93,9 +104,10 @@ export function assignVoicesToSpeakers(config: SpeakerConfig): Record<string, st
   }
   console.log(`[ASSIGN-VOICES] Config:`, JSON.stringify(config));
 
-  const assignments: Record<string, string> = {};
-  let femaleIdx = 0;
-  let maleIdx = 0;
+  const voiceMap: Record<string, string> = {};
+
+  // Track which voices are used by speakers 0-2
+  const usedVoices = new Set<string>();
 
   const sorted = Object.keys(config).sort((a, b) => {
     const na = parseInt(a.match(/\d+/)?.[0] || '0');
@@ -103,49 +115,126 @@ export function assignVoicesToSpeakers(config: SpeakerConfig): Record<string, st
     return na - nb;
   });
 
-  console.log(`[ASSIGN-VOICES] Processing speakers in order:`, sorted);
+  const totalSpeakers = sorted.length;
+  console.log(`[ASSIGN-VOICES] Processing ${totalSpeakers} speakers in order:`, sorted);
 
-  for (const id of sorted) {
-    const gender = config[id];
+  // ── STEP 1: Assign voices for speakers 0-2 based on user config ──
+  const mainSpeakers = sorted.filter(id => {
+    const n = parseInt(id.match(/\d+/)?.[0] || '0');
+    return n <= 2;
+  });
+
+  mainSpeakers.forEach(speakerId => {
+    const gender = config[speakerId];
+    let voice: string;
+
     if (gender === 'female') {
-      assignments[id] = FEMALE_VOICES[femaleIdx % FEMALE_VOICES.length];
-      console.log(`[ASSIGN-VOICES]   ${id} (female #${femaleIdx}) → ${assignments[id]}`);
-      femaleIdx++;
+      // Female voices: nova, shimmer, fable — pick based on how many females assigned so far
+      const femaleCount = Array.from(usedVoices).filter(v =>
+        FEMALE_VOICES.includes(v)
+      ).length;
+      voice = FEMALE_VOICES[femaleCount % FEMALE_VOICES.length];
     } else {
-      assignments[id] = MALE_VOICES[maleIdx % MALE_VOICES.length];
-      console.log(`[ASSIGN-VOICES]   ${id} (male #${maleIdx}) → ${assignments[id]}`);
-      maleIdx++;
+      // Male voices: onyx, echo — pick based on how many males assigned so far
+      const maleCount = Array.from(usedVoices).filter(v =>
+        MALE_VOICES.includes(v)
+      ).length;
+      voice = MALE_VOICES[maleCount % MALE_VOICES.length];
     }
+
+    voiceMap[speakerId] = voice;
+    usedVoices.add(voice);
+    console.log(`[ASSIGN-VOICES]   ${speakerId} (${gender}) → ${voice}`);
+  });
+
+  console.log(`[ASSIGN-VOICES] Speakers 0-2 assigned. Used voices:`, Array.from(usedVoices));
+
+  // ── STEP 2: Get unused voices for speakers 3+ ──
+  const unusedVoices = ALL_VOICES.filter(v => !usedVoices.has(v));
+  console.log(`[ASSIGN-VOICES] Unused voices for speakers 3+:`, unusedVoices);
+
+  // ── STEP 3: Auto-cycle unused voices for speakers 3+ ──
+  const extraSpeakers = sorted.filter(id => {
+    const n = parseInt(id.match(/\d+/)?.[0] || '0');
+    return n > 2;
+  });
+
+  if (extraSpeakers.length > 0) {
+    console.log(`[ASSIGN-VOICES] ========================================`);
+    console.log(`[ASSIGN-VOICES] AUTO-ROTATION FOR SPEAKERS 3+`);
+    console.log(`[ASSIGN-VOICES] Main speakers (0-2):`,
+      Object.entries(voiceMap)
+        .filter(([id]) => mainSpeakers.includes(id))
+        .map(([id, voice]) => `${id}=${voice}`)
+    );
+    console.log(`[ASSIGN-VOICES] Unused voices pool:`, unusedVoices);
+    console.log(`[ASSIGN-VOICES] Rotation pattern:`);
+
+    // If somehow all 6 voices are used (shouldn't happen with 3 speakers), fall back to ALL_VOICES
+    const rotationPool = unusedVoices.length > 0 ? unusedVoices : ALL_VOICES;
+
+    extraSpeakers.forEach((speakerId, idx) => {
+      const voiceIndex = idx % rotationPool.length;
+      const voice = rotationPool[voiceIndex];
+      voiceMap[speakerId] = voice;
+      console.log(`[ASSIGN-VOICES]   ${speakerId} (auto) → ${voice} (index ${voiceIndex})`);
+    });
+
+    console.log(`[ASSIGN-VOICES] ========================================`);
   }
 
-  console.log(`[ASSIGN-VOICES] FINAL:`, JSON.stringify(assignments));
+  console.log(`[ASSIGN-VOICES] FINAL:`, JSON.stringify(voiceMap));
   console.log(`[ASSIGN-VOICES] ════════════════════════════════════════`);
-  return assignments;
+  return voiceMap;
 }
 
 /**
  * SILENT version of assignVoicesToSpeakers — for UI preview labels ONLY.
  * Does NOT log. Does NOT affect the frozen map. Safe to call on every render.
+ * Uses the same smart rotation logic as the main function.
  */
 export function previewVoiceAssignments(config: SpeakerConfig): Record<string, string> {
-  const assignments: Record<string, string> = {};
-  let femaleIdx = 0;
-  let maleIdx = 0;
+  const voiceMap: Record<string, string> = {};
+  const usedVoices = new Set<string>();
+
   const sorted = Object.keys(config).sort((a, b) => {
     const na = parseInt(a.match(/\d+/)?.[0] || '0');
     const nb = parseInt(b.match(/\d+/)?.[0] || '0');
     return na - nb;
   });
-  for (const id of sorted) {
-    if (config[id] === 'female') {
-      assignments[id] = FEMALE_VOICES[femaleIdx % FEMALE_VOICES.length];
-      femaleIdx++;
+
+  // Speakers 0-2: user-configured
+  sorted.forEach(id => {
+    const n = parseInt(id.match(/\d+/)?.[0] || '0');
+    if (n > 2) return;
+
+    const gender = config[id];
+    if (gender === 'female') {
+      const femaleCount = Array.from(usedVoices).filter(v => FEMALE_VOICES.includes(v)).length;
+      const voice = FEMALE_VOICES[femaleCount % FEMALE_VOICES.length];
+      voiceMap[id] = voice;
+      usedVoices.add(voice);
     } else {
-      assignments[id] = MALE_VOICES[maleIdx % MALE_VOICES.length];
-      maleIdx++;
+      const maleCount = Array.from(usedVoices).filter(v => MALE_VOICES.includes(v)).length;
+      const voice = MALE_VOICES[maleCount % MALE_VOICES.length];
+      voiceMap[id] = voice;
+      usedVoices.add(voice);
     }
-  }
-  return assignments;
+  });
+
+  // Speakers 3+: auto-cycle unused voices
+  const unusedVoices = ALL_VOICES.filter(v => !usedVoices.has(v));
+  const rotationPool = unusedVoices.length > 0 ? unusedVoices : ALL_VOICES;
+  let extraIdx = 0;
+
+  sorted.forEach(id => {
+    const n = parseInt(id.match(/\d+/)?.[0] || '0');
+    if (n <= 2) return;
+    voiceMap[id] = rotationPool[extraIdx % rotationPool.length];
+    extraIdx++;
+  });
+
+  return voiceMap;
 }
 
 /**
@@ -614,7 +703,6 @@ export function ClarifyAudioPanel({
       }
       
       // Determine gender: prefer explicit config, else infer from voice pool membership
-      const FEMALE_VOICES = ['nova', 'shimmer', 'alloy'];
       const configGender = speakerConfigRef.current?.[speakerId];
       const gender = configGender
         || (FEMALE_VOICES.includes(voice) ? 'female' : 'male');

@@ -2127,6 +2127,18 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                             ? ' Click Apply to regenerate audio with new voices.'
                                                             : ' Each speaker has a distinct voice.'}
                                                 </div>
+                                                {detectedSpeakers.length > 3 && (
+                                                    <div style={{
+                                                        fontSize: '10px', color: '#fbbf24', marginBottom: '8px',
+                                                        padding: '5px 8px', backgroundColor: 'rgba(251,191,36,0.1)',
+                                                        borderRadius: '4px', lineHeight: '1.4',
+                                                        border: '1px solid rgba(251,191,36,0.2)',
+                                                    }}>
+                                                        {'ℹ️'} <strong>{detectedSpeakers.length} speakers detected.</strong>
+                                                        {' '}Configure the first 3 speakers below.
+                                                        Speakers 3+ automatically use remaining voices for variety.
+                                                    </div>
+                                                )}
                                                 {(() => {
                                                     const previewConfig: SpeakerConfig = {};
                                                     detectedSpeakers.forEach(sid => {
@@ -2145,47 +2157,65 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                         const maleVoice = currentGender === 'male' ? assignedVoice : altMap[speakerId];
                                                         const femaleVoice = currentGender === 'female' ? assignedVoice : altMap[speakerId];
 
+                                                        // Speakers 3+ are auto-assigned — show read-only label
+                                                        const isAutoAssigned = idx >= 3;
+
                                                         return (
                                                             <div key={speakerId} style={{
                                                                 display: 'flex', alignItems: 'center', gap: '8px',
                                                                 marginBottom: idx < detectedSpeakers.length - 1 ? '6px' : '0',
                                                                 padding: '5px 6px', borderRadius: '4px',
-                                                                backgroundColor: isConfigured ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)',
+                                                                backgroundColor: isAutoAssigned
+                                                                    ? 'rgba(251,191,36,0.08)'
+                                                                    : isConfigured ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)',
                                                             }}>
                                                                 <span style={{
                                                                     fontSize: '11px', color: '#e2e8f0',
-                                                                    minWidth: '62px', fontWeight: isConfigured ? 'bold' : 'normal',
+                                                                    minWidth: '62px', fontWeight: isConfigured || isAutoAssigned ? 'bold' : 'normal',
                                                                 }}>
                                                                     Speaker {idx}
                                                                 </span>
-                                                                <label style={{
-                                                                    display: 'flex', alignItems: 'center', gap: '3px',
-                                                                    fontSize: '11px', color: currentGender === 'male' ? '#93c5fd' : '#9ca3af',
-                                                                    cursor: 'pointer',
-                                                                }}>
-                                                                    <input
-                                                                        type="radio"
-                                                                        name={`speaker-voice-${idx}`}
-                                                                        checked={currentGender === 'male'}
-                                                                        onChange={() => handleSpeakerGenderChange(speakerId, 'male')}
-                                                                        style={{ accentColor: '#6366f1', width: '12px', height: '12px' }}
-                                                                    />
-                                                                    {'♂'} ({maleVoice})
-                                                                </label>
-                                                                <label style={{
-                                                                    display: 'flex', alignItems: 'center', gap: '3px',
-                                                                    fontSize: '11px', color: currentGender === 'female' ? '#f9a8d4' : '#9ca3af',
-                                                                    cursor: 'pointer',
-                                                                }}>
-                                                                    <input
-                                                                        type="radio"
-                                                                        name={`speaker-voice-${idx}`}
-                                                                        checked={currentGender === 'female'}
-                                                                        onChange={() => handleSpeakerGenderChange(speakerId, 'female')}
-                                                                        style={{ accentColor: '#ec4899', width: '12px', height: '12px' }}
-                                                                    />
-                                                                    {'♀'} ({femaleVoice})
-                                                                </label>
+                                                                {isAutoAssigned ? (
+                                                                    /* Auto-assigned: show voice name with auto label */
+                                                                    <span style={{
+                                                                        fontSize: '11px', color: '#fbbf24',
+                                                                        fontStyle: 'italic',
+                                                                    }}>
+                                                                        {'🔄'} auto → {assignedVoice}
+                                                                    </span>
+                                                                ) : (
+                                                                    /* Speakers 0-2: user picks male/female */
+                                                                    <>
+                                                                        <label style={{
+                                                                            display: 'flex', alignItems: 'center', gap: '3px',
+                                                                            fontSize: '11px', color: currentGender === 'male' ? '#93c5fd' : '#9ca3af',
+                                                                            cursor: 'pointer',
+                                                                        }}>
+                                                                            <input
+                                                                                type="radio"
+                                                                                name={`speaker-voice-${idx}`}
+                                                                                checked={currentGender === 'male'}
+                                                                                onChange={() => handleSpeakerGenderChange(speakerId, 'male')}
+                                                                                style={{ accentColor: '#6366f1', width: '12px', height: '12px' }}
+                                                                            />
+                                                                            {'♂'} ({maleVoice})
+                                                                        </label>
+                                                                        <label style={{
+                                                                            display: 'flex', alignItems: 'center', gap: '3px',
+                                                                            fontSize: '11px', color: currentGender === 'female' ? '#f9a8d4' : '#9ca3af',
+                                                                            cursor: 'pointer',
+                                                                        }}>
+                                                                            <input
+                                                                                type="radio"
+                                                                                name={`speaker-voice-${idx}`}
+                                                                                checked={currentGender === 'female'}
+                                                                                onChange={() => handleSpeakerGenderChange(speakerId, 'female')}
+                                                                                style={{ accentColor: '#ec4899', width: '12px', height: '12px' }}
+                                                                            />
+                                                                            {'♀'} ({femaleVoice})
+                                                                        </label>
+                                                                    </>
+                                                                )}
                                                             </div>
                                                         );
                                                     });
