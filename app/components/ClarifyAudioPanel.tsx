@@ -1240,23 +1240,14 @@ export function ClarifyAudioPanel({
     console.log('[ASSEMBLY-DETECT] Starting AssemblyAI speaker detection...');
 
     try {
-      // Step 1: Get audio URL from video-stream API
-      console.log('[ASSEMBLY-DETECT] Step 1: Fetching audio URL for video', videoId);
-      const streamRes = await fetch(`/api/video-stream?videoId=${videoId}`);
-      if (!streamRes.ok) throw new Error(`Failed to get audio stream (${streamRes.status})`);
-      const streamData = await streamRes.json();
-
-      // Prefer direct audio URL, fall back to proxy
-      const audioUrl = streamData.bestAudio?.url || streamData.proxyUrls?.audio;
-      if (!audioUrl) throw new Error('No audio URL available for this video');
-      console.log('[ASSEMBLY-DETECT] Audio URL obtained:', audioUrl.substring(0, 80) + '...');
-
-      // Step 2: Call AssemblyAI speaker detection API
-      console.log('[ASSEMBLY-DETECT] Step 2: Calling AssemblyAI (this takes 1-2 minutes)...');
+      // Call AssemblyAI speaker detection API
+      // The backend handles getting the audio URL via yt-dlp (AssemblyAI needs a public URL)
+      console.log('[ASSEMBLY-DETECT] Calling /api/detect-speakers for video', videoId);
+      console.log('[ASSEMBLY-DETECT] This takes 1-2 minutes (yt-dlp extract + AssemblyAI transcription)...');
       const detectRes = await fetch('/api/detect-speakers', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ audioUrl, videoId }),
+        body: JSON.stringify({ videoId }),
       });
 
       if (!detectRes.ok) {

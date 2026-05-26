@@ -1,22 +1,72 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AssemblyAI } from 'assemblyai';
+import { execSync } from 'child_process';
 
 export const maxDuration = 300; // 5 minutes max for long videos
 
+/**
+ * Get a direct YouTube audio URL using yt-dlp.
+ * AssemblyAI needs a publicly accessible URL — our localhost proxy won't work.
+ * yt-dlp extracts a fresh CDN URL that AssemblyAI can fetch directly.
+ */
+function getDirectAudioUrl(videoId: string): string {
+  console.log('[AssemblyAI] Extracting direct audio URL via yt-dlp...');
+
+  // Find yt-dlp binary
+  const candidates = ['yt-dlp', 'yt-dlp.exe', '/usr/local/bin/yt-dlp', '/usr/bin/yt-dlp',
+    'C:\\ProgramData\\chocolatey\\bin\\yt-dlp.exe'];
+  let ytdlpPath = '';
+
+  for (const cmd of candidates) {
+    try {
+      execSync(`"${cmd}" --version`, { encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] });
+      ytdlpPath = cmd;
+      console.log('[AssemblyAI] Found yt-dlp at:', cmd);
+      break;
+    } catch { /* try next */ }
+  }
+
+  if (!ytdlpPath) {
+    throw new Error('yt-dlp not found. Install it: pip install yt-dlp (or winget install yt-dlp on Windows)');
+  }
+
+  // Get best audio-only URL
+  const url = `https://www.youtube.com/watch?v=${videoId}`;
+  try {
+    const result = execSync(
+      `"${ytdlpPath}" -f "bestaudio" --get-url --no-warnings "${url}"`,
+      { encoding: 'utf8', timeout: 30000, maxBuffer: 1024 * 1024, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
+    ).trim();
+
+    if (!result || !result.startsWith('http')) {
+      throw new Error('yt-dlp returned invalid URL: ' + result?.substring(0, 100));
+    }
+
+    console.log('[AssemblyAI] Direct audio URL obtained:', result.substring(0, 100) + '...');
+    return result;
+  } catch (err: any) {
+    console.error('[AssemblyAI] yt-dlp error:', err.message);
+    throw new Error(`Failed to extract audio URL: ${err.message}`);
+  }
+}
+
 export async function POST(req: NextRequest) {
   try {
-    const { audioUrl, videoId } = await req.json();
+    const { videoId } = await req.json();
 
+    console.log('[AssemblyAI] ════════════════════════════════════════');
     console.log('[AssemblyAI] Starting speaker detection');
     console.log('[AssemblyAI] Video ID:', videoId);
-    console.log('[AssemblyAI] Audio URL:', audioUrl?.substring(0, 80) + '...');
 
-    if (!audioUrl) {
+    if (!videoId) {
       return NextResponse.json(
-        { error: 'Audio URL is required' },
+        { error: 'Video ID is required' },
         { status: 400 }
       );
     }
+
+    // Step 1: Get a direct audio URL via yt-dlp (AssemblyAI needs a public URL)
+    const audioUrl = getDirectAudioUrl(videoId);
 
     // Initialize AssemblyAI client
     const apiKey = process.env.ASSEMBLYAI_API_KEY;
@@ -31,15 +81,13 @@ export async function POST(req: NextRequest) {
     const client = new AssemblyAI({ apiKey });
 
     console.log('[AssemblyAI] Submitting audio for transcription...');
-    console.log('[AssemblyAI] Speech model: universal-2');
+    console.log('[AssemblyAI] Speech model: best');
     console.log('[AssemblyAI] Speaker labels: enabled');
 
     // Submit audio with speaker diarization
-    // Note: SDK types may not include 'universal-2' yet, but the API requires it
     const transcript = await client.transcripts.transcribe({
       audio: audioUrl,
       speaker_labels: true,
-      speech_model: 'universal-2' as any, // Required by current AssemblyAI API
     });
 
     console.log('[AssemblyAI] Transcription status:', transcript.status);
