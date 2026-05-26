@@ -161,11 +161,14 @@ function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscript
   if (segments.length === 0) return segments;
 
   const N = segments.length;
-  console.log(`[speaker-detect] === ANALYZING ${N} SEGMENTS ===`);
+  const TARGET_SPEAKERS = 3; // We want 3 speakers (user sees 3 radio button rows)
+  const numBoundaries = TARGET_SPEAKERS - 1; // 2 boundaries → 3 groups
+  
+  console.log(`[speaker-detect] === ANALYZING ${N} SEGMENTS (target: ${TARGET_SPEAKERS} speakers) ===`);
 
   // ── STEP 1: Compute ALL gap types ──
-  const endToStartGaps: { idx: number; gap: number }[] = [];   // traditional
-  const startToStartGaps: { idx: number; gap: number }[] = []; // immune to overlap
+  const endToStartGaps: { idx: number; gap: number }[] = [];
+  const startToStartGaps: { idx: number; gap: number }[] = [];
   
   for (let i = 1; i < N; i++) {
     endToStartGaps.push({ idx: i, gap: segments[i].start - segments[i - 1].end });
@@ -186,7 +189,57 @@ function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscript
     console.log(`[speaker-detect] Start-to-start gaps: min=${sorted[0].toFixed(2)}s median=${sorted[Math.floor(sorted.length/2)].toFixed(2)}s max=${sorted[sorted.length-1].toFixed(2)}s`);
   }
 
-  // ── STEP 2: Try threshold-based detection (works when gaps are clean) ──
+  // ── STEP 2: PRIMARY METHOD — Top-N largest gaps ──
+  // This is the BEST method for YouTube captions because:
+  // - YouTube captions often overlap (negative end-to-start gaps)
+  // - Start-to-start gaps are ALWAYS positive
+  // - Top-N always finds exactly the boundaries we want
+  // - It picks the MOST SIGNIFICANT gaps as speaker change points
+  if (startToStartGaps.length >= numBoundaries) {
+    console.log(`[speaker-detect] Using TOP-${numBoundaries} largest start-to-start gaps (PRIMARY method)...`);
+    
+    // Sort gaps by size descending, pick the N largest
+    const sortedGaps = [...startToStartGaps].sort((a, b) => b.gap - a.gap);
+    
+    // Log top 5 gaps for diagnostic
+    console.log(`[speaker-detect] Top 5 gaps:`);
+    sortedGaps.slice(0, 5).forEach((g, i) => {
+      console.log(`[speaker-detect]   #${i+1}: seg ${g.idx} (t=${segments[g.idx].start.toFixed(1)}s), gap=${g.gap.toFixed(2)}s, text="${segments[g.idx].text.substring(0, 40)}"`);
+    });
+    
+    const boundaryIndices = sortedGaps
+      .slice(0, numBoundaries)
+      .map(g => g.idx)
+      .sort((a, b) => a - b); // sort by position in transcript
+
+    console.log(`[speaker-detect] Chosen boundaries:`);
+    boundaryIndices.forEach((idx, i) => {
+      const gap = startToStartGaps.find(g => g.idx === idx)!;
+      console.log(`[speaker-detect]   Boundary ${i+1}: seg ${idx} (t=${segments[idx].start.toFixed(1)}s), gap=${gap.gap.toFixed(2)}s`);
+    });
+
+    // Assign speakers based on boundaries
+    const topNResult: ClarifyTranscriptSegment[] = [];
+    for (let i = 0; i < N; i++) {
+      const seg = { ...segments[i] };
+      let speakerIdx = 0;
+      for (const boundary of boundaryIndices) {
+        if (i >= boundary) speakerIdx++;
+      }
+      seg.speaker = `speaker_${speakerIdx}`;
+      topNResult.push(seg);
+    }
+
+    const topNSpeakers = new Set(topNResult.map(s => s.speaker)).size;
+    if (topNSpeakers >= 2) {
+      console.log(`[speaker-detect] ✅ Top-N gaps found ${topNSpeakers} speakers`);
+      logSpeakerDistribution(topNResult);
+      return topNResult;
+    }
+  }
+
+  // ── STEP 3: Fallback — threshold-based detection ──
+  console.log(`[speaker-detect] Top-N failed, trying threshold-based...`);
   const thresholds = [3.0, 2.0, 1.5, 1.0, 0.5, 0.3];
   for (const threshold of thresholds) {
     const { result, speakerCount } = detectWithThreshold(segments, threshold);
@@ -196,9 +249,9 @@ function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscript
       return result;
     }
   }
-  console.log(`[speaker-detect] Threshold detection found only 1 speaker`);
 
-  // ── STEP 3: Text-based signals ──
+  // ── STEP 4: Text-based signals ──
+  console.log(`[speaker-detect] Threshold failed, trying text signals...`);
   const textResult = detectWithTextSignals(segments);
   const textSpeakers = new Set(textResult.map(s => s.speaker)).size;
   if (textSpeakers >= 2) {
@@ -207,50 +260,7 @@ function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscript
     return textResult;
   }
 
-  // ── STEP 4: TOP-N LARGEST GAPS — the nuclear option for YouTube captions ──
-  // YouTube auto-captions often overlap (end > next start), so traditional gaps fail.
-  // Instead: find the 2 largest START-TO-START gaps and use them as speaker boundaries.
-  // This ALWAYS works because there are always gaps between segments.
-  console.log(`[speaker-detect] Using TOP-N largest start-to-start gaps...`);
-  
-  const TARGET_SPEAKERS = 3; // We want 3 speakers (user sees 3 radio button rows)
-  const numBoundaries = TARGET_SPEAKERS - 1; // 2 boundaries → 3 groups
-  
-  // Sort gaps by size, pick the N largest as speaker change points
-  const sortedGaps = [...startToStartGaps].sort((a, b) => b.gap - a.gap);
-  const boundaryIndices = sortedGaps
-    .slice(0, numBoundaries)
-    .map(g => g.idx)
-    .sort((a, b) => a - b); // sort by position in transcript
-
-  console.log(`[speaker-detect] Top ${numBoundaries} gaps as boundaries:`);
-  boundaryIndices.forEach((idx, i) => {
-    const gap = startToStartGaps.find(g => g.idx === idx)!;
-    console.log(`[speaker-detect]   Boundary ${i+1}: seg ${idx}, gap=${gap.gap.toFixed(2)}s, text="${segments[idx].text.substring(0, 40)}"`);
-  });
-
-  // Assign speakers based on boundaries
-  const topNResult: ClarifyTranscriptSegment[] = [];
-  for (let i = 0; i < N; i++) {
-    const seg = { ...segments[i] };
-    // Count how many boundaries this segment is past
-    let speakerIdx = 0;
-    for (const boundary of boundaryIndices) {
-      if (i >= boundary) speakerIdx++;
-    }
-    seg.speaker = `speaker_${speakerIdx}`;
-    topNResult.push(seg);
-  }
-
-  const topNSpeakers = new Set(topNResult.map(s => s.speaker)).size;
-  if (topNSpeakers >= 2) {
-    console.log(`[speaker-detect] ✅ Top-N gaps found ${topNSpeakers} speakers`);
-    logSpeakerDistribution(topNResult);
-    return topNResult;
-  }
-
   // ── STEP 5: FORCED SPLIT — absolute last resort ──
-  // If even top-N failed (e.g., all segments at same timestamp), force equal split
   console.warn(`[speaker-detect] ⚠️ All methods failed! Forcing ${TARGET_SPEAKERS}-way split`);
   const chunkSize = Math.ceil(N / TARGET_SPEAKERS);
   const forcedResult = segments.map((seg, i) => ({
@@ -559,59 +569,57 @@ export function ClarifyAudioPanel({
       const rawSegTx = txRef.current[i];
       const seg = rawSegTranslated || rawSegTx;
 
-      // DUMP: Show EXACTLY what the segment object looks like
-      console.log(`[SEG-DUMP] Seg ${i}: translated exists=${!!rawSegTranslated}, tx exists=${!!rawSegTx}`);
-      if (rawSegTranslated) {
-        console.log(`[SEG-DUMP] Seg ${i} translated keys: [${Object.keys(rawSegTranslated).join(', ')}]`);
-        console.log(`[SEG-DUMP] Seg ${i} translated.speaker = "${rawSegTranslated.speaker}" (type: ${typeof rawSegTranslated.speaker})`);
-        console.log(`[SEG-DUMP] Seg ${i} translated.text = "${(rawSegTranslated.text || '').substring(0, 40)}"`);
+      // DUMP: Show segment details (first 3 only to reduce clutter)
+      if (i < 3) {
+        console.log(`[SEG-DUMP] Seg ${i}: translated=${!!rawSegTranslated} tx=${!!rawSegTx} speaker="${(rawSegTranslated || rawSegTx)?.speaker}" text="${((rawSegTranslated || rawSegTx)?.text || '').substring(0, 40)}"`);
       }
 
       // USE speakerOverride if provided (from regen loop which has guaranteed-correct speakers)
       // Fall back to segment data only if no override
       const speakerId = speakerOverride || seg?.speaker || 'speaker_0';
-      if (speakerOverride) {
-        console.log(`[SEG-DUMP] Seg ${i}: using speakerOverride="${speakerOverride}" (seg.speaker="${seg?.speaker}")`);
-      }
 
       // ═══ VOICE LOOKUP ═══
-      // ONLY source of truth: frozenVoiceMapRef (set by handleRegenerateVoices when user clicks Apply)
-      // Before Apply: everyone gets DEFAULT_VOICE (onyx) — no guessing from saved config
+      // CRITICAL: Check frozen map FIRST — it's the ONLY source of truth after Apply
       let voice: string;
       let source: string;
       const frozenMap = frozenVoiceMapRef.current;
-      if (frozenMap && frozenMap[speakerId]) {
-        voice = frozenMap[speakerId];
-        source = 'FROZEN';
-      } else if (frozenMap) {
-        // ═══ FROZEN-missing: the speaker from transcript is NOT in the map ═══
-        // This is THE BUG if you see this for every segment!
-        voice = DEFAULT_VOICE;
-        source = 'FROZEN-missing';
-        console.error(`[BUG?] Seg ${i}: speaker "${speakerId}" NOT in frozen map!`);
-        console.error(`[BUG?]   Map keys: [${Object.keys(frozenMap).join(', ')}]`);
-        console.error(`[BUG?]   Map: ${JSON.stringify(frozenMap)}`);
-        console.error(`[BUG?]   Seg speaker raw: "${seg?.speaker}" type=${typeof seg?.speaker}`);
-        
-        // ═══ WORKAROUND: Try to find a voice anyway ═══
-        // Maybe speaker IDs don't match — try index-based assignment from map values
-        const mapValues = Object.values(frozenMap);
-        if (mapValues.length > 0) {
-          voice = mapValues[i % mapValues.length];
-          source = 'FROZEN-index-fallback';
-          console.warn(`[BUG-FIX] Using index-based fallback: Seg ${i} % ${mapValues.length} = voice "${voice}"`);
+      const hasFrozenMap = frozenMap && Object.keys(frozenMap).length > 0;
+
+      if (hasFrozenMap) {
+        // FROZEN MAP EXISTS — use it
+        const mappedVoice = frozenMap![speakerId];
+        if (mappedVoice) {
+          voice = mappedVoice;
+          source = 'FROZEN';
+        } else {
+          // Speaker ID not in map — try fallbacks
+          console.warn(`[VOICE] Seg ${i}: speaker "${speakerId}" NOT in frozen map! Keys: [${Object.keys(frozenMap!).join(', ')}]`);
+          // Fallback 1: try speaker_0
+          const fallback0 = frozenMap!['speaker_0'];
+          if (fallback0) {
+            voice = fallback0;
+            source = 'FROZEN-fallback-s0';
+          } else {
+            // Fallback 2: index-based rotation through map values
+            const mapValues = Object.values(frozenMap!);
+            voice = mapValues[i % mapValues.length] || DEFAULT_VOICE;
+            source = 'FROZEN-index-fallback';
+          }
         }
       } else {
+        // NO FROZEN MAP — pre-Apply mode, use default
         voice = DEFAULT_VOICE;
         source = 'PRE-APPLY';
       }
+      
       // Determine gender: prefer explicit config, else infer from voice pool membership
       const FEMALE_VOICES = ['nova', 'shimmer', 'alloy'];
       const configGender = speakerConfigRef.current?.[speakerId];
       const gender = configGender
         || (FEMALE_VOICES.includes(voice) ? 'female' : 'male');
 
-      console.log(`[VOICE] Seg ${i}: speaker="${speakerId}" voice="${voice}" source=${source} frozen=${!!frozenMap}`);
+      // ═══ VOICE DEBUG — shows exactly what happened ═══
+      console.log(`[VOICE] Seg ${i}: speaker="${speakerId}" voice="${voice}" source=${source} gender=${gender} frozen=${hasFrozenMap}${speakerOverride ? ` override="${speakerOverride}"` : ''}`);
 
       // ═══ REQUEST BODY — voice is a PLAIN STRING (not an object!) ═══
       const requestBody = {
