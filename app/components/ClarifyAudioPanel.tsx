@@ -148,68 +148,259 @@ export function previewVoiceAssignments(config: SpeakerConfig): Record<string, s
 }
 
 /**
- * Detect speaker changes in transcript using timing gaps.
- * A gap > 1.0s between segments suggests a speaker change.
- * Each gap increments to a NEW speaker (no mod-2 cap).
+ * Detect speaker changes using MULTIPLE signals:
+ * 1. Timing gaps (primary — large gaps = scene changes / speaker changes)
+ * 2. Text signals (question→answer, greetings, sentence boundaries)
+ * 3. Adaptive threshold based on gap distribution
+ * 4. Fallback: try progressively lower thresholds
+ *
+ * YouTube captions often OVERLAP (negative gaps), so pure gap detection
+ * misses within-scene speaker changes. Text signals fill that gap.
  */
 function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscriptSegment[] {
   if (segments.length === 0) return segments;
 
-  // Log ALL gaps for first 30 segments to understand timing
-  console.log(`[speaker-detection] === ANALYZING ${segments.length} SEGMENTS ===`);
-  const allGaps: string[] = [];
-  for (let i = 1; i < Math.min(segments.length, 30); i++) {
-    const gap = segments[i].start - segments[i - 1].end;
-    allGaps.push(`seg${i}: gap=${gap.toFixed(2)}s (${segments[i-1].end.toFixed(1)}->${segments[i].start.toFixed(1)})`);
-  }
-  console.log(`[speaker-detection] First 30 gaps:`, allGaps.join(' | '));
+  console.log(`[speaker-detect] === ANALYZING ${segments.length} SEGMENTS ===`);
 
-  // Use multiple signals for speaker detection:
-  // 1. Timing gaps (primary signal for videos with natural pauses)
-  // 2. Large gaps even if < 1.0s suggest a different thought/speaker
-  const GAP_THRESHOLD = 0.5; // Lowered to 0.5s to catch more speaker changes
+  // ── STEP 1: Gap analysis ──
+  const gaps: number[] = [];
+  const gapDetails: string[] = [];
+  for (let i = 1; i < Math.min(segments.length, 100); i++) {
+    const gap = segments[i].start - segments[i - 1].end;
+    gaps.push(gap);
+    if (i <= 30) {
+      gapDetails.push(`seg${i}: gap=${gap.toFixed(2)}s`);
+    }
+  }
+  console.log(`[speaker-detect] First 30 gaps:`, gapDetails.join(' | '));
+
+  // Sort gaps to see distribution (only positive gaps matter for detection)
+  const positiveGaps = gaps.filter(g => g > 0).sort((a, b) => a - b);
+  const negativeCount = gaps.filter(g => g <= 0).length;
+
+  if (positiveGaps.length > 0) {
+    const p25 = positiveGaps[Math.floor(positiveGaps.length * 0.25)] || 0;
+    const median = positiveGaps[Math.floor(positiveGaps.length * 0.5)] || 0;
+    const p75 = positiveGaps[Math.floor(positiveGaps.length * 0.75)] || 0;
+    const p90 = positiveGaps[Math.floor(positiveGaps.length * 0.9)] || 0;
+    const max = positiveGaps[positiveGaps.length - 1] || 0;
+    console.log(`[speaker-detect] Gap distribution (${positiveGaps.length} positive, ${negativeCount} negative/zero):`);
+    console.log(`[speaker-detect]   25th=${p25.toFixed(2)}s, median=${median.toFixed(2)}s, 75th=${p75.toFixed(2)}s, 90th=${p90.toFixed(2)}s, max=${max.toFixed(2)}s`);
+  } else {
+    console.log(`[speaker-detect] ALL ${negativeCount} gaps are negative/zero (overlapping captions)`);
+  }
+
+  // ── STEP 2: Detect with adaptive thresholds ──
+  // Try multiple thresholds, pick the first one that finds 2+ speakers
+  const thresholds = [3.0, 2.0, 1.5, 1.0, 0.5, 0.3];
+  let bestResult: ClarifyTranscriptSegment[] | null = null;
+  let bestSpeakerCount = 0;
+  let bestThreshold = 0;
+
+  for (const threshold of thresholds) {
+    const { result, speakerCount } = detectWithThreshold(segments, threshold);
+    console.log(`[speaker-detect] Threshold ${threshold}s → ${speakerCount} speakers`);
+
+    if (speakerCount >= 2 && speakerCount <= 10) {
+      bestResult = result;
+      bestSpeakerCount = speakerCount;
+      bestThreshold = threshold;
+      // Use the FIRST threshold that gives us 2+ speakers — it'll have
+      // the most meaningful (largest gap) speaker changes
+      break;
+    }
+    // Track best even if we don't break
+    if (speakerCount > bestSpeakerCount) {
+      bestResult = result;
+      bestSpeakerCount = speakerCount;
+      bestThreshold = threshold;
+    }
+  }
+
+  // ── STEP 3: If gap-based found 2+ speakers, use it ──
+  if (bestResult && bestSpeakerCount >= 2) {
+    console.log(`[speaker-detect] ✅ Using gap threshold=${bestThreshold}s (${bestSpeakerCount} speakers)`);
+    logSpeakerDistribution(bestResult);
+    return bestResult;
+  }
+
+  // ── STEP 4: Gap-based found only 1 speaker — try text-based signals ──
+  console.log(`[speaker-detect] Gap detection found only 1 speaker. Trying text signals...`);
+  const textResult = detectWithTextSignals(segments);
+  const textSpeakers = new Set(textResult.map(s => s.speaker)).size;
+
+  if (textSpeakers >= 2) {
+    console.log(`[speaker-detect] ✅ Text signals found ${textSpeakers} speakers`);
+    logSpeakerDistribution(textResult);
+    return textResult;
+  }
+
+  // ── STEP 5: Both failed — use segment-start-gap detection ──
+  // YouTube captions overlap (end > next start), so use START-to-START gaps instead
+  console.log(`[speaker-detect] Text signals also failed. Trying start-to-start gaps...`);
+  const startGapResult = detectWithStartGaps(segments);
+  const startGapSpeakers = new Set(startGapResult.map(s => s.speaker)).size;
+
+  if (startGapSpeakers >= 2) {
+    console.log(`[speaker-detect] ✅ Start-gap detection found ${startGapSpeakers} speakers`);
+    logSpeakerDistribution(startGapResult);
+    return startGapResult;
+  }
+
+  // ── STEP 6: Nothing worked — return best result from gap detection (even if 1 speaker) ──
+  console.warn(`[speaker-detect] ⚠️ Could not find multiple speakers. Keeping all as speaker_0`);
+  return bestResult || segments.map(s => ({ ...s, speaker: 'speaker_0' }));
+}
+
+/** Gap-based detection with a specific threshold */
+function detectWithThreshold(
+  segments: ClarifyTranscriptSegment[],
+  threshold: number
+): { result: ClarifyTranscriptSegment[]; speakerCount: number } {
   let currentSpeaker = 0;
-  let maxSpeaker = 0;
   const result: ClarifyTranscriptSegment[] = [];
-  const gapLog: string[] = [];
 
   for (let i = 0; i < segments.length; i++) {
     const seg = { ...segments[i] };
-
-    // IMPORTANT: Always re-detect speakers from timing — don't trust existing tags
-    // (The combined re-detection in progressive translation was inheriting stale assignments)
     if (i === 0) {
       seg.speaker = `speaker_${currentSpeaker}`;
     } else {
-      const prevEnd = result[result.length - 1].end;  // Use result (not input) for prev
+      const prevEnd = result[result.length - 1].end;
       const gap = seg.start - prevEnd;
-      if (gap > GAP_THRESHOLD) {
+      if (gap > threshold) {
         currentSpeaker++;
-        maxSpeaker = Math.max(maxSpeaker, currentSpeaker);
-        gapLog.push(`seg ${i}: gap=${gap.toFixed(2)}s -> speaker_${currentSpeaker}`);
       }
       seg.speaker = `speaker_${currentSpeaker}`;
     }
     result.push(seg);
   }
 
-  // Log speaker distribution
-  const speakerCounts: Record<string, number> = {};
-  result.forEach(s => { speakerCounts[s.speaker || 'unknown'] = (speakerCounts[s.speaker || 'unknown'] || 0) + 1; });
-  console.log(`[speaker-detection] Found ${maxSpeaker + 1} speakers (threshold=${GAP_THRESHOLD}s):`, speakerCounts);
-  if (gapLog.length > 0) {
-    console.log(`[speaker-detection] ${gapLog.length} speaker changes:`);
-    gapLog.slice(0, 20).forEach(g => console.log(`  ${g}`));
-    if (gapLog.length > 20) console.log(`  ... and ${gapLog.length - 20} more`);
-  } else {
-    console.warn(`[speaker-detection] ⚠️ NO speaker changes detected! All segments assigned to speaker_0`);
-    console.warn(`[speaker-detection] Largest gaps in first 30:`, allGaps.filter(g => {
-      const match = g.match(/gap=(\d+\.\d+)s/);
-      return match && parseFloat(match[1]) > 0.2;
-    }).slice(0, 10));
+  return { result, speakerCount: currentSpeaker + 1 };
+}
+
+/** Text-based speaker detection using multiple signals */
+function detectWithTextSignals(segments: ClarifyTranscriptSegment[]): ClarifyTranscriptSegment[] {
+  let currentSpeaker = 0;
+  const result: ClarifyTranscriptSegment[] = [];
+  const changeLog: string[] = [];
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = { ...segments[i] };
+
+    if (i === 0) {
+      seg.speaker = `speaker_${currentSpeaker}`;
+    } else {
+      const prevSeg = result[result.length - 1];
+      const prevText = prevSeg.text.trim();
+      const currText = seg.text.trim();
+      const gap = seg.start - prevSeg.end;
+
+      // Multiple signals for speaker change
+      const prevEndsQuestion = /\?["\s]*$/.test(prevText);
+      const prevEndsSentence = /[.!]["\s]*$/.test(prevText);
+      const currStartsCapital = /^[A-ZÄÖÜ]/.test(currText);  // Include German capitals
+
+      // Greeting patterns (common in interview videos)
+      const isGreeting = /^(hi|hello|hey|good morning|good afternoon|guten|hallo|moin|tschüss|danke|super)/i.test(currText);
+
+      // Name/introduction patterns
+      const hasNameIntro = /^(I'm |my name|ich bin |ich heiße |mein name)/i.test(currText);
+
+      // Question→answer: previous ends with ? and gap > 0.2s
+      const questionAnswer = prevEndsQuestion && gap > 0.2;
+
+      // Sentence boundary with positive gap: prev ends with period, curr starts with capital
+      const sentenceBoundaryGap = prevEndsSentence && currStartsCapital && gap > 0.3;
+
+      // Greeting at start of segment
+      const greetingChange = isGreeting && gap > 0.1;
+
+      // Name introduction
+      const nameChange = hasNameIntro && gap > 0.1;
+
+      // Any positive gap > 0.2s combined with sentence boundary
+      const gapWithBoundary = gap > 0.2 && (prevEndsSentence || prevEndsQuestion) && currStartsCapital;
+
+      const speakerChange = questionAnswer || sentenceBoundaryGap || greetingChange || nameChange || gapWithBoundary;
+
+      if (speakerChange) {
+        currentSpeaker++;
+        const signals = [
+          questionAnswer && 'Q→A',
+          sentenceBoundaryGap && 'sent-boundary',
+          greetingChange && 'greeting',
+          nameChange && 'name-intro',
+          gapWithBoundary && 'gap+boundary',
+        ].filter(Boolean).join('+');
+        changeLog.push(`seg ${i}: ${signals} (gap=${gap.toFixed(2)}s) → speaker_${currentSpeaker} "${currText.substring(0, 30)}"`);
+      }
+
+      seg.speaker = `speaker_${currentSpeaker}`;
+    }
+    result.push(seg);
+  }
+
+  if (changeLog.length > 0) {
+    console.log(`[speaker-detect] Text signals found ${changeLog.length} speaker changes:`);
+    changeLog.slice(0, 20).forEach(c => console.log(`  ${c}`));
+    if (changeLog.length > 20) console.log(`  ... and ${changeLog.length - 20} more`);
   }
 
   return result;
+}
+
+/** Start-to-start gap detection — useful when YouTube captions overlap (end > next start) */
+function detectWithStartGaps(segments: ClarifyTranscriptSegment[]): ClarifyTranscriptSegment[] {
+  // Calculate start-to-start gaps (immune to overlapping end times)
+  const startGaps: number[] = [];
+  for (let i = 1; i < segments.length; i++) {
+    startGaps.push(segments[i].start - segments[i - 1].start);
+  }
+
+  // Find adaptive threshold: use 90th percentile of start-gaps
+  const sorted = [...startGaps].sort((a, b) => a - b);
+  const p90 = sorted[Math.floor(sorted.length * 0.9)] || 5;
+  const threshold = Math.max(p90, 3.0); // At least 3 seconds for start-to-start
+
+  console.log(`[speaker-detect] Start-gap 90th percentile: ${p90.toFixed(2)}s, using threshold: ${threshold.toFixed(2)}s`);
+
+  let currentSpeaker = 0;
+  const result: ClarifyTranscriptSegment[] = [];
+
+  for (let i = 0; i < segments.length; i++) {
+    const seg = { ...segments[i] };
+    if (i === 0) {
+      seg.speaker = `speaker_${currentSpeaker}`;
+    } else {
+      const startGap = seg.start - segments[i - 1].start;
+      if (startGap > threshold) {
+        currentSpeaker++;
+      }
+      seg.speaker = `speaker_${currentSpeaker}`;
+    }
+    result.push(seg);
+  }
+
+  return result;
+}
+
+/** Log speaker distribution */
+function logSpeakerDistribution(result: ClarifyTranscriptSegment[]) {
+  const dist: Record<string, number> = {};
+  result.forEach(s => { dist[s.speaker || '?'] = (dist[s.speaker || '?'] || 0) + 1; });
+
+  // Find speaker change points
+  const changes: string[] = [];
+  for (let i = 1; i < result.length; i++) {
+    if (result[i].speaker !== result[i - 1].speaker) {
+      changes.push(`seg ${i}: ${result[i - 1].speaker} → ${result[i].speaker} (t=${result[i].start.toFixed(1)}s)`);
+    }
+  }
+
+  console.log(`[speaker-detect] Distribution:`, dist);
+  console.log(`[speaker-detect] ${changes.length} change points:`);
+  changes.slice(0, 20).forEach(c => console.log(`  ${c}`));
+  if (changes.length > 20) console.log(`  ... and ${changes.length - 20} more`);
 }
 
 // ═══ DELETED: getVoiceForSegment and module-level cache ═══
