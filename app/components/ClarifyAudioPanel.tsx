@@ -556,9 +556,13 @@ export function ClarifyAudioPanel({
         voice = DEFAULT_VOICE;
         source = 'PRE-APPLY';
       }
-      const gender = speakerConfigRef.current?.[speakerId] || 'unconfigured';
+      // Determine gender: prefer explicit config, else infer from voice pool membership
+      const FEMALE_VOICES = ['nova', 'shimmer', 'alloy'];
+      const configGender = speakerConfigRef.current?.[speakerId];
+      const gender = configGender
+        || (FEMALE_VOICES.includes(voice) ? 'female' : 'male');
 
-      console.log(`[TRACE-6-TTS] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`);
+      console.log(`[TRACE-6-TTS] Seg ${i}: ${speakerId} -> gender="${gender}" (${source}) -> voice="${voice}"`);
 
       const requestBody = {
         text,
@@ -567,8 +571,7 @@ export function ClarifyAudioPanel({
         targetDuration: seg ? seg.end - seg.start : undefined,
         targetLanguage: selectedLang, ttsModel: 'tts-1',
       };
-      // Log the exact voice object being sent
-      console.log(`[TTS-FETCH] Seg ${i}: sending voice.id="${requestBody.voice.id}" to /api/multi-voice-tts`);
+      console.log(`[TTS-FETCH] Seg ${i}: voice="${requestBody.voice.id}", gender="${gender}" -> /api/multi-voice-tts`);
 
       // ── Fetch with client-side retry for transient errors ──
       let res: Response | null = null;
