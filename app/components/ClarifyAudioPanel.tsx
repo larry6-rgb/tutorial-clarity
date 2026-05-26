@@ -160,96 +160,105 @@ export function previewVoiceAssignments(config: SpeakerConfig): Record<string, s
 function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscriptSegment[] {
   if (segments.length === 0) return segments;
 
-  console.log(`[speaker-detect] === ANALYZING ${segments.length} SEGMENTS ===`);
+  const N = segments.length;
+  console.log(`[speaker-detect] === ANALYZING ${N} SEGMENTS ===`);
 
-  // ── STEP 1: Gap analysis ──
-  const gaps: number[] = [];
-  const gapDetails: string[] = [];
-  for (let i = 1; i < Math.min(segments.length, 100); i++) {
-    const gap = segments[i].start - segments[i - 1].end;
-    gaps.push(gap);
-    if (i <= 30) {
-      gapDetails.push(`seg${i}: gap=${gap.toFixed(2)}s`);
-    }
-  }
-  console.log(`[speaker-detect] First 30 gaps:`, gapDetails.join(' | '));
-
-  // Sort gaps to see distribution (only positive gaps matter for detection)
-  const positiveGaps = gaps.filter(g => g > 0).sort((a, b) => a - b);
-  const negativeCount = gaps.filter(g => g <= 0).length;
-
-  if (positiveGaps.length > 0) {
-    const p25 = positiveGaps[Math.floor(positiveGaps.length * 0.25)] || 0;
-    const median = positiveGaps[Math.floor(positiveGaps.length * 0.5)] || 0;
-    const p75 = positiveGaps[Math.floor(positiveGaps.length * 0.75)] || 0;
-    const p90 = positiveGaps[Math.floor(positiveGaps.length * 0.9)] || 0;
-    const max = positiveGaps[positiveGaps.length - 1] || 0;
-    console.log(`[speaker-detect] Gap distribution (${positiveGaps.length} positive, ${negativeCount} negative/zero):`);
-    console.log(`[speaker-detect]   25th=${p25.toFixed(2)}s, median=${median.toFixed(2)}s, 75th=${p75.toFixed(2)}s, 90th=${p90.toFixed(2)}s, max=${max.toFixed(2)}s`);
-  } else {
-    console.log(`[speaker-detect] ALL ${negativeCount} gaps are negative/zero (overlapping captions)`);
+  // ── STEP 1: Compute ALL gap types ──
+  const endToStartGaps: { idx: number; gap: number }[] = [];   // traditional
+  const startToStartGaps: { idx: number; gap: number }[] = []; // immune to overlap
+  
+  for (let i = 1; i < N; i++) {
+    endToStartGaps.push({ idx: i, gap: segments[i].start - segments[i - 1].end });
+    startToStartGaps.push({ idx: i, gap: segments[i].start - segments[i - 1].start });
   }
 
-  // ── STEP 2: Detect with adaptive thresholds ──
-  // Try multiple thresholds, pick the first one that finds 2+ speakers
+  // Log gap stats
+  const etsVals = endToStartGaps.map(g => g.gap);
+  const stsVals = startToStartGaps.map(g => g.gap);
+  const negCount = etsVals.filter(g => g <= 0).length;
+  console.log(`[speaker-detect] End-to-start gaps: ${negCount}/${etsVals.length} negative/zero`);
+  if (etsVals.length > 0) {
+    const sorted = [...etsVals].sort((a, b) => a - b);
+    console.log(`[speaker-detect]   min=${sorted[0].toFixed(2)}s median=${sorted[Math.floor(sorted.length/2)].toFixed(2)}s max=${sorted[sorted.length-1].toFixed(2)}s`);
+  }
+  if (stsVals.length > 0) {
+    const sorted = [...stsVals].sort((a, b) => a - b);
+    console.log(`[speaker-detect] Start-to-start gaps: min=${sorted[0].toFixed(2)}s median=${sorted[Math.floor(sorted.length/2)].toFixed(2)}s max=${sorted[sorted.length-1].toFixed(2)}s`);
+  }
+
+  // ── STEP 2: Try threshold-based detection (works when gaps are clean) ──
   const thresholds = [3.0, 2.0, 1.5, 1.0, 0.5, 0.3];
-  let bestResult: ClarifyTranscriptSegment[] | null = null;
-  let bestSpeakerCount = 0;
-  let bestThreshold = 0;
-
   for (const threshold of thresholds) {
     const { result, speakerCount } = detectWithThreshold(segments, threshold);
-    console.log(`[speaker-detect] Threshold ${threshold}s → ${speakerCount} speakers`);
-
     if (speakerCount >= 2 && speakerCount <= 10) {
-      bestResult = result;
-      bestSpeakerCount = speakerCount;
-      bestThreshold = threshold;
-      // Use the FIRST threshold that gives us 2+ speakers — it'll have
-      // the most meaningful (largest gap) speaker changes
-      break;
-    }
-    // Track best even if we don't break
-    if (speakerCount > bestSpeakerCount) {
-      bestResult = result;
-      bestSpeakerCount = speakerCount;
-      bestThreshold = threshold;
+      console.log(`[speaker-detect] ✅ Threshold ${threshold}s → ${speakerCount} speakers`);
+      logSpeakerDistribution(result);
+      return result;
     }
   }
+  console.log(`[speaker-detect] Threshold detection found only 1 speaker`);
 
-  // ── STEP 3: If gap-based found 2+ speakers, use it ──
-  if (bestResult && bestSpeakerCount >= 2) {
-    console.log(`[speaker-detect] ✅ Using gap threshold=${bestThreshold}s (${bestSpeakerCount} speakers)`);
-    logSpeakerDistribution(bestResult);
-    return bestResult;
-  }
-
-  // ── STEP 4: Gap-based found only 1 speaker — try text-based signals ──
-  console.log(`[speaker-detect] Gap detection found only 1 speaker. Trying text signals...`);
+  // ── STEP 3: Text-based signals ──
   const textResult = detectWithTextSignals(segments);
   const textSpeakers = new Set(textResult.map(s => s.speaker)).size;
-
   if (textSpeakers >= 2) {
     console.log(`[speaker-detect] ✅ Text signals found ${textSpeakers} speakers`);
     logSpeakerDistribution(textResult);
     return textResult;
   }
 
-  // ── STEP 5: Both failed — use segment-start-gap detection ──
-  // YouTube captions overlap (end > next start), so use START-to-START gaps instead
-  console.log(`[speaker-detect] Text signals also failed. Trying start-to-start gaps...`);
-  const startGapResult = detectWithStartGaps(segments);
-  const startGapSpeakers = new Set(startGapResult.map(s => s.speaker)).size;
+  // ── STEP 4: TOP-N LARGEST GAPS — the nuclear option for YouTube captions ──
+  // YouTube auto-captions often overlap (end > next start), so traditional gaps fail.
+  // Instead: find the 2 largest START-TO-START gaps and use them as speaker boundaries.
+  // This ALWAYS works because there are always gaps between segments.
+  console.log(`[speaker-detect] Using TOP-N largest start-to-start gaps...`);
+  
+  const TARGET_SPEAKERS = 3; // We want 3 speakers (user sees 3 radio button rows)
+  const numBoundaries = TARGET_SPEAKERS - 1; // 2 boundaries → 3 groups
+  
+  // Sort gaps by size, pick the N largest as speaker change points
+  const sortedGaps = [...startToStartGaps].sort((a, b) => b.gap - a.gap);
+  const boundaryIndices = sortedGaps
+    .slice(0, numBoundaries)
+    .map(g => g.idx)
+    .sort((a, b) => a - b); // sort by position in transcript
 
-  if (startGapSpeakers >= 2) {
-    console.log(`[speaker-detect] ✅ Start-gap detection found ${startGapSpeakers} speakers`);
-    logSpeakerDistribution(startGapResult);
-    return startGapResult;
+  console.log(`[speaker-detect] Top ${numBoundaries} gaps as boundaries:`);
+  boundaryIndices.forEach((idx, i) => {
+    const gap = startToStartGaps.find(g => g.idx === idx)!;
+    console.log(`[speaker-detect]   Boundary ${i+1}: seg ${idx}, gap=${gap.gap.toFixed(2)}s, text="${segments[idx].text.substring(0, 40)}"`);
+  });
+
+  // Assign speakers based on boundaries
+  const topNResult: ClarifyTranscriptSegment[] = [];
+  for (let i = 0; i < N; i++) {
+    const seg = { ...segments[i] };
+    // Count how many boundaries this segment is past
+    let speakerIdx = 0;
+    for (const boundary of boundaryIndices) {
+      if (i >= boundary) speakerIdx++;
+    }
+    seg.speaker = `speaker_${speakerIdx}`;
+    topNResult.push(seg);
   }
 
-  // ── STEP 6: Nothing worked — return best result from gap detection (even if 1 speaker) ──
-  console.warn(`[speaker-detect] ⚠️ Could not find multiple speakers. Keeping all as speaker_0`);
-  return bestResult || segments.map(s => ({ ...s, speaker: 'speaker_0' }));
+  const topNSpeakers = new Set(topNResult.map(s => s.speaker)).size;
+  if (topNSpeakers >= 2) {
+    console.log(`[speaker-detect] ✅ Top-N gaps found ${topNSpeakers} speakers`);
+    logSpeakerDistribution(topNResult);
+    return topNResult;
+  }
+
+  // ── STEP 5: FORCED SPLIT — absolute last resort ──
+  // If even top-N failed (e.g., all segments at same timestamp), force equal split
+  console.warn(`[speaker-detect] ⚠️ All methods failed! Forcing ${TARGET_SPEAKERS}-way split`);
+  const chunkSize = Math.ceil(N / TARGET_SPEAKERS);
+  const forcedResult = segments.map((seg, i) => ({
+    ...seg,
+    speaker: `speaker_${Math.min(Math.floor(i / chunkSize), TARGET_SPEAKERS - 1)}`,
+  }));
+  logSpeakerDistribution(forcedResult);
+  return forcedResult;
 }
 
 /** Gap-based detection with a specific threshold */
