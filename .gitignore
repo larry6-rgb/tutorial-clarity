@@ -144,3 +144,4 @@ vite.config.ts.timestamp-*
 yt-api-key.txt
 .logs/
 electron-launcher/node_modules/
+.build/
