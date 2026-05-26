@@ -208,7 +208,8 @@ export async function POST(req: NextRequest) {
         client.transcripts.transcribe({
           audio: uploadedUrl,
           speaker_labels: true,
-        }),
+          speech_models: ['universal-2'],
+        } as any),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error(
             'AI processing timed out after 4 minutes. Try a shorter video.'
