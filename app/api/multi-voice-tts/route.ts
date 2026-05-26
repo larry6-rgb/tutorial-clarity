@@ -65,11 +65,13 @@ export async function POST(request: NextRequest) {
     // Validate model
     const model = ttsModel === 'tts-1-hd' ? 'tts-1-hd' : 'tts-1';
 
-    console.log(`[multi-voice-tts] === TTS REQUEST ===`);
-    console.log(`[multi-voice-tts]   voice input: ${JSON.stringify(voice)}`);
-    console.log(`[multi-voice-tts]   resolved voiceId: "${voiceId}"`);
-    console.log(`[multi-voice-tts]   model=${model}, lang=${targetLanguage}, segment=${segmentId}, speaker=${speakerId}`);
-    console.log(`[multi-voice-tts]   text: "${text.substring(0, 60)}..."`);
+    console.log(`[TTS-API] ════════════════════════════════════════`);
+    console.log(`[TTS-API] Segment: ${segmentId}, Speaker: ${speakerId}`);
+    console.log(`[TTS-API] Voice input: ${JSON.stringify(voice)}`);
+    console.log(`[TTS-API] Resolved voiceId: "${voiceId}"`);
+    console.log(`[TTS-API] Model: ${model}, Lang: ${targetLanguage}`);
+    console.log(`[TTS-API] Text: "${text.substring(0, 60)}..."`);
+    console.log(`[TTS-API] ════════════════════════════════════════`);
 
     // FIXED: Always generate at speed 1.0
     // Previously auto-adjusted speed based on targetDuration, which caused each segment

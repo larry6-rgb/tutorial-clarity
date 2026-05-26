@@ -350,60 +350,39 @@ export function ClarifyAudioPanel({
       const speakerId = seg?.speaker || 'speaker_0';
 
       // ═══ VOICE LOOKUP ═══
-      // Priority 1: Use frozen voice map (set by handleRegenerateVoices)
-      // Priority 2: If no frozen map but config exists, auto-freeze NOW (covers initial load)
-      // Priority 3: No config at all → default voice
+      // ONLY source of truth: frozenVoiceMapRef (set by handleRegenerateVoices when user clicks Apply)
+      // Before Apply: everyone gets DEFAULT_VOICE (onyx) — no guessing from saved config
       let voice: string;
       let source: string;
-
-      // Auto-freeze: if we have a speaker config but no frozen map yet, create one now
-      if (!frozenVoiceMapRef.current && speakerConfigRef.current && Object.keys(speakerConfigRef.current).length > 0) {
-        console.log('[AUTO-FREEZE] Config exists but no frozen map — creating one now');
-        console.log('[AUTO-FREEZE] Config:', JSON.stringify(speakerConfigRef.current));
-        _assignCallCounter = 0;
-        const autoMap = assignVoicesToSpeakers(speakerConfigRef.current);
-        frozenVoiceMapRef.current = Object.freeze({ ...autoMap });
-        console.log('[AUTO-FREEZE] Map created:', JSON.stringify(frozenVoiceMapRef.current));
-      }
-
       const frozenMap = frozenVoiceMapRef.current;
       if (frozenMap && frozenMap[speakerId]) {
         voice = frozenMap[speakerId];
         source = 'FROZEN';
       } else if (frozenMap) {
-        // Speaker ID not in frozen map — use gender-appropriate fallback
-        const fallbackGender = speakerConfigRef.current?.[speakerId];
-        voice = fallbackGender === 'female' ? FEMALE_VOICES[0] : MALE_VOICES[0];
-        source = 'FROZEN-fallback';
-        console.warn(`[VOICE-WARN] ${speakerId} not in frozen map, using ${voice} (${fallbackGender || 'default-male'})`);
+        voice = DEFAULT_VOICE;
+        source = 'FROZEN-missing';
       } else {
-        // No config at all — use gender-appropriate default if possible
-        const fallbackGender = speakerConfigRef.current?.[speakerId];
-        if (fallbackGender === 'female') {
-          voice = FEMALE_VOICES[0];  // nova
-          source = 'GENDER-fallback';
-        } else if (fallbackGender === 'male') {
-          voice = MALE_VOICES[0];    // onyx
-          source = 'GENDER-fallback';
-        } else {
-          voice = DEFAULT_VOICE;
-          source = 'DEFAULT';
-        }
+        voice = DEFAULT_VOICE;
+        source = 'PRE-APPLY';
       }
       const gender = speakerConfigRef.current?.[speakerId] || 'unconfigured';
 
       console.log(`[TRACE-6-TTS] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`);
 
+      const requestBody = {
+        text,
+        voice: { id: voice, name: voice, gender, provider: 'openai' },
+        videoId, segmentId: `seg_${i}`, speakerId,
+        targetDuration: seg ? seg.end - seg.start : undefined,
+        targetLanguage: selectedLang, ttsModel: 'tts-1',
+      };
+      // Log the exact voice object being sent
+      console.log(`[TTS-FETCH] Seg ${i}: sending voice.id="${requestBody.voice.id}" to /api/multi-voice-tts`);
+
       const res = await fetch('/api/multi-voice-tts', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          text,
-          voice: { id: voice, name: voice, gender, provider: 'openai' },
-          videoId, segmentId: `seg_${i}`, speakerId,
-          targetDuration: seg ? seg.end - seg.start : undefined,
-          targetLanguage: selectedLang, ttsModel: 'tts-1',
-        }),
+        body: JSON.stringify(requestBody),
       });
 
       // Check epoch — if regeneration happened while we were awaiting, discard this result
@@ -421,6 +400,12 @@ export function ClarifyAudioPanel({
       const ct = res.headers.get('content-type');
       const returnedVoice = res.headers.get('x-voice-id');
       const now = Date.now();
+
+      // Verify voice match between what we requested and what server used
+      if (returnedVoice && returnedVoice !== voice) {
+        console.error(`[VOICE-MISMATCH] Seg ${i}: requested="${voice}" but server used="${returnedVoice}" !!!`);
+      }
+
       if (ct?.includes('application/json')) {
         const data = await res.json();
         if (data.useClientSideTTS) {
