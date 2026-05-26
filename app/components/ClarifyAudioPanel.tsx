@@ -570,36 +570,75 @@ export function ClarifyAudioPanel({
       // Log the exact voice object being sent
       console.log(`[TTS-FETCH] Seg ${i}: sending voice.id="${requestBody.voice.id}" to /api/multi-voice-tts`);
 
-      const res = await fetch('/api/multi-voice-tts', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(requestBody),
-      });
+      // ── Fetch with client-side retry for transient errors ──
+      let res: Response | null = null;
+      let fetchError: string = '';
+      const CLIENT_RETRIES = 2;
 
-      // Check epoch — if regeneration happened while we were awaiting, discard this result
-      if (regenEpochRef.current !== startEpoch) {
-        console.log(`[voice-variety] Seg ${i}: DISCARDED (epoch ${startEpoch} -> ${regenEpochRef.current})`);
-        genSetRef.current.delete(i);
-        return;
+      for (let attempt = 1; attempt <= CLIENT_RETRIES; attempt++) {
+        try {
+          res = await fetch('/api/multi-voice-tts', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(requestBody),
+          });
+
+          // Check epoch — if regeneration happened while we were awaiting, discard
+          if (regenEpochRef.current !== startEpoch) {
+            console.log(`[voice-variety] Seg ${i}: DISCARDED (epoch ${startEpoch} -> ${regenEpochRef.current})`);
+            genSetRef.current.delete(i);
+            return;
+          }
+
+          if (res.ok) break; // Success
+
+          // Read error response body for debugging
+          let errorBody = '';
+          try {
+            errorBody = await res.text();
+            const errorJson = JSON.parse(errorBody);
+            console.error(`[TTS-ERROR] Seg ${i} attempt ${attempt}/${CLIENT_RETRIES}: HTTP ${res.status}`, errorJson);
+            fetchError = `HTTP ${res.status}: ${errorJson.error || errorJson.message || errorBody.substring(0, 100)}`;
+          } catch {
+            console.error(`[TTS-ERROR] Seg ${i} attempt ${attempt}/${CLIENT_RETRIES}: HTTP ${res.status} body=${errorBody.substring(0, 100)}`);
+            fetchError = `HTTP ${res.status}: ${errorBody.substring(0, 100)}`;
+          }
+
+          // Retry on 5xx (server transient errors)
+          if (attempt < CLIENT_RETRIES && res.status >= 500) {
+            console.log(`[TTS-ERROR] Seg ${i}: Retrying in ${attempt * 300}ms...`);
+            await new Promise(r => setTimeout(r, attempt * 300));
+            res = null;
+          }
+
+        } catch (netErr) {
+          fetchError = netErr instanceof Error ? netErr.message : String(netErr);
+          console.error(`[TTS-ERROR] Seg ${i} attempt ${attempt}/${CLIENT_RETRIES}: Network error:`, fetchError);
+          if (attempt < CLIENT_RETRIES) {
+            await new Promise(r => setTimeout(r, attempt * 300));
+          }
+        }
       }
 
-      if (!res.ok) {
-        console.warn(`[voice-variety] Seg ${i}: TTS API returned ${res.status}`);
-        throw new Error(`TTS ${res.status}`);
+      if (!res || !res.ok) {
+        console.error(`[TTS-ERROR] Seg ${i}: All ${CLIENT_RETRIES} attempts failed: ${fetchError}`);
+        throw new Error(`TTS failed: ${fetchError}`);
       }
 
       const ct = res.headers.get('content-type');
       const returnedVoice = res.headers.get('x-voice-id');
+      const requestId = res.headers.get('x-request-id');
       const now = Date.now();
 
       // Verify voice match between what we requested and what server used
       if (returnedVoice && returnedVoice !== voice) {
-        console.error(`[VOICE-MISMATCH] Seg ${i}: requested="${voice}" but server used="${returnedVoice}" !!!`);
+        console.error(`[VOICE-MISMATCH] Seg ${i}: requested="${voice}" but server used="${returnedVoice}" (${requestId})`);
       }
 
       if (ct?.includes('application/json')) {
         const data = await res.json();
         if (data.useClientSideTTS) {
+          console.log(`[voice-variety] Seg ${i}: Server says use client TTS (reason: ${data.reason || '?'})`);
           cacheRef.current[i] = { useClientTTS: true, voice, generatedAt: now };
           setUseClientTTS(true);
         }
@@ -608,14 +647,15 @@ export function ClarifyAudioPanel({
         if (blob.size > 0) {
           const url = URL.createObjectURL(blob);
           cacheRef.current[i] = { url, voice, generatedAt: now };
-          console.log(`[voice-variety] Seg ${i}: ✓ OpenAI audio (${blob.size}B) voice="${voice}" server="${returnedVoice}"`);
+          console.log(`[voice-variety] Seg ${i}: ✅ ${blob.size}B voice="${voice}" server="${returnedVoice}"`);
         } else {
           cacheRef.current[i] = { useClientTTS: true, voice, generatedAt: now };
           setUseClientTTS(true);
         }
       }
     } catch (err) {
-      console.error(`[voice-variety] Seg ${i}: TTS failed, client TTS fallback`, err);
+      const errMsg = err instanceof Error ? err.message : String(err);
+      console.error(`[TTS-ERROR] Seg ${i}: FINAL FAILURE — falling back to client TTS. Error: ${errMsg}`);
       cacheRef.current[i] = { useClientTTS: true, generatedAt: Date.now() };
       setUseClientTTS(true);
     }
