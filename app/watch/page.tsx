@@ -2099,59 +2099,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             registerHandlers={handleClarifyRegisterHandlers}
                                         />
 
-                                        {/* ─── ASSEMBLYAI SPEAKER DETECTION ─── */}
-                                        <div style={{
-                                            margin: '10px 8px', padding: '10px',
-                                            backgroundColor: '#0f172a', borderRadius: '8px',
-                                            border: '1px solid #3b82f6',
-                                        }}>
-                                            <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#93c5fd', marginBottom: '6px' }}>
-                                                {'🎯'} Advanced Speaker Detection
-                                            </div>
-                                            <p style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '8px', lineHeight: '1.4' }}>
-                                                Use AI to analyze voice characteristics for accurate speaker detection.
-                                                Processing takes ~1-2 minutes.
-                                            </p>
-                                            <button
-                                                onClick={async () => {
-                                                    console.log('[UI] AssemblyAI detection button clicked');
-                                                    if (!clarifyHandlersRef.current?.detectWithAssemblyAI) {
-                                                        console.error('[UI] detectWithAssemblyAI handler not registered');
-                                                        return;
-                                                    }
-                                                    setAssemblyAILoading(true);
-                                                    try {
-                                                        const speakers = await clarifyHandlersRef.current.detectWithAssemblyAI();
-                                                        console.log('[UI] AssemblyAI detection complete:', speakers);
-                                                        if (speakers && speakers.length > 1) {
-                                                            setDetectedSpeakers(speakers);
-                                                        }
-                                                    } catch (err: any) {
-                                                        console.error('[UI] AssemblyAI detection error:', err);
-                                                        alert(`Speaker detection failed: ${err.message || 'Unknown error'}`);
-                                                    } finally {
-                                                        setAssemblyAILoading(false);
-                                                    }
-                                                }}
-                                                disabled={assemblyAILoading}
-                                                style={{
-                                                    width: '100%',
-                                                    padding: '8px 12px',
-                                                    backgroundColor: assemblyAILoading ? '#475569' : '#2563eb',
-                                                    color: 'white',
-                                                    border: 'none',
-                                                    borderRadius: '6px',
-                                                    fontSize: '12px',
-                                                    fontWeight: 'bold',
-                                                    cursor: assemblyAILoading ? 'wait' : 'pointer',
-                                                    opacity: assemblyAILoading ? 0.7 : 1,
-                                                }}
-                                            >
-                                                {assemblyAILoading ? '⏳ Analyzing Audio... (1-2 min)' : '🎯 Detect Speakers with AI'}
-                                            </button>
-                                        </div>
-
-                                        {/* ─── SPEAKER VOICE CONFIGURATION ─── */}
+                                        {/* ─── SPEAKER VOICE CONFIGURATION (comes first — configure what you want) ─── */}
                                         {detectedSpeakers.length > 1 && (
                                             <div style={{
                                                 margin: '10px 8px', padding: '10px',
@@ -2320,6 +2268,62 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                 )}
                                             </div>
                                         )}
+
+                                        {/* ─── divider ─── */}
+                                        <div style={{ margin: '4px 8px', borderTop: '1px solid #334155' }} />
+
+                                        {/* ─── ASSEMBLYAI SPEAKER DETECTION (optional — re-detect with AI) ─── */}
+                                        <div style={{
+                                            margin: '10px 8px', padding: '10px',
+                                            backgroundColor: '#0f172a', borderRadius: '8px',
+                                            border: '1px solid #3b82f6',
+                                        }}>
+                                            <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#93c5fd', marginBottom: '6px' }}>
+                                                {'🎯'} Advanced Speaker Detection
+                                            </div>
+                                            <p style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '8px', lineHeight: '1.4' }}>
+                                                Not satisfied with automatic detection? Use AI to analyze voice
+                                                characteristics for more accurate speaker identification.
+                                                Processing takes ~1-2 minutes.
+                                            </p>
+                                            <button
+                                                onClick={async () => {
+                                                    console.log('[UI] AssemblyAI detection button clicked');
+                                                    if (!clarifyHandlersRef.current?.detectWithAssemblyAI) {
+                                                        console.error('[UI] detectWithAssemblyAI handler not registered');
+                                                        return;
+                                                    }
+                                                    setAssemblyAILoading(true);
+                                                    try {
+                                                        const speakers = await clarifyHandlersRef.current.detectWithAssemblyAI();
+                                                        console.log('[UI] AssemblyAI detection complete:', speakers);
+                                                        if (speakers && speakers.length > 1) {
+                                                            setDetectedSpeakers(speakers);
+                                                        }
+                                                    } catch (err: any) {
+                                                        console.error('[UI] AssemblyAI detection error:', err);
+                                                        alert(`Speaker detection failed: ${err.message || 'Unknown error'}`);
+                                                    } finally {
+                                                        setAssemblyAILoading(false);
+                                                    }
+                                                }}
+                                                disabled={assemblyAILoading}
+                                                style={{
+                                                    width: '100%',
+                                                    padding: '8px 12px',
+                                                    backgroundColor: assemblyAILoading ? '#475569' : '#2563eb',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    borderRadius: '6px',
+                                                    fontSize: '12px',
+                                                    fontWeight: 'bold',
+                                                    cursor: assemblyAILoading ? 'wait' : 'pointer',
+                                                    opacity: assemblyAILoading ? 0.7 : 1,
+                                                }}
+                                            >
+                                                {assemblyAILoading ? '⏳ Analyzing Audio... (1-2 min)' : '🎯 Detect Speakers with AI'}
+                                            </button>
+                                        </div>
                                     </div>
                                 )}
                             </div>
