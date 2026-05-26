@@ -30,12 +30,16 @@ export async function POST(req: NextRequest) {
 
     const client = new AssemblyAI({ apiKey });
 
-    console.log('[AssemblyAI] Submitting audio for transcription with speaker_labels=true...');
+    console.log('[AssemblyAI] Submitting audio for transcription...');
+    console.log('[AssemblyAI] Speech model: universal-2');
+    console.log('[AssemblyAI] Speaker labels: enabled');
 
     // Submit audio with speaker diarization
+    // Note: SDK types may not include 'universal-2' yet, but the API requires it
     const transcript = await client.transcripts.transcribe({
       audio: audioUrl,
       speaker_labels: true,
+      speech_model: 'universal-2' as any, // Required by current AssemblyAI API
     });
 
     console.log('[AssemblyAI] Transcription status:', transcript.status);
