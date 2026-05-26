@@ -25,6 +25,7 @@
 
 import { useState, useEffect, useCallback, useRef } from 'react';
 import ProcessingOptionsModal, { OutputMode } from '@/app/hooks/ProcessingOptionsModal';
+import { matchSpeakerSegments, type YouTubeSegment, type AssemblySegment } from '@/app/utils/matchSpeakerSegments';
 
 export interface ClarifyTranscriptSegment {
   text: string;
@@ -57,7 +58,7 @@ interface ClarifyAudioPanelProps {
   onPlayYouTube?: () => void;
   onTranscriptReady?: (segments: ClarifyTranscriptSegment[]) => void;
   onSegmentChange?: (index: number) => void;
-  registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => void }) => void;
+  registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => void; detectWithAssemblyAI: () => Promise<string[]> }) => void;
 }
 
 // ═══ MULTI-VOICE SYSTEM ═══
@@ -1143,6 +1144,100 @@ export function ClarifyAudioPanel({
     console.log('[REGEN] === REGENERATION COMPLETE ===');
   }, [generateSeg, onMuteYouTube]);
 
+  // ═══ ASSEMBLYAI HYBRID SPEAKER DETECTION ═══
+  // Uses AssemblyAI for accurate speaker labels, matched to YouTube caption timestamps.
+  // See ASSEMBLYAI_SYNC_ANALYSIS.md for why this hybrid approach is necessary.
+  const detectSpeakersWithAssemblyAI = useCallback(async (): Promise<string[]> => {
+    console.log('[ASSEMBLY-DETECT] ════════════════════════════════════════');
+    console.log('[ASSEMBLY-DETECT] Starting AssemblyAI speaker detection...');
+
+    try {
+      // Step 1: Get audio URL from video-stream API
+      console.log('[ASSEMBLY-DETECT] Step 1: Fetching audio URL for video', videoId);
+      const streamRes = await fetch(`/api/video-stream?videoId=${videoId}`);
+      if (!streamRes.ok) throw new Error(`Failed to get audio stream (${streamRes.status})`);
+      const streamData = await streamRes.json();
+
+      // Prefer direct audio URL, fall back to proxy
+      const audioUrl = streamData.bestAudio?.url || streamData.proxyUrls?.audio;
+      if (!audioUrl) throw new Error('No audio URL available for this video');
+      console.log('[ASSEMBLY-DETECT] Audio URL obtained:', audioUrl.substring(0, 80) + '...');
+
+      // Step 2: Call AssemblyAI speaker detection API
+      console.log('[ASSEMBLY-DETECT] Step 2: Calling AssemblyAI (this takes 1-2 minutes)...');
+      const detectRes = await fetch('/api/detect-speakers', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ audioUrl, videoId }),
+      });
+
+      if (!detectRes.ok) {
+        const errData = await detectRes.json().catch(() => ({ error: 'Unknown error' }));
+        throw new Error(errData.error || `Speaker detection failed (${detectRes.status})`);
+      }
+
+      const detectData = await detectRes.json();
+      console.log('[ASSEMBLY-DETECT] AssemblyAI returned:');
+      console.log('[ASSEMBLY-DETECT]   Speakers:', detectData.speakers);
+      console.log('[ASSEMBLY-DETECT]   Segments:', detectData.totalSegments);
+
+      // Step 3: Match AssemblyAI segments to our YouTube-based segments
+      console.log('[ASSEMBLY-DETECT] Step 3: Matching to YouTube caption segments...');
+      const segments = translatedTxRef.current.length > 0
+        ? translatedTxRef.current
+        : originalTxRef.current;
+
+      if (segments.length === 0) {
+        console.warn('[ASSEMBLY-DETECT] No transcript segments available yet!');
+        return ['speaker_0'];
+      }
+
+      const ytSegments: YouTubeSegment[] = segments.map((seg, i) => ({
+        idx: i,
+        text: seg.text,
+        start: seg.start,
+        end: seg.end,
+      }));
+
+      const asmSegments: AssemblySegment[] = detectData.segments;
+      const speakerMap = matchSpeakerSegments(ytSegments, asmSegments);
+
+      // Step 4: Apply speaker labels to transcript segments
+      console.log('[ASSEMBLY-DETECT] Step 4: Applying speaker labels...');
+      const updatedSegments = segments.map((seg, i) => ({
+        ...seg,
+        speaker: speakerMap.get(i) || seg.speaker || 'speaker_0',
+      }));
+
+      // Update state
+      setTranslatedTranscript(updatedSegments);
+      translatedTxRef.current = updatedSegments;
+
+      // Extract unique speakers
+      const uniqueSpeakers = Array.from(new Set(speakerMap.values())).sort();
+
+      // Notify parent
+      if (onSpeakersDetected) onSpeakersDetected(uniqueSpeakers);
+
+      // Log results
+      console.log('[ASSEMBLY-DETECT] ════════════════════════════════════════');
+      console.log('[ASSEMBLY-DETECT] ✅ AssemblyAI Detection Complete!');
+      console.log('[ASSEMBLY-DETECT] Detected speakers:', uniqueSpeakers);
+      console.log('[ASSEMBLY-DETECT] Sample assignments:');
+      updatedSegments.slice(0, 15).forEach((seg, i) => {
+        console.log(`[ASSEMBLY-DETECT]   Seg ${i}: "${seg.text.substring(0, 40)}" → ${seg.speaker}`);
+      });
+      console.log('[ASSEMBLY-DETECT] ════════════════════════════════════════');
+
+      return uniqueSpeakers;
+
+    } catch (error: any) {
+      console.error('[ASSEMBLY-DETECT] ❌ Error:', error);
+      console.error('[ASSEMBLY-DETECT] Stack:', error.stack);
+      throw error; // Let caller handle UI feedback
+    }
+  }, [videoId, onSpeakersDetected]);
+
   // Register external handlers
   useEffect(() => {
     if (registerHandlers) {
@@ -1151,9 +1246,10 @@ export function ClarifyAudioPanel({
         pause: () => handlePause(),
         isPlaying: () => isPlayingRef.current,
         regenerateVoices: (config?: SpeakerConfig) => handleRegenerateVoices(config),
+        detectWithAssemblyAI: detectSpeakersWithAssemblyAI,
       });
     }
-  }, [registerHandlers, handlePlay, handlePause, handleRegenerateVoices]);
+  }, [registerHandlers, handlePlay, handlePause, handleRegenerateVoices, detectSpeakersWithAssemblyAI]);
 
   /** User selects options from modal -> start processing */
   const handleSelectOption = useCallback(async (mode: OutputMode, lang: string) => {
