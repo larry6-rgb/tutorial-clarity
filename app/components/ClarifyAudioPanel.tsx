@@ -571,39 +571,27 @@ export function ClarifyAudioPanel({
       const gender = configGender
         || (FEMALE_VOICES.includes(voice) ? 'female' : 'male');
 
-      // ═══ NUCLEAR DIAGNOSTIC LOGGING ═══
-      console.log(`[DIAGNOSTIC] ==========================================`);
-      console.log(`[DIAGNOSTIC] SEGMENT: ${i}`);
-      console.log(`[DIAGNOSTIC] SPEAKER: ${speakerId}`);
-      console.log(`[DIAGNOSTIC] Voice from frozen map: ${voice}`);
-      console.log(`[DIAGNOSTIC] Voice source: ${source}`);
-      console.log(`[DIAGNOSTIC] Voice type: ${typeof voice}`);
-      console.log(`[DIAGNOSTIC] Voice length: ${voice?.length}`);
-      console.log(`[DIAGNOSTIC] Voice charCodes: [${voice?.split('').map(c => c.charCodeAt(0)).join(',')}]`);
-      console.log(`[DIAGNOSTIC] Gender: ${gender} (config=${configGender || 'none'})`);
-      console.log(`[DIAGNOSTIC] Frozen map ref exists: ${!!frozenMap}`);
+      // ═══ DIAGNOSTIC LOGGING ═══
+      console.log(`[DIAGNOSTIC] Seg ${i}: speaker=${speakerId} voice="${voice}" source=${source} gender=${gender} frozen=${!!frozenMap} epoch=${startEpoch}`);
       if (frozenMap) {
-        console.log(`[DIAGNOSTIC] Frozen map contents: ${JSON.stringify(frozenMap)}`);
+        console.log(`[DIAGNOSTIC] Frozen map: ${JSON.stringify(frozenMap)}`);
       }
-      console.log(`[DIAGNOSTIC] Epoch: ${startEpoch}`);
-      console.log(`[DIAGNOSTIC] ==========================================`);
 
+      // ═══ REQUEST BODY — voice is a PLAIN STRING (not an object!) ═══
       const requestBody = {
         text,
-        voice: { id: voice, name: voice, gender, provider: 'openai' },
-        videoId, segmentId: `seg_${i}`, speakerId,
+        voice,              // ← plain string like "nova", "onyx", "shimmer"
+        gender,             // ← "male" or "female"
+        videoId,
+        segmentId: `seg_${i}`,
+        speakerId,
         targetDuration: seg ? seg.end - seg.start : undefined,
-        targetLanguage: selectedLang, ttsModel: 'tts-1',
+        targetLanguage: selectedLang,
+        ttsModel: 'tts-1',
       };
 
-      // Log the EXACT JSON that will be sent
       const bodyJson = JSON.stringify(requestBody);
-      const extractedVoice = bodyJson.match(/"voice":\{"id":"([^"]+)"/)?.[1];
-      console.log(`[DIAGNOSTIC] Request body voice.id="${requestBody.voice.id}"`);
-      console.log(`[DIAGNOSTIC] JSON-extracted voice.id="${extractedVoice}"`);
-      if (extractedVoice !== voice) {
-        console.error(`[DIAGNOSTIC-MISMATCH] Voice object mismatch! variable=${voice}, json=${extractedVoice}`);
-      }
+      console.log(`[DIAGNOSTIC] Request: voice="${voice}" gender="${gender}" speaker="${speakerId}"`);
 
       // ── Fetch with client-side retry for transient errors ──
       let res: Response | null = null;
@@ -614,12 +602,7 @@ export function ClarifyAudioPanel({
         try {
           res = await fetch('/api/multi-voice-tts', {
             method: 'POST',
-            headers: {
-              'Content-Type': 'application/json',
-              'X-Segment-Id': String(i),
-              'X-Speaker-Id': speakerId,
-              'X-Expected-Voice': voice,
-            },
+            headers: { 'Content-Type': 'application/json' },
             body: bodyJson,
           });
 
@@ -666,32 +649,15 @@ export function ClarifyAudioPanel({
       }
 
       const ct = res.headers.get('content-type');
-      const returnedVoice = res.headers.get('x-voice-id');
-      const returnedVoiceUsed = res.headers.get('x-voice-used');
+      const returnedVoice = res.headers.get('x-voice-used') || res.headers.get('x-voice-id');
       const requestId = res.headers.get('x-request-id');
-      const bufferSize = res.headers.get('x-buffer-size');
       const now = Date.now();
 
-      // ═══ DIAGNOSTIC: Response analysis ═══
-      console.log(`[DIAGNOSTIC] ── Response for Seg ${i} ──`);
-      console.log(`[DIAGNOSTIC] Status: ${res.status}`);
-      console.log(`[DIAGNOSTIC] Content-Type: ${ct}`);
-      console.log(`[DIAGNOSTIC] X-Voice-Id: ${returnedVoice}`);
-      console.log(`[DIAGNOSTIC] X-Voice-Used: ${returnedVoiceUsed}`);
-      console.log(`[DIAGNOSTIC] X-Request-Id: ${requestId}`);
-      console.log(`[DIAGNOSTIC] X-Buffer-Size: ${bufferSize}`);
-      console.log(`[DIAGNOSTIC] Voice SENT: "${voice}"`);
-      console.log(`[DIAGNOSTIC] Voice RETURNED: "${returnedVoice || returnedVoiceUsed}"`);
-
-      // Verify voice match between what we requested and what server used
-      const serverVoice = returnedVoice || returnedVoiceUsed;
-      if (serverVoice && serverVoice !== voice) {
-        console.error(`[DIAGNOSTIC-MISMATCH] ==========================================`);
-        console.error(`[DIAGNOSTIC-MISMATCH] VOICE MISMATCH DETECTED!`);
-        console.error(`[DIAGNOSTIC-MISMATCH] Seg ${i}: SENT="${voice}" but SERVER="${serverVoice}" (${requestId})`);
-        console.error(`[DIAGNOSTIC-MISMATCH] ==========================================`);
-      } else if (serverVoice) {
-        console.log(`[DIAGNOSTIC] ✅ Voice match confirmed: "${voice}" == "${serverVoice}"`);
+      // Verify voice match
+      if (returnedVoice && returnedVoice !== voice) {
+        console.error(`[MISMATCH] Seg ${i}: sent="${voice}" server="${returnedVoice}" (${requestId})`);
+      } else {
+        console.log(`[DIAGNOSTIC] Seg ${i}: ✅ voice="${voice}" confirmed by server (${requestId})`);
       }
 
       if (ct?.includes('application/json')) {
@@ -994,10 +960,12 @@ export function ClarifyAudioPanel({
    *  Keeps transcripts intact — only regenerates the audio.
    *  @param configOverride — If provided, updates the ref immediately (avoids useEffect timing gap) */
   const handleRegenerateVoices = useCallback(async (configOverride?: SpeakerConfig) => {
-    console.log('[FREEZE] ════════════════════════════════════════════════');
-    console.log('[FREEZE] === STARTING REGENERATION ===');
-    console.log('[FREEZE] ════════════════════════════════════════════════');
-    console.log('[FREEZE] Config received:', configOverride);
+    console.log('[REGEN] ════════════════════════════════════════════════');
+    console.log('[REGEN] === REGENERATE VOICES CALLED ===');
+    console.log('[REGEN] ════════════════════════════════════════════════');
+    console.log('[REGEN] Config received:', JSON.stringify(configOverride));
+    console.log('[REGEN] Config type:', typeof configOverride);
+    console.log('[REGEN] Config keys:', configOverride ? Object.keys(configOverride) : 'none');
 
     // ── STEP 1: IMMEDIATELY stop everything ──
     setPhase('paused');
@@ -1013,28 +981,37 @@ export function ClarifyAudioPanel({
     }
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     if (onMuteYouTube) onMuteYouTube(false);
-    console.log('[FREEZE] Playback stopped');
+    console.log('[REGEN] Playback stopped');
 
-    // ── STEP 2: SNAPSHOT the config — make a copy that can never change ──
+    // ── STEP 2: SNAPSHOT the config ──
     const frozenConfig: SpeakerConfig = configOverride
       ? { ...configOverride }
       : { ...(speakerConfigRef.current || {}) };
     speakerConfigRef.current = frozenConfig;
-    console.log('[FREEZE] Config snapshot:', JSON.stringify(frozenConfig));
+    console.log('[REGEN] Config snapshot:', JSON.stringify(frozenConfig));
+
+    if (Object.keys(frozenConfig).length === 0) {
+      console.error('[REGEN] ⚠️ CONFIG IS EMPTY! Voice assignment will produce empty map.');
+    }
 
     // ── STEP 3: CALCULATE voice assignments ONCE ──
-    // Reset the call counter so we can verify it's only called once per Apply
     _assignCallCounter = 0;
     const voiceMap = assignVoicesToSpeakers(frozenConfig);
+    console.log('[REGEN] Voice map calculated:', JSON.stringify(voiceMap));
 
-    // ── STEP 4: FREEZE the map — Object.freeze makes it immutable ──
+    if (Object.keys(voiceMap).length === 0) {
+      console.error('[REGEN] ⚠️ VOICE MAP IS EMPTY! Segments will fall back to default.');
+    }
+
+    // ── STEP 4: FREEZE the map ──
     const frozenMap = Object.freeze({ ...voiceMap });
     frozenVoiceMapRef.current = frozenMap;
-    console.log('[FREEZE] ════════════════════════════════════════════════');
-    console.log('[FREEZE] === VOICE MAP IS NOW FROZEN (Object.freeze) ===');
-    console.log('[FREEZE] Map:', JSON.stringify(frozenMap));
-    console.log('[FREEZE] This map will be used for ALL segments');
-    console.log('[FREEZE] ════════════════════════════════════════════════');
+    console.log('[REGEN] ════════════════════════════════════════════════');
+    console.log('[REGEN] FROZEN MAP CREATED:');
+    console.log('[REGEN]', JSON.stringify(frozenMap));
+    console.log('[REGEN] frozenVoiceMapRef.current exists:', !!frozenVoiceMapRef.current);
+    console.log('[REGEN] frozenVoiceMapRef.current keys:', Object.keys(frozenVoiceMapRef.current || {}));
+    console.log('[REGEN] ════════════════════════════════════════════════');
 
     // ── STEP 5: NUCLEAR CACHE CLEAR ──
     const oldCacheSize = Object.keys(cacheRef.current).length;
@@ -1045,32 +1022,48 @@ export function ClarifyAudioPanel({
     genSetRef.current = new Set();
     setGeneratedCount(0);
 
-    // Increment epoch — any in-flight generateSeg calls from the old epoch will be discarded
     regenEpochRef.current++;
     const thisEpoch = regenEpochRef.current;
-    console.log(`[FREEZE] Cache cleared (${oldCacheSize} entries), epoch=${thisEpoch}`);
+    console.log(`[REGEN] Cache cleared (${oldCacheSize} entries), epoch=${thisEpoch}`);
 
-    // ── STEP 6: REGENERATE all segments using frozen map ──
-    const segs = translatedTxRef.current;
+    // ── STEP 6: REGENERATE all segments ──
+    // Try translated segments first, fall back to original
+    let segs = translatedTxRef.current;
+    if (!segs || segs.length === 0) {
+      segs = txRef.current;
+      console.log('[REGEN] No translated segments, using original transcript');
+    }
+
     if (segs.length > 0) {
       const dist: Record<string, number> = {};
       segs.forEach(s => { dist[s.speaker || '?'] = (dist[s.speaker || '?'] || 0) + 1; });
-      console.log(`[FREEZE] Regenerating ALL ${segs.length} segments. Speakers:`, dist);
+      console.log(`[REGEN] Regenerating ALL ${segs.length} segments. Speakers:`, dist);
+
+      // Verify frozen map covers all speakers in the transcript
+      const transcriptSpeakers = new Set(segs.map(s => s.speaker || 'speaker_0'));
+      const mapSpeakers = new Set(Object.keys(frozenMap));
+      transcriptSpeakers.forEach(sp => {
+        if (!mapSpeakers.has(sp)) {
+          console.warn(`[REGEN] ⚠️ Speaker "${sp}" in transcript but NOT in frozen map!`);
+        }
+      });
 
       for (let batchStart = 0; batchStart < segs.length; batchStart += 8) {
         if (regenEpochRef.current !== thisEpoch) {
-          console.log(`[FREEZE] Epoch ${thisEpoch} superseded by ${regenEpochRef.current}, aborting`);
+          console.log(`[REGEN] Epoch ${thisEpoch} superseded, aborting`);
           return;
         }
         const batch = segs.slice(batchStart, Math.min(batchStart + 8, segs.length));
         await Promise.allSettled(batch.map((s, j) => generateSeg(batchStart + j, s.text)));
-        console.log(`[FREEZE] Batch ${batchStart}-${batchStart + batch.length - 1} done`);
+        console.log(`[REGEN] Batch ${batchStart}-${batchStart + batch.length - 1} done`);
       }
-      console.log(`[FREEZE] All ${segs.length} segments regenerated`);
+      console.log(`[REGEN] All ${segs.length} segments regenerated`);
+    } else {
+      console.warn('[REGEN] ⚠️ NO SEGMENTS to regenerate! Both translated and original are empty.');
     }
 
-    console.log(`[FREEZE] Final cache size: ${Object.keys(cacheRef.current).length}`);
-    console.log('[FREEZE] === REGENERATION COMPLETE ===');
+    console.log(`[REGEN] Final cache size: ${Object.keys(cacheRef.current).length}`);
+    console.log('[REGEN] === REGENERATION COMPLETE ===');
   }, [generateSeg, onMuteYouTube]);
 
   // Register external handlers

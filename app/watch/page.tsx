@@ -2210,26 +2210,38 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                 {/* ── Nuclear Clear & Regenerate (diagnostic) ── */}
                                                 <button
                                                     onClick={() => {
-                                                        console.log('[NUCLEAR] ==========================================');
-                                                        console.log('[NUCLEAR] Clearing ALL caches');
-                                                        console.log('[NUCLEAR] Current speakerConfig:', speakerConfig);
-                                                        try { localStorage.clear(); } catch (e) { console.warn('[NUCLEAR] localStorage.clear failed:', e); }
-                                                        try { sessionStorage.clear(); } catch (e) { console.warn('[NUCLEAR] sessionStorage.clear failed:', e); }
-                                                        console.log('[NUCLEAR] localStorage + sessionStorage cleared');
+                                                        console.log('[BTN-CLICK] ==========================================');
+                                                        console.log('[BTN-CLICK] Nuclear Clear button clicked');
+                                                        console.log('[BTN-CLICK] speakerConfig state:', JSON.stringify(speakerConfig));
+                                                        console.log('[BTN-CLICK] detectedSpeakers:', JSON.stringify(detectedSpeakers));
+
+                                                        // Clear all storage
+                                                        try { localStorage.clear(); } catch (e) { console.warn('[BTN-CLICK] localStorage.clear failed:', e); }
+                                                        try { sessionStorage.clear(); } catch (e) { console.warn('[BTN-CLICK] sessionStorage.clear failed:', e); }
+                                                        console.log('[BTN-CLICK] Storage cleared');
+
+                                                        // Build FULL config with all detected speakers
+                                                        const fullConfig: Record<string, 'male' | 'female'> = {};
+                                                        detectedSpeakers.forEach(sid => {
+                                                            fullConfig[sid] = speakerConfig[sid] || 'male';
+                                                        });
+                                                        console.log('[BTN-CLICK] Config to apply:', JSON.stringify(fullConfig));
+
                                                         if (clarifyHandlersRef.current?.regenerateVoices) {
-                                                            const config = { ...speakerConfig };
-                                                            // Fill in defaults for any speaker without config
-                                                            detectedSpeakers.forEach(sid => {
-                                                                if (!config[sid]) config[sid] = 'male';
-                                                            });
-                                                            console.log('[NUCLEAR] Calling regenerateVoices with:', config);
+                                                            console.log('[BTN-CLICK] Handler found, calling regenerateVoices...');
                                                             setIsRegenerating(true);
-                                                            Promise.resolve(clarifyHandlersRef.current.regenerateVoices(config)).then(() => {
-                                                                console.log('[NUCLEAR] Regeneration complete');
+                                                            Promise.resolve(clarifyHandlersRef.current.regenerateVoices(fullConfig)).then(() => {
+                                                                console.log('[BTN-CLICK] Regeneration complete');
+                                                                setIsRegenerating(false);
+                                                            }).catch((err: Error) => {
+                                                                console.error('[BTN-CLICK] Regeneration failed:', err);
                                                                 setIsRegenerating(false);
                                                             });
+                                                        } else {
+                                                            console.error('[BTN-CLICK] ERROR: regenerateVoices handler NOT FOUND!');
+                                                            console.error('[BTN-CLICK] clarifyHandlersRef.current:', clarifyHandlersRef.current);
                                                         }
-                                                        console.log('[NUCLEAR] ==========================================');
+                                                        console.log('[BTN-CLICK] ==========================================');
                                                     }}
                                                     disabled={isRegenerating}
                                                     style={{

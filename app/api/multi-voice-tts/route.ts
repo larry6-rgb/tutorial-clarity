@@ -1,21 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
 
 /**
- * /api/multi-voice-tts — Route v80 (nuclear diagnostic logging)
+ * /api/multi-voice-tts — Route v81 (fixed voice parameter)
  * 
  * Generates TTS audio using OpenAI's TTS API.
- * Every step is traced with [API-xxxxx] prefix for end-to-end debugging.
  * 
  * Request body:
  *   text: string          — Text to synthesize
- *   voice: { id, name, gender, provider } — Voice config
- *   videoId: string       — Source video ID
- *   segmentId: string     — Segment identifier
- *   speakerId: string     — Speaker identifier  
- *   targetDuration?: number — Desired audio duration in seconds
- *   targetLanguage: string — Target language code
- *   ttsModel: 'tts-1' | 'tts-1-hd' — OpenAI model
- *   customVoice?: string  — Override voice ID
+ *   voice: string         — Voice ID like "nova", "onyx", "shimmer" (plain string!)
+ *   gender?: string       — "male" or "female"
+ *   speakerId?: string    — Speaker identifier
+ *   segmentId?: string    — Segment identifier
+ *   videoId?: string      — Source video ID
+ *   ttsModel?: string     — 'tts-1' or 'tts-1-hd'
+ * 
+ * Also accepts legacy format: voice: { id: string, ... }
  */
 
 const OPENAI_VOICES = ['nova', 'shimmer', 'alloy', 'echo', 'fable', 'onyx'];
@@ -24,121 +23,58 @@ export async function POST(request: NextRequest) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
   
   try {
-    // ═══ NUCLEAR LOG: Request headers ═══
-    const expectedVoice = request.headers.get('x-expected-voice');
-    const headerSpeaker = request.headers.get('x-speaker-id');
-    const headerSegment = request.headers.get('x-segment-id');
-    console.log(`[API-${requestId}] ==========================================`);
-    console.log(`[API-${requestId}] NEW REQUEST`);
-    console.log(`[API-${requestId}] X-Expected-Voice: ${expectedVoice}`);
-    console.log(`[API-${requestId}] X-Speaker-Id: ${headerSpeaker}`);
-    console.log(`[API-${requestId}] X-Segment-Id: ${headerSegment}`);
-
-    // ── STEP 1: Parse request body ──
+    // ── Parse request body ──
     let body: any;
-    let rawBodyText: string;
     try {
-      rawBodyText = await request.text();
-      body = JSON.parse(rawBodyText);
+      body = await request.json();
     } catch (parseErr) {
-      console.error(`[API-${requestId}] ❌ Failed to parse request body:`, parseErr);
-      return NextResponse.json(
-        { error: 'Invalid JSON in request body', requestId },
-        { status: 400 }
-      );
+      console.error(`[API] ${requestId} ❌ Bad JSON:`, parseErr);
+      return NextResponse.json({ error: 'Invalid JSON', requestId }, { status: 400 });
     }
 
-    // ═══ NUCLEAR LOG: Parsed body inspection ═══
-    console.log(`[API-${requestId}] Body keys: [${Object.keys(body).join(', ')}]`);
-    console.log(`[API-${requestId}] body.voice:`, JSON.stringify(body.voice));
-    console.log(`[API-${requestId}] body.voice type: ${typeof body.voice}`);
-    console.log(`[API-${requestId}] body.customVoice: ${body.customVoice}`);
-    console.log(`[API-${requestId}] body.speakerId: ${body.speakerId}`);
-    console.log(`[API-${requestId}] body.text length: ${body.text?.length}`);
+    const { text, voice, gender, videoId, segmentId, speakerId, ttsModel = 'tts-1', customVoice } = body;
 
-    const {
-      text,
-      voice,
-      videoId,
-      segmentId,
-      speakerId,
-      targetDuration,
-      targetLanguage,
-      ttsModel = 'tts-1',
-      customVoice,
-    } = body;
-
-    // ═══ NUCLEAR LOG: Destructured values ═══
-    console.log(`[API-${requestId}] Destructured voice: ${JSON.stringify(voice)}`);
-    console.log(`[API-${requestId}] voice?.id: "${voice?.id}"`);
-    console.log(`[API-${requestId}] voice?.name: "${voice?.name}"`);
-    console.log(`[API-${requestId}] voice?.gender: "${voice?.gender}"`);
-    console.log(`[API-${requestId}] customVoice: "${customVoice}"`);
-
-    // ── STEP 2: Validate required fields ──
-    if (!text || typeof text !== 'string') {
-      console.error(`[API-${requestId}] ❌ Missing/invalid text. Got:`, typeof text, text?.length);
-      return NextResponse.json(
-        { error: 'Missing or invalid text', requestId, textType: typeof text, textLength: text?.length },
-        { status: 400 }
-      );
-    }
-
-    if (text.length > 4096) {
-      console.error(`[API-${requestId}] ❌ Text too long: ${text.length} chars (max 4096)`);
-      return NextResponse.json(
-        { error: `Text too long: ${text.length} chars (max 4096)`, requestId },
-        { status: 400 }
-      );
-    }
-
-    // ── STEP 3: Resolve voice ID ──
-    const rawVoice = customVoice || voice?.id || 'alloy';
-    let voiceId = rawVoice.toLowerCase().trim();
-
-    console.log(`[API-${requestId}] Voice resolution: customVoice="${customVoice}" || voice?.id="${voice?.id}" || 'alloy' => rawVoice="${rawVoice}" => voiceId="${voiceId}"`);
-
-    if (!OPENAI_VOICES.includes(voiceId)) {
-      console.warn(`[API-${requestId}] ⚠️ Unknown voice "${voiceId}", falling back to alloy. Valid: [${OPENAI_VOICES.join(',')}]`);
+    // ── Resolve voice ID (handle both string and object formats) ──
+    let voiceId: string;
+    if (customVoice && typeof customVoice === 'string') {
+      voiceId = customVoice.toLowerCase().trim();
+    } else if (typeof voice === 'string') {
+      // NEW format: voice is a plain string like "nova"
+      voiceId = voice.toLowerCase().trim();
+    } else if (voice && typeof voice === 'object' && voice.id) {
+      // LEGACY format: voice is { id: "nova", name: "nova", ... }
+      voiceId = String(voice.id).toLowerCase().trim();
+    } else {
       voiceId = 'alloy';
     }
 
-    // ═══ NUCLEAR LOG: Voice vs header comparison ═══
-    if (expectedVoice && expectedVoice !== voiceId) {
-      console.error(`[API-${requestId}] ⚠️ HEADER MISMATCH: X-Expected-Voice="${expectedVoice}" but resolved voiceId="${voiceId}"`);
+    console.log(`[API] ${requestId} | voice input: ${JSON.stringify(voice)} (type=${typeof voice}) => resolved: "${voiceId}" | speaker=${speakerId} | seg=${segmentId}`);
+
+    // ── Validate ──
+    if (!text || typeof text !== 'string') {
+      return NextResponse.json({ error: 'Missing text', requestId }, { status: 400 });
+    }
+    if (text.length > 4096) {
+      return NextResponse.json({ error: `Text too long: ${text.length}`, requestId }, { status: 400 });
+    }
+    if (!OPENAI_VOICES.includes(voiceId)) {
+      console.warn(`[API] ${requestId} ⚠️ Unknown voice "${voiceId}", using alloy`);
+      voiceId = 'alloy';
     }
 
-    // ── STEP 4: Check API key ──
+    // ── Check API key ──
     const apiKey = process.env.OPENAI_API_KEY;
     if (!apiKey) {
-      console.error(`[API-${requestId}] ❌ OPENAI_API_KEY not configured!`);
       return NextResponse.json({ useClientSideTTS: true, reason: 'no-api-key' });
     }
 
     const model = ttsModel === 'tts-1-hd' ? 'tts-1-hd' : 'tts-1';
 
-    // ═══ NUCLEAR LOG: OpenAI call parameters ═══
-    console.log(`[API-${requestId}] ==========================================`);
-    console.log(`[API-${requestId}] CALLING OPENAI TTS`);
-    console.log(`[API-${requestId}] Model: ${model}`);
-    console.log(`[API-${requestId}] Voice: "${voiceId}"`);
-    console.log(`[API-${requestId}] Text (first 80): "${text.substring(0, 80)}"`);
-    console.log(`[API-${requestId}] Text length: ${text.length}`);
-    console.log(`[API-${requestId}] ==========================================`);
+    console.log(`[API] ${requestId} | CALLING OpenAI: model=${model} voice="${voiceId}" text="${text.substring(0, 50)}..." (${text.length}ch)`);
 
-    // ── STEP 5: Build the EXACT OpenAI request payload and log it ──
-    const openaiPayload = {
-      model,
-      input: text,
-      voice: voiceId,
-      response_format: 'mp3',
-      speed: 1.0,
-    };
-    console.log(`[API-${requestId}] OpenAI payload: ${JSON.stringify(openaiPayload)}`);
-
-    // ── STEP 6: Call OpenAI TTS API (with retry for transient errors) ──
+    // ── Call OpenAI TTS with retry ──
     let ttsResponse: Response | null = null;
-    let lastError: string = '';
+    let lastError = '';
     const MAX_RETRIES = 2;
 
     for (let attempt = 1; attempt <= MAX_RETRIES; attempt++) {
@@ -149,21 +85,22 @@ export async function POST(request: NextRequest) {
             'Authorization': `Bearer ${apiKey}`,
             'Content-Type': 'application/json',
           },
-          body: JSON.stringify(openaiPayload),
+          body: JSON.stringify({
+            model,
+            input: text,
+            voice: voiceId,
+            response_format: 'mp3',
+            speed: 1.0,
+          }),
         });
 
-        console.log(`[API-${requestId}] OpenAI response: status=${ttsResponse.status}, attempt=${attempt}`);
+        if (ttsResponse.ok) break;
 
-        if (ttsResponse.ok) break; // Success — exit retry loop
-
-        // Read error for logging
         const errorBody = await ttsResponse.text();
         lastError = `OpenAI ${ttsResponse.status}: ${errorBody.substring(0, 200)}`;
-        console.error(`[API-${requestId}] ❌ Attempt ${attempt}/${MAX_RETRIES}: ${lastError}`);
+        console.error(`[API] ${requestId} ❌ attempt ${attempt}: ${lastError}`);
 
-        // Don't retry auth/quota errors
         if (ttsResponse.status === 401 || ttsResponse.status === 429) {
-          console.log(`[API-${requestId}] Auth/quota error — falling back to client TTS`);
           return NextResponse.json({
             useClientSideTTS: true,
             reason: ttsResponse.status === 401 ? 'auth-error' : 'rate-limited',
@@ -171,46 +108,28 @@ export async function POST(request: NextRequest) {
           });
         }
 
-        // For 5xx errors, wait before retry
         if (attempt < MAX_RETRIES && ttsResponse.status >= 500) {
-          const delay = attempt * 500;
-          console.log(`[API-${requestId}] Retrying in ${delay}ms...`);
-          await new Promise(r => setTimeout(r, delay));
+          await new Promise(r => setTimeout(r, attempt * 500));
           ttsResponse = null;
         }
-
       } catch (fetchErr) {
         lastError = fetchErr instanceof Error ? fetchErr.message : String(fetchErr);
-        console.error(`[API-${requestId}] ❌ Fetch error (attempt ${attempt}/${MAX_RETRIES}):`, lastError);
-
-        if (attempt < MAX_RETRIES) {
-          const delay = attempt * 500;
-          console.log(`[API-${requestId}] Retrying in ${delay}ms...`);
-          await new Promise(r => setTimeout(r, delay));
-        }
+        console.error(`[API] ${requestId} ❌ fetch error attempt ${attempt}: ${lastError}`);
+        if (attempt < MAX_RETRIES) await new Promise(r => setTimeout(r, attempt * 500));
       }
     }
 
-    // ── STEP 7: Handle final response ──
     if (!ttsResponse || !ttsResponse.ok) {
-      console.error(`[API-${requestId}] ❌ All ${MAX_RETRIES} attempts failed: ${lastError}`);
+      console.error(`[API] ${requestId} ❌ All retries failed: ${lastError}`);
       return NextResponse.json(
-        {
-          error: 'OpenAI TTS failed after retries',
-          details: lastError,
-          requestId,
-          segmentId,
-          voiceId,
-          textLength: text.length,
-        },
+        { error: 'OpenAI TTS failed', details: lastError, requestId, voiceId },
         { status: 502 }
       );
     }
 
-    // ── STEP 8: Return audio with full diagnostic headers ──
+    // ── Return audio ──
     const audioBuffer = await ttsResponse.arrayBuffer();
-    console.log(`[API-${requestId}] ✅ SUCCESS: ${segmentId} | voice="${voiceId}" | speaker=${speakerId} | ${audioBuffer.byteLength}B`);
-    console.log(`[API-${requestId}] ==========================================`);
+    console.log(`[API] ${requestId} ✅ ${segmentId} voice="${voiceId}" ${audioBuffer.byteLength}B`);
 
     return new NextResponse(audioBuffer, {
       status: 200,
@@ -224,27 +143,12 @@ export async function POST(request: NextRequest) {
         'X-Segment-Id': segmentId || '',
         'X-Speaker-Id': speakerId || '',
         'X-Request-Id': requestId,
-        'X-Buffer-Size': audioBuffer.byteLength.toString(),
       },
     });
 
   } catch (error) {
-    // ── CATASTROPHIC ERROR ──
     const errMsg = error instanceof Error ? error.message : String(error);
-    const errStack = error instanceof Error ? error.stack : undefined;
-    console.error(`[API-${requestId}] ==========================================`);
-    console.error(`[API-${requestId}] ❌❌ UNCAUGHT EXCEPTION:`);
-    console.error(`[API-${requestId}]   Message: ${errMsg}`);
-    if (errStack) console.error(`[API-${requestId}]   Stack: ${errStack}`);
-    console.error(`[API-${requestId}] ==========================================`);
-
-    return NextResponse.json(
-      {
-        error: 'Internal server error in TTS route',
-        message: errMsg,
-        requestId,
-      },
-      { status: 500 }
-    );
+    console.error(`[API] ${requestId} ❌❌ UNCAUGHT:`, errMsg);
+    return NextResponse.json({ error: 'Internal error', message: errMsg, requestId }, { status: 500 });
   }
 }
