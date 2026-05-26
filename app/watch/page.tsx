@@ -2109,8 +2109,8 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                 {'🎯'} Advanced Speaker Detection
                                             </div>
                                             <p style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '8px', lineHeight: '1.4' }}>
-                                                Use AI voice analysis for accurate multi-speaker detection.
-                                                Takes ~1-2 min, costs ~$0.04 per 15-min video.
+                                                Use AI to analyze voice characteristics for accurate speaker detection.
+                                                Processing takes ~1-2 minutes.
                                             </p>
                                             <button
                                                 onClick={async () => {
