@@ -545,7 +545,19 @@ export function ClarifyAudioPanel({
     cacheRef.current[i] = { generating: true };
 
     try {
-      const seg = translatedTxRef.current[i] || txRef.current[i];
+      // ═══ RAW SEGMENT DUMP — find the actual speaker label ═══
+      const rawSegTranslated = translatedTxRef.current[i];
+      const rawSegTx = txRef.current[i];
+      const seg = rawSegTranslated || rawSegTx;
+
+      // DUMP: Show EXACTLY what the segment object looks like
+      console.log(`[SEG-DUMP] Seg ${i}: translated exists=${!!rawSegTranslated}, tx exists=${!!rawSegTx}`);
+      if (rawSegTranslated) {
+        console.log(`[SEG-DUMP] Seg ${i} translated keys: [${Object.keys(rawSegTranslated).join(', ')}]`);
+        console.log(`[SEG-DUMP] Seg ${i} translated.speaker = "${rawSegTranslated.speaker}" (type: ${typeof rawSegTranslated.speaker})`);
+        console.log(`[SEG-DUMP] Seg ${i} translated.text = "${(rawSegTranslated.text || '').substring(0, 40)}"`);
+      }
+
       const speakerId = seg?.speaker || 'speaker_0';
 
       // ═══ VOICE LOOKUP ═══
@@ -558,9 +570,23 @@ export function ClarifyAudioPanel({
         voice = frozenMap[speakerId];
         source = 'FROZEN';
       } else if (frozenMap) {
+        // ═══ FROZEN-missing: the speaker from transcript is NOT in the map ═══
+        // This is THE BUG if you see this for every segment!
         voice = DEFAULT_VOICE;
         source = 'FROZEN-missing';
-        console.warn(`[DIAGNOSTIC] Seg ${i}: speaker "${speakerId}" NOT in frozen map! Keys: [${Object.keys(frozenMap).join(', ')}]`);
+        console.error(`[BUG?] Seg ${i}: speaker "${speakerId}" NOT in frozen map!`);
+        console.error(`[BUG?]   Map keys: [${Object.keys(frozenMap).join(', ')}]`);
+        console.error(`[BUG?]   Map: ${JSON.stringify(frozenMap)}`);
+        console.error(`[BUG?]   Seg speaker raw: "${seg?.speaker}" type=${typeof seg?.speaker}`);
+        
+        // ═══ WORKAROUND: Try to find a voice anyway ═══
+        // Maybe speaker IDs don't match — try index-based assignment from map values
+        const mapValues = Object.values(frozenMap);
+        if (mapValues.length > 0) {
+          voice = mapValues[i % mapValues.length];
+          source = 'FROZEN-index-fallback';
+          console.warn(`[BUG-FIX] Using index-based fallback: Seg ${i} % ${mapValues.length} = voice "${voice}"`);
+        }
       } else {
         voice = DEFAULT_VOICE;
         source = 'PRE-APPLY';
@@ -571,11 +597,7 @@ export function ClarifyAudioPanel({
       const gender = configGender
         || (FEMALE_VOICES.includes(voice) ? 'female' : 'male');
 
-      // ═══ DIAGNOSTIC LOGGING ═══
-      console.log(`[DIAGNOSTIC] Seg ${i}: speaker=${speakerId} voice="${voice}" source=${source} gender=${gender} frozen=${!!frozenMap} epoch=${startEpoch}`);
-      if (frozenMap) {
-        console.log(`[DIAGNOSTIC] Frozen map: ${JSON.stringify(frozenMap)}`);
-      }
+      console.log(`[VOICE] Seg ${i}: speaker="${speakerId}" voice="${voice}" source=${source} frozen=${!!frozenMap}`);
 
       // ═══ REQUEST BODY — voice is a PLAIN STRING (not an object!) ═══
       const requestBody = {
@@ -1052,20 +1074,20 @@ export function ClarifyAudioPanel({
         console.log(`[REGEN]   Seg ${i}: speaker="${s.speaker}" text="${(s.text || '').substring(0, 40)}"`);
       });
 
-      // ═══ IF SPEAKERS ARE MISSING: Re-detect them! ═══
-      if (noSpeakerCount > segs.length * 0.5) {
-        console.warn(`[REGEN] ⚠️ ${noSpeakerCount}/${segs.length} segments have NO speaker! Re-detecting...`);
-        segs = detectSpeakers(segs);
-        translatedTxRef.current = segs;
+      // ═══ ALWAYS re-detect speakers to ensure labels are present ═══
+      // This is the SAFETY NET — even if detection already ran, re-run to guarantee
+      // speaker labels exist on every segment before we generate TTS
+      console.log(`[REGEN] Running detectSpeakers() as safety net (${noSpeakerCount} missing speakers)...`);
+      segs = detectSpeakers(segs);
+      translatedTxRef.current = segs;
 
-        // Recheck
-        const dist2: Record<string, number> = {};
-        segs.forEach(s => { dist2[s.speaker || '(undefined)'] = (dist2[s.speaker || '(undefined)'] || 0) + 1; });
-        console.log(`[REGEN] After re-detection:`, dist2);
-        segs.slice(0, 10).forEach((s, i) => {
-          console.log(`[REGEN]   Seg ${i}: speaker="${s.speaker}" text="${(s.text || '').substring(0, 40)}"`);
-        });
-      }
+      // Verify result
+      const dist2: Record<string, number> = {};
+      segs.forEach(s => { dist2[s.speaker || '(undefined)'] = (dist2[s.speaker || '(undefined)'] || 0) + 1; });
+      console.log(`[REGEN] After detectSpeakers:`, dist2);
+      segs.slice(0, 10).forEach((s, i) => {
+        console.log(`[REGEN]   Seg ${i}: speaker="${s.speaker}" text="${(s.text || '').substring(0, 40)}"`);
+      });
 
       // Verify frozen map covers all speakers in the transcript
       const transcriptSpeakers = new Set(segs.map(s => s.speaker || 'speaker_0'));
