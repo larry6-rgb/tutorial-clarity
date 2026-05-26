@@ -72,26 +72,71 @@ const DEFAULT_VOICE = 'onyx';
 
 /**
  * Compute a deterministic voice assignment for every speaker in the config.
+ * 
+ * ⚠️  THIS FUNCTION MUST ONLY BE CALLED ONCE — inside handleRegenerateVoices.
+ *     If you see the call-counter exceed 1 in the logs, something is wrong.
+ *
  * Speakers are sorted numerically so the mapping is stable regardless of
  * object-key iteration order.  Same-gender speakers cycle through their pool:
  *   Female: nova -> shimmer -> alloy -> nova ...
  *   Male:   onyx -> fable   -> echo  -> onyx ...
  */
+let _assignCallCounter = 0;  // GUARD: tracks how many times this is called per session
+
 export function assignVoicesToSpeakers(config: SpeakerConfig): Record<string, string> {
+  _assignCallCounter++;
+  console.log(`[ASSIGN-VOICES] ════════════════════════════════════════`);
+  console.log(`[ASSIGN-VOICES] CALL #${_assignCallCounter} — THIS SHOULD ONLY BE CALLED ONCE PER APPLY!`);
+  if (_assignCallCounter > 1) {
+    console.warn(`[ASSIGN-VOICES] ⚠️ WARNING: Called ${_assignCallCounter} times! Should be 1.`);
+  }
+  console.log(`[ASSIGN-VOICES] Config:`, JSON.stringify(config));
+
   const assignments: Record<string, string> = {};
   let femaleIdx = 0;
   let maleIdx = 0;
 
-  // Sort speaker IDs numerically for consistent assignment order
   const sorted = Object.keys(config).sort((a, b) => {
     const na = parseInt(a.match(/\d+/)?.[0] || '0');
     const nb = parseInt(b.match(/\d+/)?.[0] || '0');
     return na - nb;
   });
 
+  console.log(`[ASSIGN-VOICES] Processing speakers in order:`, sorted);
+
   for (const id of sorted) {
     const gender = config[id];
     if (gender === 'female') {
+      assignments[id] = FEMALE_VOICES[femaleIdx % FEMALE_VOICES.length];
+      console.log(`[ASSIGN-VOICES]   ${id} (female #${femaleIdx}) → ${assignments[id]}`);
+      femaleIdx++;
+    } else {
+      assignments[id] = MALE_VOICES[maleIdx % MALE_VOICES.length];
+      console.log(`[ASSIGN-VOICES]   ${id} (male #${maleIdx}) → ${assignments[id]}`);
+      maleIdx++;
+    }
+  }
+
+  console.log(`[ASSIGN-VOICES] FINAL:`, JSON.stringify(assignments));
+  console.log(`[ASSIGN-VOICES] ════════════════════════════════════════`);
+  return assignments;
+}
+
+/**
+ * SILENT version of assignVoicesToSpeakers — for UI preview labels ONLY.
+ * Does NOT log. Does NOT affect the frozen map. Safe to call on every render.
+ */
+export function previewVoiceAssignments(config: SpeakerConfig): Record<string, string> {
+  const assignments: Record<string, string> = {};
+  let femaleIdx = 0;
+  let maleIdx = 0;
+  const sorted = Object.keys(config).sort((a, b) => {
+    const na = parseInt(a.match(/\d+/)?.[0] || '0');
+    const nb = parseInt(b.match(/\d+/)?.[0] || '0');
+    return na - nb;
+  });
+  for (const id of sorted) {
+    if (config[id] === 'female') {
       assignments[id] = FEMALE_VOICES[femaleIdx % FEMALE_VOICES.length];
       femaleIdx++;
     } else {
@@ -99,10 +144,6 @@ export function assignVoicesToSpeakers(config: SpeakerConfig): Record<string, st
       maleIdx++;
     }
   }
-
-  // Single summary log line
-  const summary = sorted.map(id => `${id}(${config[id]})→${assignments[id]}`).join(', ');
-  console.log(`[TRACE-5-ASSIGN] ${summary}`);
   return assignments;
 }
 
@@ -171,34 +212,9 @@ function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscript
   return result;
 }
 
-/**
- * Get the appropriate TTS voice for a segment.
- * When a manual speaker config exists, uses assignVoicesToSpeakers() so that
- * multiple speakers of the same gender get distinct voices from the pool.
- * WITHOUT config: uses a single default voice for ALL speakers (safe default —
- * no guessing genders from speaker IDs).
- *
- * Caches the assignment map to avoid recomputing for every segment.
- */
-let _cachedConfig: string = '';
-let _cachedAssignments: Record<string, string> = {};
-
-function getVoiceForSegment(segment: ClarifyTranscriptSegment, config?: SpeakerConfig): string {
-  const speakerId = segment.speaker || 'speaker_0';
-
-  // If manual config exists, compute full voice assignment map (cached)
-  if (config && Object.keys(config).length > 0) {
-    const configKey = JSON.stringify(config);
-    if (configKey !== _cachedConfig) {
-      _cachedAssignments = assignVoicesToSpeakers(config);
-      _cachedConfig = configKey;
-    }
-    return _cachedAssignments[speakerId] || DEFAULT_VOICE;
-  }
-
-  // No config — single default voice for everyone (don't guess genders)
-  return DEFAULT_VOICE;
-}
+// ═══ DELETED: getVoiceForSegment and module-level cache ═══
+// Voice lookups now ONLY go through frozenVoiceMapRef (set once in handleRegenerateVoices).
+// There is NO other code path for voice assignment. Period.
 
 function fmtTime(sec: number): string {
   const m = Math.floor(sec / 60);
@@ -333,22 +349,26 @@ export function ClarifyAudioPanel({
       const seg = translatedTxRef.current[i] || txRef.current[i];
       const speakerId = seg?.speaker || 'speaker_0';
 
-      // FROZEN voice: always use the frozen map (computed once at regen time)
-      // Falls back to getVoiceForSegment only if no frozen map exists (initial load)
+      // ═══ VOICE LOOKUP: ONLY from frozenVoiceMapRef ═══
+      // There is NO other code path. If frozen map doesn't exist, use DEFAULT_VOICE.
+      // This ensures ALL segments use the SAME voice assignments computed at regen time.
       let voice: string;
       let source: string;
-      if (frozenVoiceMapRef.current && frozenVoiceMapRef.current[speakerId]) {
-        voice = frozenVoiceMapRef.current[speakerId];
-        source = 'frozen';
-      } else if (frozenVoiceMapRef.current) {
+      const frozenMap = frozenVoiceMapRef.current;
+      if (frozenMap && frozenMap[speakerId]) {
+        voice = frozenMap[speakerId];
+        source = 'FROZEN';
+      } else if (frozenMap) {
+        // Speaker exists in transcript but not in config — shouldn't happen but safe fallback
         voice = DEFAULT_VOICE;
-        source = 'frozen-fallback';
+        source = 'FROZEN-missing-speaker';
+        console.warn(`[VOICE-ERROR] ${speakerId} not found in frozen map:`, frozenMap);
       } else {
-        voice = seg ? getVoiceForSegment(seg, speakerConfigRef.current) : DEFAULT_VOICE;
-        source = 'live';
+        // No frozen map yet (initial load before user clicks Apply) — use default
+        voice = DEFAULT_VOICE;
+        source = 'DEFAULT-no-freeze';
       }
-      const configGender = speakerConfigRef.current?.[speakerId] || 'unconfigured';
-      const gender = configGender;
+      const gender = speakerConfigRef.current?.[speakerId] || 'unconfigured';
 
       console.log(`[TRACE-6-TTS] Seg ${i}: ${speakerId} -> ${gender} (${source}) -> voice="${voice}"`);
 
@@ -677,30 +697,13 @@ export function ClarifyAudioPanel({
    *  Keeps transcripts intact — only regenerates the audio.
    *  @param configOverride — If provided, updates the ref immediately (avoids useEffect timing gap) */
   const handleRegenerateVoices = useCallback(async (configOverride?: SpeakerConfig) => {
-    console.log('[regenerate] === STARTING REGENERATION ===');
+    console.log('[FREEZE] ════════════════════════════════════════════════');
+    console.log('[FREEZE] === STARTING REGENERATION ===');
+    console.log('[FREEZE] ════════════════════════════════════════════════');
+    console.log('[FREEZE] Config received:', configOverride);
 
-    // 0. FREEZE config: take a snapshot so nothing can change it during generation
-    const frozenConfig: SpeakerConfig = configOverride
-      ? { ...configOverride }
-      : { ...(speakerConfigRef.current || {}) };
-    speakerConfigRef.current = frozenConfig;
-    console.log('[regenerate] Config FROZEN:', JSON.stringify(frozenConfig));
-
-    // 1. FREEZE voice assignments: compute ONCE, use for ALL segments
-    const voiceMap = assignVoicesToSpeakers(frozenConfig);
-    frozenVoiceMapRef.current = voiceMap;
-    console.log('[FREEZE] === VOICE ASSIGNMENTS FROZEN ===');
-    console.log('[FREEZE] Map:', JSON.stringify(voiceMap));
-    console.log('[FREEZE] These assignments will be used for ALL segments');
-
-    // Also update the module-level cache so getVoiceForSegment stays consistent
-    _cachedConfig = JSON.stringify(frozenConfig);
-    _cachedAssignments = { ...voiceMap };
-
-    // 2. IMMEDIATELY set phase to paused — prevents scheduler useEffect from interfering
+    // ── STEP 1: IMMEDIATELY stop everything ──
     setPhase('paused');
-
-    // 3. Stop ALL current playback
     isPlayingRef.current = false;
     if (schedulerRef.current) { clearInterval(schedulerRef.current); schedulerRef.current = null; }
     lastScheduledSegRef.current = -1;
@@ -708,20 +711,39 @@ export function ClarifyAudioPanel({
     if (audioRef.current) {
       audioRef.current.pause();
       audioRef.current.onended = null;
-      audioRef.current.src = '';  // Force release of audio resource
+      audioRef.current.src = '';
       audioRef.current = null;
     }
     if ('speechSynthesis' in window) window.speechSynthesis.cancel();
     if (onMuteYouTube) onMuteYouTube(false);
-    console.log('[regenerate] Playback stopped, scheduler cleared');
+    console.log('[FREEZE] Playback stopped');
 
-    // 4. NUCLEAR CACHE CLEAR — revoke ALL blob URLs, then create fresh objects
+    // ── STEP 2: SNAPSHOT the config — make a copy that can never change ──
+    const frozenConfig: SpeakerConfig = configOverride
+      ? { ...configOverride }
+      : { ...(speakerConfigRef.current || {}) };
+    speakerConfigRef.current = frozenConfig;
+    console.log('[FREEZE] Config snapshot:', JSON.stringify(frozenConfig));
+
+    // ── STEP 3: CALCULATE voice assignments ONCE ──
+    // Reset the call counter so we can verify it's only called once per Apply
+    _assignCallCounter = 0;
+    const voiceMap = assignVoicesToSpeakers(frozenConfig);
+
+    // ── STEP 4: FREEZE the map — Object.freeze makes it immutable ──
+    const frozenMap = Object.freeze({ ...voiceMap });
+    frozenVoiceMapRef.current = frozenMap;
+    console.log('[FREEZE] ════════════════════════════════════════════════');
+    console.log('[FREEZE] === VOICE MAP IS NOW FROZEN (Object.freeze) ===');
+    console.log('[FREEZE] Map:', JSON.stringify(frozenMap));
+    console.log('[FREEZE] This map will be used for ALL segments');
+    console.log('[FREEZE] ════════════════════════════════════════════════');
+
+    // ── STEP 5: NUCLEAR CACHE CLEAR ──
     const oldCacheSize = Object.keys(cacheRef.current).length;
-    const oldGenSetSize = genSetRef.current.size;
     Object.values(cacheRef.current).forEach(e => {
       if (e.url) { try { URL.revokeObjectURL(e.url); } catch {} }
     });
-    // Create NEW object/set instances (not just clearing — ensures no stale references)
     cacheRef.current = {};
     genSetRef.current = new Set();
     setGeneratedCount(0);
@@ -729,34 +751,29 @@ export function ClarifyAudioPanel({
     // Increment epoch — any in-flight generateSeg calls from the old epoch will be discarded
     regenEpochRef.current++;
     const thisEpoch = regenEpochRef.current;
+    console.log(`[FREEZE] Cache cleared (${oldCacheSize} entries), epoch=${thisEpoch}`);
 
-    console.log(`[regenerate] Cache cleared: ${oldCacheSize} entries removed, genSet: ${oldGenSetSize} cleared`);
-    console.log(`[regenerate] Epoch: ${thisEpoch}`);
-
-    // 4. Regenerate ALL translated segments with new voice assignments
+    // ── STEP 6: REGENERATE all segments using frozen map ──
     const segs = translatedTxRef.current;
     if (segs.length > 0) {
-      // Log speaker distribution
       const dist: Record<string, number> = {};
       segs.forEach(s => { dist[s.speaker || '?'] = (dist[s.speaker || '?'] || 0) + 1; });
-      console.log(`[regenerate] Regenerating ALL ${segs.length} segments. Speaker distribution:`, dist);
+      console.log(`[FREEZE] Regenerating ALL ${segs.length} segments. Speakers:`, dist);
 
-      // Generate in parallel batches of 8
       for (let batchStart = 0; batchStart < segs.length; batchStart += 8) {
-        // Check if a newer regeneration has started — abort if stale
         if (regenEpochRef.current !== thisEpoch) {
-          console.log(`[regenerate] Epoch ${thisEpoch} superseded by ${regenEpochRef.current}, aborting`);
+          console.log(`[FREEZE] Epoch ${thisEpoch} superseded by ${regenEpochRef.current}, aborting`);
           return;
         }
         const batch = segs.slice(batchStart, Math.min(batchStart + 8, segs.length));
         await Promise.allSettled(batch.map((s, j) => generateSeg(batchStart + j, s.text)));
-        console.log(`[regenerate] Batch ${batchStart}-${batchStart + batch.length - 1} done`);
+        console.log(`[FREEZE] Batch ${batchStart}-${batchStart + batch.length - 1} done`);
       }
-      console.log(`[regenerate] All ${segs.length} segments regenerated`);
+      console.log(`[FREEZE] All ${segs.length} segments regenerated`);
     }
 
-    console.log(`[regenerate] Final cache size: ${Object.keys(cacheRef.current).length}`);
-    console.log('[regenerate] === REGENERATION COMPLETE ===');
+    console.log(`[FREEZE] Final cache size: ${Object.keys(cacheRef.current).length}`);
+    console.log('[FREEZE] === REGENERATION COMPLETE ===');
   }, [generateSeg, onMuteYouTube]);
 
   // Register external handlers

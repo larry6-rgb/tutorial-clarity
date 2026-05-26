@@ -2,7 +2,7 @@
 
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { ClarifyAudioPanel, SpeakerConfig, assignVoicesToSpeakers, FEMALE_VOICES, MALE_VOICES } from '../components/ClarifyAudioPanel';
+import { ClarifyAudioPanel, SpeakerConfig, previewVoiceAssignments, FEMALE_VOICES, MALE_VOICES } from '../components/ClarifyAudioPanel';
 
 interface SavedVideo {
     id: string;
@@ -2131,7 +2131,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                     detectedSpeakers.forEach(sid => {
                                                         previewConfig[sid] = speakerConfig[sid] || 'male';
                                                     });
-                                                    const voiceMap = assignVoicesToSpeakers(previewConfig);
+                                                    const voiceMap = previewVoiceAssignments(previewConfig);
 
                                                     return detectedSpeakers.map((speakerId, idx) => {
                                                         const currentGender = previewConfig[speakerId];
@@ -2140,7 +2140,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
 
                                                         const altGender = currentGender === 'male' ? 'female' : 'male';
                                                         const altConfig = { ...previewConfig, [speakerId]: altGender as 'male' | 'female' };
-                                                        const altMap = assignVoicesToSpeakers(altConfig);
+                                                        const altMap = previewVoiceAssignments(altConfig);
                                                         const maleVoice = currentGender === 'male' ? assignedVoice : altMap[speakerId];
                                                         const femaleVoice = currentGender === 'female' ? assignedVoice : altMap[speakerId];
 
