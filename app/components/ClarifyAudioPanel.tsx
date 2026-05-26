@@ -1035,9 +1035,37 @@ export function ClarifyAudioPanel({
     }
 
     if (segs.length > 0) {
+      // ═══ CRITICAL: Check speaker labels on segments ═══
       const dist: Record<string, number> = {};
-      segs.forEach(s => { dist[s.speaker || '?'] = (dist[s.speaker || '?'] || 0) + 1; });
-      console.log(`[REGEN] Regenerating ALL ${segs.length} segments. Speakers:`, dist);
+      let noSpeakerCount = 0;
+      segs.forEach((s, idx) => {
+        const sp = s.speaker || '(undefined)';
+        dist[sp] = (dist[sp] || 0) + 1;
+        if (!s.speaker) noSpeakerCount++;
+      });
+      console.log(`[REGEN] Segment speaker distribution:`, dist);
+      console.log(`[REGEN] Segments WITHOUT speaker: ${noSpeakerCount}/${segs.length}`);
+
+      // Log first 10 segment speakers for debugging
+      console.log(`[REGEN] First 10 segment speakers:`);
+      segs.slice(0, 10).forEach((s, i) => {
+        console.log(`[REGEN]   Seg ${i}: speaker="${s.speaker}" text="${(s.text || '').substring(0, 40)}"`);
+      });
+
+      // ═══ IF SPEAKERS ARE MISSING: Re-detect them! ═══
+      if (noSpeakerCount > segs.length * 0.5) {
+        console.warn(`[REGEN] ⚠️ ${noSpeakerCount}/${segs.length} segments have NO speaker! Re-detecting...`);
+        segs = detectSpeakers(segs);
+        translatedTxRef.current = segs;
+
+        // Recheck
+        const dist2: Record<string, number> = {};
+        segs.forEach(s => { dist2[s.speaker || '(undefined)'] = (dist2[s.speaker || '(undefined)'] || 0) + 1; });
+        console.log(`[REGEN] After re-detection:`, dist2);
+        segs.slice(0, 10).forEach((s, i) => {
+          console.log(`[REGEN]   Seg ${i}: speaker="${s.speaker}" text="${(s.text || '').substring(0, 40)}"`);
+        });
+      }
 
       // Verify frozen map covers all speakers in the transcript
       const transcriptSpeakers = new Set(segs.map(s => s.speaker || 'speaker_0'));
