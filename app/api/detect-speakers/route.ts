@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { AssemblyAI } from 'assemblyai';
 import { execSync } from 'child_process';
-import { writeFile, unlink } from 'fs/promises';
+import { unlink, stat } from 'fs/promises';
 import { join } from 'path';
 import { randomUUID } from 'crypto';
 import { tmpdir } from 'os';
@@ -19,10 +19,11 @@ function findYtDlp(): string {
 
   for (const cmd of candidates) {
     try {
-      execSync(`"${cmd}" --version`, {
+      const version = execSync(`"${cmd}" --version`, {
         encoding: 'utf8', timeout: 5000,
         stdio: ['pipe', 'pipe', 'pipe'],
-      });
+      }).trim();
+      console.log(`[AssemblyAI] Found yt-dlp ${version} at: ${cmd}`);
       return cmd;
     } catch { /* try next */ }
   }
@@ -35,131 +36,150 @@ function findYtDlp(): string {
   );
 }
 
-// ── Helper: Get direct YouTube audio URL via yt-dlp ─────────────────
-
-function getDirectAudioUrl(ytdlpPath: string, videoId: string): string {
-  const url = `https://www.youtube.com/watch?v=${videoId}`;
-  const result = execSync(
-    `"${ytdlpPath}" -f "bestaudio" --get-url --no-warnings "${url}"`,
-    {
-      encoding: 'utf8', timeout: 30000,
-      maxBuffer: 1024 * 1024, windowsHide: true,
-      stdio: ['pipe', 'pipe', 'pipe'],
-    }
-  ).trim();
-
-  if (!result || !result.startsWith('http')) {
-    throw new Error('yt-dlp returned invalid URL: ' + result?.substring(0, 100));
-  }
-
-  return result;
-}
-
 // ── Helper: Format seconds to human-readable ────────────────────────
 
-function fmtTime(seconds: number): string {
+function fmtTime(ms: number): string {
+  const seconds = ms / 1000;
   if (seconds < 60) return seconds.toFixed(1) + 's';
   const min = Math.floor(seconds / 60);
-  const sec = (seconds % 60).toFixed(0);
+  const sec = Math.round(seconds % 60);
   return `${min}m ${sec}s`;
 }
 
 // ═══════════════════════════════════════════════════════════════════════
 // POST /api/detect-speakers
 //
-// Pipeline with per-step timing:
-//   1. yt-dlp → get YouTube CDN audio URL
-//   2. Download audio to temp file
-//   3. Upload temp file to AssemblyAI's servers
-//   4. Transcribe with speaker_labels=true (the slow part)
-//   5. Clean up temp file
+// RELIABLE PIPELINE:
+//   1. yt-dlp downloads audio to a temp file (handles all YouTube auth)
+//   2. Upload temp file to AssemblyAI's servers
+//   3. Transcribe with speaker_labels=true
+//   4. Clean up temp file
+//
+// KEY INSIGHT: yt-dlp handles YouTube's cookies, headers, and
+// authentication automatically. Using fetch() to download from
+// YouTube CDN URLs doesn't work reliably because those URLs
+// require specific cookies/headers that only yt-dlp knows about.
 // ═══════════════════════════════════════════════════════════════════════
 
 export async function POST(req: NextRequest) {
   const pipelineStart = Date.now();
   let tempFilePath: string | null = null;
 
-  // Per-step durations for summary
-  let step1Duration = '';
-  let step2Duration = '';
-  let step3Duration = '';
-  let step4Duration = '';
+  console.log('');
+  console.log('='.repeat(60));
+  console.log('[AssemblyAI] SPEAKER DETECTION — REQUEST RECEIVED');
+  console.log('[AssemblyAI] Time:', new Date().toISOString());
+  console.log('='.repeat(60));
 
   try {
-    const { videoId } = await req.json();
+    // ── Parse request body ──────────────────────────────────────────
 
-    console.log('[AssemblyAI] ========================================');
-    console.log('[AssemblyAI] SPEAKER DETECTION PIPELINE');
-    console.log('[AssemblyAI] ========================================');
-    console.log('[AssemblyAI] Video:', videoId);
-    console.log('[AssemblyAI] Start time:', new Date().toISOString());
+    let body: any;
+    try {
+      body = await req.json();
+      console.log('[AssemblyAI] Request body:', JSON.stringify(body));
+    } catch (parseErr: any) {
+      console.error('[AssemblyAI] ❌ Failed to parse request body:', parseErr.message);
+      return NextResponse.json({ error: 'Invalid request body' }, { status: 400 });
+    }
 
+    const { videoId } = body;
     if (!videoId) {
       return NextResponse.json({ error: 'Video ID is required' }, { status: 400 });
     }
 
+    console.log('[AssemblyAI] Video ID:', videoId);
+
+    // ── Check API key ───────────────────────────────────────────────
+
     const apiKey = process.env.ASSEMBLYAI_API_KEY;
     if (!apiKey) {
+      console.error('[AssemblyAI] ❌ ASSEMBLYAI_API_KEY not set in .env.local');
       return NextResponse.json(
         { error: 'AssemblyAI API key not configured. Add ASSEMBLYAI_API_KEY to your .env.local' },
         { status: 500 }
       );
     }
+    console.log('[AssemblyAI] API key: ✅ present (starts with', apiKey.substring(0, 8) + '...)');
 
-    // ── STEP 1/5: Get YouTube audio URL via yt-dlp ──────────────────
+    // ── STEP 1: Download audio with yt-dlp ──────────────────────────
+    // yt-dlp downloads directly — handles YouTube cookies, auth, etc.
+    // This is MORE RELIABLE than getting a URL and fetching it ourselves.
 
-    console.log('[AssemblyAI] Step 1/5: Getting YouTube audio URL... ⏳');
+    console.log('');
+    console.log('[AssemblyAI] STEP 1: Downloading audio via yt-dlp... ⏳');
     const step1Start = Date.now();
 
     const ytdlpPath = findYtDlp();
-    console.log('[AssemblyAI] Found yt-dlp at:', ytdlpPath);
 
-    const youtubeAudioUrl = getDirectAudioUrl(ytdlpPath, videoId);
+    // Create temp file path — yt-dlp will write the audio here
+    const tempFileName = `assemblyai_${videoId}_${randomUUID()}`;
+    // Use %(ext)s so yt-dlp picks the right extension
+    const tempFileTemplate = join(tmpdir(), tempFileName + '.%(ext)s');
+    // The actual file will have the real extension (e.g., .webm, .m4a)
+    const tempFileGlob = join(tmpdir(), tempFileName + '.*');
 
-    step1Duration = ((Date.now() - step1Start) / 1000).toFixed(1);
-    console.log(`[AssemblyAI] Step 1/5: ✅ YouTube URL obtained (${step1Duration}s)`);
-    console.log('[AssemblyAI] URL preview:', youtubeAudioUrl.substring(0, 100) + '...');
+    const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
-    // ── STEP 2/5: Download audio to temp file ───────────────────────
-
-    console.log('[AssemblyAI] Step 2/5: Downloading audio from YouTube... ⏳');
-    const step2Start = Date.now();
-
-    const downloadController = new AbortController();
-    const downloadTimeout = setTimeout(() => downloadController.abort(), 60000);
-
-    let audioResponse: Response;
     try {
-      audioResponse = await fetch(youtubeAudioUrl, { signal: downloadController.signal });
-      clearTimeout(downloadTimeout);
-    } catch (err: any) {
-      clearTimeout(downloadTimeout);
-      if (err.name === 'AbortError') {
-        throw new Error('Audio download timed out after 60 seconds');
+      // Download best audio to temp file
+      // --no-playlist: don't download entire playlist
+      // -f bestaudio: get best quality audio-only stream
+      // --no-warnings: suppress warnings
+      // -o: output template
+      const cmd = `"${ytdlpPath}" -f "bestaudio" --no-playlist --no-warnings -o "${tempFileTemplate}" "${youtubeUrl}"`;
+      console.log('[AssemblyAI] Running:', cmd);
+
+      execSync(cmd, {
+        encoding: 'utf8',
+        timeout: 120000,  // 2 minute timeout for download
+        maxBuffer: 5 * 1024 * 1024,
+        windowsHide: true,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      });
+
+      // Find the actual file that was created (yt-dlp chose the extension)
+      // Use a simple approach: list files matching our pattern
+      const findCmd = process.platform === 'win32'
+        ? `dir /b "${join(tmpdir(), tempFileName)}.*"`
+        : `ls -1 ${tempFileGlob} 2>/dev/null`;
+
+      const foundFiles = execSync(findCmd, {
+        encoding: 'utf8', timeout: 5000,
+        cwd: process.platform === 'win32' ? tmpdir() : undefined,
+        stdio: ['pipe', 'pipe', 'pipe'],
+      }).trim().split('\n').filter(Boolean);
+
+      if (foundFiles.length === 0) {
+        throw new Error('yt-dlp completed but no audio file was created');
       }
-      throw new Error(`Audio download failed: ${err.message}`);
+
+      // On Windows, dir /b returns just the filename, not full path
+      const foundFile = foundFiles[0].trim();
+      tempFilePath = process.platform === 'win32'
+        ? join(tmpdir(), foundFile)
+        : foundFile;
+
+      console.log('[AssemblyAI] Downloaded to:', tempFilePath);
+
+      // Check file size
+      const fileStats = await stat(tempFilePath);
+      const fileSizeMB = (fileStats.size / 1024 / 1024).toFixed(2);
+      console.log(`[AssemblyAI] STEP 1: ✅ Downloaded ${fileSizeMB} MB (${fmtTime(Date.now() - step1Start)})`);
+
+    } catch (dlErr: any) {
+      const elapsed = fmtTime(Date.now() - step1Start);
+      console.error(`[AssemblyAI] STEP 1: ❌ Download failed after ${elapsed}`);
+      console.error('[AssemblyAI] Error:', dlErr.message);
+      if (dlErr.stderr) console.error('[AssemblyAI] stderr:', dlErr.stderr.toString().substring(0, 500));
+      throw new Error(`Audio download failed: ${dlErr.message}`);
     }
 
-    if (!audioResponse.ok) {
-      throw new Error(`YouTube download failed (${audioResponse.status}): ${audioResponse.statusText}`);
-    }
+    // ── STEP 2: Upload to AssemblyAI ────────────────────────────────
 
-    const audioBuffer = await audioResponse.arrayBuffer();
-    const fileSizeMB = (audioBuffer.byteLength / 1024 / 1024).toFixed(2);
-
-    // Save to temporary file
-    const tempFileName = `assemblyai_${videoId}_${randomUUID()}.webm`;
-    tempFilePath = join(tmpdir(), tempFileName);
-    await writeFile(tempFilePath, Buffer.from(audioBuffer));
-
-    step2Duration = ((Date.now() - step2Start) / 1000).toFixed(1);
-    console.log(`[AssemblyAI] Step 2/5: ✅ Downloaded ${fileSizeMB} MB (${step2Duration}s)`);
-    console.log('[AssemblyAI] Temp file:', tempFilePath);
-
-    // ── STEP 3/5: Upload to AssemblyAI ──────────────────────────────
-
-    console.log('[AssemblyAI] Step 3/5: Uploading to AssemblyAI servers... ⏳');
-    const step3Start = Date.now();
+    console.log('');
+    console.log('[AssemblyAI] STEP 2: Uploading to AssemblyAI... ⏳');
+    const step2Start = Date.now();
 
     const client = new AssemblyAI({ apiKey });
 
@@ -167,22 +187,21 @@ export async function POST(req: NextRequest) {
     try {
       uploadedUrl = await client.files.upload(tempFilePath);
     } catch (uploadErr: any) {
-      throw new Error(`AssemblyAI upload failed: ${uploadErr.message}`);
+      console.error('[AssemblyAI] STEP 2: ❌ Upload failed:', uploadErr.message);
+      throw new Error(`Upload to AssemblyAI failed: ${uploadErr.message}`);
     }
 
-    step3Duration = ((Date.now() - step3Start) / 1000).toFixed(1);
-    console.log(`[AssemblyAI] Step 3/5: ✅ Uploaded to AssemblyAI (${step3Duration}s)`);
+    console.log(`[AssemblyAI] STEP 2: ✅ Uploaded (${fmtTime(Date.now() - step2Start)})`);
     console.log('[AssemblyAI] AssemblyAI URL:', uploadedUrl.substring(0, 80) + '...');
 
-    // ── STEP 4/5: Transcribe with speaker diarization ───────────────
+    // ── STEP 3: Transcribe with speaker labels ──────────────────────
 
-    console.log('[AssemblyAI] Step 4/5: AI processing (this is the slow part)... ⏳');
-    console.log('[AssemblyAI] Warning: Processing time depends on video length');
-    console.log('[AssemblyAI]   ~15 min video ≈ 2-3 min processing');
-    console.log('[AssemblyAI]   ~30 min video ≈ 4-5 min processing');
-    const step4Start = Date.now();
+    console.log('');
+    console.log('[AssemblyAI] STEP 3: AI processing (this is the slow part)... ⏳');
+    console.log('[AssemblyAI]   ~15 min video ≈ 1-3 min processing');
+    console.log('[AssemblyAI]   ~30 min video ≈ 3-5 min processing');
+    const step3Start = Date.now();
 
-    // Race the transcription against a 4-minute timeout
     let transcript: any;
     try {
       transcript = await Promise.race([
@@ -192,20 +211,18 @@ export async function POST(req: NextRequest) {
         }),
         new Promise((_, reject) =>
           setTimeout(() => reject(new Error(
-            'Processing timed out after 4 minutes. The video may be too long. ' +
-            'Try a shorter video, or check your AssemblyAI dashboard for the result.'
+            'AI processing timed out after 4 minutes. Try a shorter video.'
           )), 240000)
         ),
       ]);
-    } catch (err: any) {
-      step4Duration = ((Date.now() - step4Start) / 1000).toFixed(1);
-      console.error(`[AssemblyAI] Step 4/5: ❌ Failed after ${step4Duration}s:`, err.message);
-      throw err;
+    } catch (txErr: any) {
+      console.error(`[AssemblyAI] STEP 3: ❌ Failed after ${fmtTime(Date.now() - step3Start)}`);
+      console.error('[AssemblyAI] Error:', txErr.message);
+      throw txErr;
     }
 
-    step4Duration = ((Date.now() - step4Start) / 1000).toFixed(1);
-    console.log(`[AssemblyAI] Step 4/5: ✅ AI processing complete (${step4Duration}s)`);
-    console.log('[AssemblyAI] Transcription status:', transcript.status);
+    console.log(`[AssemblyAI] STEP 3: ✅ Complete (${fmtTime(Date.now() - step3Start)})`);
+    console.log('[AssemblyAI] Status:', transcript.status);
 
     if (transcript.status === 'error') {
       console.error('[AssemblyAI] Transcription error:', transcript.error);
@@ -221,7 +238,6 @@ export async function POST(req: NextRequest) {
     const speakers = new Set<string>();
     utterances.forEach((u: any) => { if (u.speaker) speakers.add(u.speaker); });
 
-    // Convert to our segment format (ms → seconds)
     const segments = utterances.map((u: any) => ({
       text: u.text,
       speaker: u.speaker,
@@ -231,47 +247,53 @@ export async function POST(req: NextRequest) {
     }));
 
     // Log sample
+    console.log('');
+    console.log('[AssemblyAI] SAMPLE RESULTS:');
     segments.slice(0, 5).forEach((seg: any, i: number) => {
-      console.log(`[AssemblyAI]   Seg ${i}: [${seg.start.toFixed(1)}s-${seg.end.toFixed(1)}s] Speaker ${seg.speaker}: "${seg.text.substring(0, 50)}"`);
+      console.log(`[AssemblyAI]   ${i}: [${seg.start.toFixed(1)}s] Speaker ${seg.speaker}: "${seg.text.substring(0, 60)}"`);
     });
 
-    // ── TIMING SUMMARY ──────────────────────────────────────────────
+    // ── Timing summary ──────────────────────────────────────────────
 
-    const totalDuration = (Date.now() - pipelineStart) / 1000;
-    console.log('[AssemblyAI] ========================================');
-    console.log(`[AssemblyAI] ✅ SPEAKER DETECTION COMPLETE`);
-    console.log(`[AssemblyAI] TOTAL TIME: ${fmtTime(totalDuration)}`);
-    console.log(`[AssemblyAI]   Step 1 (yt-dlp):     ${step1Duration}s`);
-    console.log(`[AssemblyAI]   Step 2 (download):   ${step2Duration}s`);
-    console.log(`[AssemblyAI]   Step 3 (upload):     ${step3Duration}s`);
-    console.log(`[AssemblyAI]   Step 4 (AI):         ${step4Duration}s  ← most of the time`);
-    console.log(`[AssemblyAI] Speakers: ${Array.from(speakers).sort()}`);
+    const totalTime = fmtTime(Date.now() - pipelineStart);
+    console.log('');
+    console.log('='.repeat(60));
+    console.log(`[AssemblyAI] ✅ COMPLETE — ${totalTime} total`);
+    console.log(`[AssemblyAI]   Step 1 (download):  ${fmtTime(Date.now() - step1Start).split('.')[0]}s`);
+    console.log(`[AssemblyAI]   Step 2 (upload):    ${fmtTime(step2Start ? Date.now() - step2Start : 0)}`);
+    console.log(`[AssemblyAI]   Step 3 (AI):        ${fmtTime(step3Start ? Date.now() - step3Start : 0)}`);
+    console.log(`[AssemblyAI] Speakers: [${Array.from(speakers).sort().join(', ')}]`);
     console.log(`[AssemblyAI] Utterances: ${segments.length}`);
-    console.log('[AssemblyAI] ========================================');
+    console.log('='.repeat(60));
 
     return NextResponse.json({
       success: true,
       speakers: Array.from(speakers).sort(),
       segments,
       totalSegments: segments.length,
-      processingTime: fmtTime(totalDuration),
+      processingTime: totalTime,
     });
 
   } catch (error: any) {
-    const totalDuration = (Date.now() - pipelineStart) / 1000;
-    console.error(`[AssemblyAI] ❌ Error after ${fmtTime(totalDuration)}:`, error.message);
+    const totalTime = fmtTime(Date.now() - pipelineStart);
+    console.error('');
+    console.error('='.repeat(60));
+    console.error(`[AssemblyAI] ❌ FAILED after ${totalTime}`);
+    console.error(`[AssemblyAI] Error: ${error.message}`);
+    console.error('='.repeat(60));
+
     return NextResponse.json(
       { error: error.message || 'Speaker detection failed' },
       { status: 500 }
     );
   } finally {
-    // ── STEP 5/5: Clean up temp file ────────────────────────────────
+    // ── Clean up temp file ──────────────────────────────────────────
     if (tempFilePath) {
       try {
         await unlink(tempFilePath);
-        console.log('[AssemblyAI] Step 5/5: ✅ Temp file deleted');
-      } catch (cleanupErr) {
-        console.warn('[AssemblyAI] Step 5/5: ⚠️ Failed to delete temp file:', cleanupErr);
+        console.log('[AssemblyAI] 🧹 Temp file cleaned up');
+      } catch {
+        // Don't fail if cleanup fails
       }
     }
   }
