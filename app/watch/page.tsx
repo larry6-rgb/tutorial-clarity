@@ -254,7 +254,7 @@ function WatchPageContent() {
     }, []);
 
     // ── Ref to ClarifyAudioPanel handlers (for spacebar + video sync control) ──
-    const clarifyHandlersRef = useRef<{ play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => void } | null>(null);
+    const clarifyHandlersRef = useRef<{ play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void } | null>(null);
 
     // ── Stable callbacks for ClarifyAudioPanel (prevent re-render unmute bug) ──
     const handleClarifySubtitle = useCallback((subtitle: string | null) => {
@@ -280,7 +280,7 @@ function WatchPageContent() {
         setClarifySegmentIndex(idx);
     }, []);
 
-    const handleClarifyRegisterHandlers = useCallback((handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => void }) => {
+    const handleClarifyRegisterHandlers = useCallback((handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void }) => {
         clarifyHandlersRef.current = handlers;
         console.log('[watch] ClarifyAudioPanel handlers registered (incl. regenerateVoices)');
     }, []);
@@ -2206,6 +2206,42 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                         {isRegenerating ? '⏳ Regenerating...' : '🔄 Apply & Regenerate Audio'}
                                                     </button>
                                                 )}
+
+                                                {/* ── Nuclear Clear & Regenerate (diagnostic) ── */}
+                                                <button
+                                                    onClick={() => {
+                                                        console.log('[NUCLEAR] ==========================================');
+                                                        console.log('[NUCLEAR] Clearing ALL caches');
+                                                        console.log('[NUCLEAR] Current speakerConfig:', speakerConfig);
+                                                        try { localStorage.clear(); } catch (e) { console.warn('[NUCLEAR] localStorage.clear failed:', e); }
+                                                        try { sessionStorage.clear(); } catch (e) { console.warn('[NUCLEAR] sessionStorage.clear failed:', e); }
+                                                        console.log('[NUCLEAR] localStorage + sessionStorage cleared');
+                                                        if (clarifyHandlersRef.current?.regenerateVoices) {
+                                                            const config = { ...speakerConfig };
+                                                            // Fill in defaults for any speaker without config
+                                                            detectedSpeakers.forEach(sid => {
+                                                                if (!config[sid]) config[sid] = 'male';
+                                                            });
+                                                            console.log('[NUCLEAR] Calling regenerateVoices with:', config);
+                                                            setIsRegenerating(true);
+                                                            Promise.resolve(clarifyHandlersRef.current.regenerateVoices(config)).then(() => {
+                                                                console.log('[NUCLEAR] Regeneration complete');
+                                                                setIsRegenerating(false);
+                                                            });
+                                                        }
+                                                        console.log('[NUCLEAR] ==========================================');
+                                                    }}
+                                                    disabled={isRegenerating}
+                                                    style={{
+                                                        width: '100%', marginTop: '6px', padding: '6px 12px',
+                                                        backgroundColor: isRegenerating ? '#4b5563' : '#dc2626',
+                                                        color: 'white', border: 'none', borderRadius: '6px',
+                                                        fontWeight: 600, fontSize: '11px', cursor: isRegenerating ? 'wait' : 'pointer',
+                                                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                                                    }}
+                                                >
+                                                    {'☢️'} Nuclear Clear & Regenerate
+                                                </button>
 
                                                 {/* ── Confirmation when applied ── */}
                                                 {!hasUnsavedVoiceConfig && Object.keys(speakerConfig).length > 0 && (

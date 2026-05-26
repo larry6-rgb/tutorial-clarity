@@ -527,8 +527,16 @@ export function ClarifyAudioPanel({
 
   // ═══ TTS GENERATION (multi-voice) ═══
   const generateSeg = useCallback(async (i: number, text: string) => {
-    if (cacheRef.current[i]?.url || cacheRef.current[i]?.useClientTTS || cacheRef.current[i]?.generating) return;
-    if (genSetRef.current.has(i)) return;
+    // ── CACHE CHECK with diagnostic logging ──
+    const cacheEntry = cacheRef.current[i];
+    if (cacheEntry?.url || cacheEntry?.useClientTTS || cacheEntry?.generating) {
+      console.log(`[CACHE-CHECK] Seg ${i}: SKIPPED (url=${!!cacheEntry?.url}, clientTTS=${!!cacheEntry?.useClientTTS}, generating=${!!cacheEntry?.generating}, voice="${cacheEntry?.voice || '?'}")`);
+      return;
+    }
+    if (genSetRef.current.has(i)) {
+      console.log(`[CACHE-CHECK] Seg ${i}: SKIPPED (already in genSet)`);
+      return;
+    }
 
     // Capture epoch at start — if it changes during generation, discard results
     const startEpoch = regenEpochRef.current;
@@ -552,6 +560,7 @@ export function ClarifyAudioPanel({
       } else if (frozenMap) {
         voice = DEFAULT_VOICE;
         source = 'FROZEN-missing';
+        console.warn(`[DIAGNOSTIC] Seg ${i}: speaker "${speakerId}" NOT in frozen map! Keys: [${Object.keys(frozenMap).join(', ')}]`);
       } else {
         voice = DEFAULT_VOICE;
         source = 'PRE-APPLY';
@@ -562,7 +571,22 @@ export function ClarifyAudioPanel({
       const gender = configGender
         || (FEMALE_VOICES.includes(voice) ? 'female' : 'male');
 
-      console.log(`[TRACE-6-TTS] Seg ${i}: ${speakerId} -> gender="${gender}" (${source}) -> voice="${voice}"`);
+      // ═══ NUCLEAR DIAGNOSTIC LOGGING ═══
+      console.log(`[DIAGNOSTIC] ==========================================`);
+      console.log(`[DIAGNOSTIC] SEGMENT: ${i}`);
+      console.log(`[DIAGNOSTIC] SPEAKER: ${speakerId}`);
+      console.log(`[DIAGNOSTIC] Voice from frozen map: ${voice}`);
+      console.log(`[DIAGNOSTIC] Voice source: ${source}`);
+      console.log(`[DIAGNOSTIC] Voice type: ${typeof voice}`);
+      console.log(`[DIAGNOSTIC] Voice length: ${voice?.length}`);
+      console.log(`[DIAGNOSTIC] Voice charCodes: [${voice?.split('').map(c => c.charCodeAt(0)).join(',')}]`);
+      console.log(`[DIAGNOSTIC] Gender: ${gender} (config=${configGender || 'none'})`);
+      console.log(`[DIAGNOSTIC] Frozen map ref exists: ${!!frozenMap}`);
+      if (frozenMap) {
+        console.log(`[DIAGNOSTIC] Frozen map contents: ${JSON.stringify(frozenMap)}`);
+      }
+      console.log(`[DIAGNOSTIC] Epoch: ${startEpoch}`);
+      console.log(`[DIAGNOSTIC] ==========================================`);
 
       const requestBody = {
         text,
@@ -571,7 +595,15 @@ export function ClarifyAudioPanel({
         targetDuration: seg ? seg.end - seg.start : undefined,
         targetLanguage: selectedLang, ttsModel: 'tts-1',
       };
-      console.log(`[TTS-FETCH] Seg ${i}: voice="${requestBody.voice.id}", gender="${gender}" -> /api/multi-voice-tts`);
+
+      // Log the EXACT JSON that will be sent
+      const bodyJson = JSON.stringify(requestBody);
+      const extractedVoice = bodyJson.match(/"voice":\{"id":"([^"]+)"/)?.[1];
+      console.log(`[DIAGNOSTIC] Request body voice.id="${requestBody.voice.id}"`);
+      console.log(`[DIAGNOSTIC] JSON-extracted voice.id="${extractedVoice}"`);
+      if (extractedVoice !== voice) {
+        console.error(`[DIAGNOSTIC-MISMATCH] Voice object mismatch! variable=${voice}, json=${extractedVoice}`);
+      }
 
       // ── Fetch with client-side retry for transient errors ──
       let res: Response | null = null;
@@ -582,8 +614,13 @@ export function ClarifyAudioPanel({
         try {
           res = await fetch('/api/multi-voice-tts', {
             method: 'POST',
-            headers: { 'Content-Type': 'application/json' },
-            body: JSON.stringify(requestBody),
+            headers: {
+              'Content-Type': 'application/json',
+              'X-Segment-Id': String(i),
+              'X-Speaker-Id': speakerId,
+              'X-Expected-Voice': voice,
+            },
+            body: bodyJson,
           });
 
           // Check epoch — if regeneration happened while we were awaiting, discard
@@ -630,12 +667,31 @@ export function ClarifyAudioPanel({
 
       const ct = res.headers.get('content-type');
       const returnedVoice = res.headers.get('x-voice-id');
+      const returnedVoiceUsed = res.headers.get('x-voice-used');
       const requestId = res.headers.get('x-request-id');
+      const bufferSize = res.headers.get('x-buffer-size');
       const now = Date.now();
 
+      // ═══ DIAGNOSTIC: Response analysis ═══
+      console.log(`[DIAGNOSTIC] ── Response for Seg ${i} ──`);
+      console.log(`[DIAGNOSTIC] Status: ${res.status}`);
+      console.log(`[DIAGNOSTIC] Content-Type: ${ct}`);
+      console.log(`[DIAGNOSTIC] X-Voice-Id: ${returnedVoice}`);
+      console.log(`[DIAGNOSTIC] X-Voice-Used: ${returnedVoiceUsed}`);
+      console.log(`[DIAGNOSTIC] X-Request-Id: ${requestId}`);
+      console.log(`[DIAGNOSTIC] X-Buffer-Size: ${bufferSize}`);
+      console.log(`[DIAGNOSTIC] Voice SENT: "${voice}"`);
+      console.log(`[DIAGNOSTIC] Voice RETURNED: "${returnedVoice || returnedVoiceUsed}"`);
+
       // Verify voice match between what we requested and what server used
-      if (returnedVoice && returnedVoice !== voice) {
-        console.error(`[VOICE-MISMATCH] Seg ${i}: requested="${voice}" but server used="${returnedVoice}" (${requestId})`);
+      const serverVoice = returnedVoice || returnedVoiceUsed;
+      if (serverVoice && serverVoice !== voice) {
+        console.error(`[DIAGNOSTIC-MISMATCH] ==========================================`);
+        console.error(`[DIAGNOSTIC-MISMATCH] VOICE MISMATCH DETECTED!`);
+        console.error(`[DIAGNOSTIC-MISMATCH] Seg ${i}: SENT="${voice}" but SERVER="${serverVoice}" (${requestId})`);
+        console.error(`[DIAGNOSTIC-MISMATCH] ==========================================`);
+      } else if (serverVoice) {
+        console.log(`[DIAGNOSTIC] ✅ Voice match confirmed: "${voice}" == "${serverVoice}"`);
       }
 
       if (ct?.includes('application/json')) {
