@@ -526,7 +526,7 @@ export function ClarifyAudioPanel({
   }, [currentTime, transcript, currentSegIdx, onSubtitleChange, onSegmentChange]);
 
   // ═══ TTS GENERATION (multi-voice) ═══
-  const generateSeg = useCallback(async (i: number, text: string) => {
+  const generateSeg = useCallback(async (i: number, text: string, speakerOverride?: string) => {
     // ── CACHE CHECK with diagnostic logging ──
     const cacheEntry = cacheRef.current[i];
     if (cacheEntry?.url || cacheEntry?.useClientTTS || cacheEntry?.generating) {
@@ -558,7 +558,12 @@ export function ClarifyAudioPanel({
         console.log(`[SEG-DUMP] Seg ${i} translated.text = "${(rawSegTranslated.text || '').substring(0, 40)}"`);
       }
 
-      const speakerId = seg?.speaker || 'speaker_0';
+      // USE speakerOverride if provided (from regen loop which has guaranteed-correct speakers)
+      // Fall back to segment data only if no override
+      const speakerId = speakerOverride || seg?.speaker || 'speaker_0';
+      if (speakerOverride) {
+        console.log(`[SEG-DUMP] Seg ${i}: using speakerOverride="${speakerOverride}" (seg.speaker="${seg?.speaker}")`);
+      }
 
       // ═══ VOICE LOOKUP ═══
       // ONLY source of truth: frozenVoiceMapRef (set by handleRegenerateVoices when user clicks Apply)
@@ -1080,6 +1085,9 @@ export function ClarifyAudioPanel({
       console.log(`[REGEN] Running detectSpeakers() as safety net (${noSpeakerCount} missing speakers)...`);
       segs = detectSpeakers(segs);
       translatedTxRef.current = segs;
+      // CRITICAL: Also sync the STATE so the useEffect (translatedTxRef.current = translatedTranscript)
+      // doesn't overwrite our re-detected speakers with stale data during React re-renders
+      setTranslatedTranscript(segs);
 
       // Verify result
       const dist2: Record<string, number> = {};
@@ -1104,7 +1112,9 @@ export function ClarifyAudioPanel({
           return;
         }
         const batch = segs.slice(batchStart, Math.min(batchStart + 8, segs.length));
-        await Promise.allSettled(batch.map((s, j) => generateSeg(batchStart + j, s.text)));
+        // CRITICAL: Pass s.speaker directly so generateSeg doesn't rely on translatedTxRef
+        // (which can be overwritten by React useEffect during async awaits)
+        await Promise.allSettled(batch.map((s, j) => generateSeg(batchStart + j, s.text, s.speaker)));
         console.log(`[REGEN] Batch ${batchStart}-${batchStart + batch.length - 1} done`);
       }
       console.log(`[REGEN] All ${segs.length} segments regenerated`);
