@@ -349,24 +349,46 @@ export function ClarifyAudioPanel({
       const seg = translatedTxRef.current[i] || txRef.current[i];
       const speakerId = seg?.speaker || 'speaker_0';
 
-      // ═══ VOICE LOOKUP: ONLY from frozenVoiceMapRef ═══
-      // There is NO other code path. If frozen map doesn't exist, use DEFAULT_VOICE.
-      // This ensures ALL segments use the SAME voice assignments computed at regen time.
+      // ═══ VOICE LOOKUP ═══
+      // Priority 1: Use frozen voice map (set by handleRegenerateVoices)
+      // Priority 2: If no frozen map but config exists, auto-freeze NOW (covers initial load)
+      // Priority 3: No config at all → default voice
       let voice: string;
       let source: string;
+
+      // Auto-freeze: if we have a speaker config but no frozen map yet, create one now
+      if (!frozenVoiceMapRef.current && speakerConfigRef.current && Object.keys(speakerConfigRef.current).length > 0) {
+        console.log('[AUTO-FREEZE] Config exists but no frozen map — creating one now');
+        console.log('[AUTO-FREEZE] Config:', JSON.stringify(speakerConfigRef.current));
+        _assignCallCounter = 0;
+        const autoMap = assignVoicesToSpeakers(speakerConfigRef.current);
+        frozenVoiceMapRef.current = Object.freeze({ ...autoMap });
+        console.log('[AUTO-FREEZE] Map created:', JSON.stringify(frozenVoiceMapRef.current));
+      }
+
       const frozenMap = frozenVoiceMapRef.current;
       if (frozenMap && frozenMap[speakerId]) {
         voice = frozenMap[speakerId];
         source = 'FROZEN';
       } else if (frozenMap) {
-        // Speaker exists in transcript but not in config — shouldn't happen but safe fallback
-        voice = DEFAULT_VOICE;
-        source = 'FROZEN-missing-speaker';
-        console.warn(`[VOICE-ERROR] ${speakerId} not found in frozen map:`, frozenMap);
+        // Speaker ID not in frozen map — use gender-appropriate fallback
+        const fallbackGender = speakerConfigRef.current?.[speakerId];
+        voice = fallbackGender === 'female' ? FEMALE_VOICES[0] : MALE_VOICES[0];
+        source = 'FROZEN-fallback';
+        console.warn(`[VOICE-WARN] ${speakerId} not in frozen map, using ${voice} (${fallbackGender || 'default-male'})`);
       } else {
-        // No frozen map yet (initial load before user clicks Apply) — use default
-        voice = DEFAULT_VOICE;
-        source = 'DEFAULT-no-freeze';
+        // No config at all — use gender-appropriate default if possible
+        const fallbackGender = speakerConfigRef.current?.[speakerId];
+        if (fallbackGender === 'female') {
+          voice = FEMALE_VOICES[0];  // nova
+          source = 'GENDER-fallback';
+        } else if (fallbackGender === 'male') {
+          voice = MALE_VOICES[0];    // onyx
+          source = 'GENDER-fallback';
+        } else {
+          voice = DEFAULT_VOICE;
+          source = 'DEFAULT';
+        }
       }
       const gender = speakerConfigRef.current?.[speakerId] || 'unconfigured';
 
