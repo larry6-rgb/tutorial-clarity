@@ -58,7 +58,7 @@ interface ClarifyAudioPanelProps {
   onPlayYouTube?: () => void;
   onTranscriptReady?: (segments: ClarifyTranscriptSegment[]) => void;
   onSegmentChange?: (index: number) => void;
-  registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => void; detectWithAssemblyAI: () => Promise<string[]> }) => void;
+  registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[] }) => void;
 }
 
 // ═══ MULTI-VOICE SYSTEM — SMART ROTATION ═══
@@ -1419,9 +1419,67 @@ export function ClarifyAudioPanel({
         isPlaying: () => isPlayingRef.current,
         regenerateVoices: (config?: SpeakerConfig) => handleRegenerateVoices(config),
         detectWithAssemblyAI: detectSpeakersWithAssemblyAI,
+        manualDetectSpeakers: () => {
+          console.log('[MANUAL-DETECT] Running gap-based speaker detection...');
+          let segs = translatedTxRef.current;
+          if (!segs || segs.length === 0) segs = txRef.current;
+          if (segs.length === 0) {
+            console.warn('[MANUAL-DETECT] No segments available!');
+            return ['speaker_0'];
+          }
+          const detected = detectSpeakers(segs);
+          translatedTxRef.current = detected;
+          setTranslatedTranscript(detected);
+          const speakers = Array.from(new Set(detected.map(s => s.speaker || 'speaker_0'))).sort();
+          console.log(`[MANUAL-DETECT] Found ${speakers.length} speakers:`, speakers);
+          return speakers;
+        },
       });
     }
   }, [registerHandlers, handlePlay, handlePause, handleRegenerateVoices, detectSpeakersWithAssemblyAI]);
+
+  // ═══ DIAGNOSTIC: Manual audio blob test — run window.testAudioBlobs() in console ═══
+  useEffect(() => {
+    (window as any).testAudioBlobs = () => {
+      console.log('[TEST] ========================================');
+      console.log('[TEST] MANUAL AUDIO BLOB TEST');
+      console.log('[TEST] ========================================');
+
+      const cache = cacheRef.current;
+      const keys = Object.keys(cache).map(Number).sort((a, b) => a - b);
+      if (keys.length === 0) {
+        console.error('[TEST] No audio blobs in cache! Generate audio first.');
+        return;
+      }
+
+      console.log(`[TEST] Total cached segments: ${keys.length}`);
+      console.log('[TEST] Playing first 5 blobs manually (3s gaps)...');
+      const frozenMap = frozenVoiceMapRef.current || {};
+
+      const testKeys = keys.slice(0, 5);
+      testKeys.forEach((segIdx, order) => {
+        const entry = cache[segIdx];
+        const seg = translatedTxRef.current[segIdx];
+        console.log(`[TEST] Blob ${segIdx}:`);
+        console.log(`[TEST]   Text: "${(seg?.text || '').substring(0, 50)}..."`);
+        console.log(`[TEST]   Speaker: ${seg?.speaker || '(none)'}`);
+        console.log(`[TEST]   Cached voice: ${entry?.voice || '(none)'}`);
+        console.log(`[TEST]   Expected voice: ${frozenMap[seg?.speaker || 'speaker_0'] || '(no frozen map)'}`);
+        console.log(`[TEST]   Has URL: ${!!entry?.url}`);
+
+        if (entry?.url) {
+          setTimeout(() => {
+            console.log(`[TEST]   ▶️ Playing blob ${segIdx} now...`);
+            const audio = new Audio(entry.url);
+            audio.play().catch(e => console.error(`[TEST]   ❌ Play failed for ${segIdx}:`, e));
+          }, order * 3000);
+        }
+      });
+
+      console.log('[TEST] ========================================');
+    };
+    return () => { delete (window as any).testAudioBlobs; };
+  }, []);
 
   /** User selects options from modal -> start processing */
   const handleSelectOption = useCallback(async (mode: OutputMode, lang: string) => {

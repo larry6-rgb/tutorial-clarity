@@ -1,0 +1,17 @@
+# Core Files for Voice Bug Investigation
+
+## Main Components
+app/components/ClarifyAudioPanel.tsx - Audio generation and scheduling (1800+ lines)
+app/watch/page.tsx - UI and configuration (2400+ lines)
+
+## APIs
+app/api/detect-speakers/route.ts - AssemblyAI integration
+app/api/multi-voice-tts/route.ts - OpenAI TTS generation
+
+## Utilities
+app/utils/matchSpeakerSegments.ts - Speaker label matching
+
+## Documentation
+VOICE_BUG_DIAGNOSTICS.md - Detailed diagnostic report
+SHARE_WITH_CLAUDE.md - Summary for sharing with Claude Code
+KEY_FILES.txt - This file

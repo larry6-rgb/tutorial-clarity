@@ -254,7 +254,7 @@ function WatchPageContent() {
     }, []);
 
     // ── Ref to ClarifyAudioPanel handlers (for spacebar + video sync control) ──
-    const clarifyHandlersRef = useRef<{ play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void; detectWithAssemblyAI: () => Promise<string[]> } | null>(null);
+    const clarifyHandlersRef = useRef<{ play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[] } | null>(null);
     const [assemblyAILoading, setAssemblyAILoading] = useState(false);
 
     // ── Stable callbacks for ClarifyAudioPanel (prevent re-render unmute bug) ──
@@ -281,9 +281,9 @@ function WatchPageContent() {
         setClarifySegmentIndex(idx);
     }, []);
 
-    const handleClarifyRegisterHandlers = useCallback((handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void; detectWithAssemblyAI: () => Promise<string[]> }) => {
+    const handleClarifyRegisterHandlers = useCallback((handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[] }) => {
         clarifyHandlersRef.current = handlers;
-        console.log('[watch] ClarifyAudioPanel handlers registered (incl. regenerateVoices, detectWithAssemblyAI)');
+        console.log('[watch] ClarifyAudioPanel handlers registered (incl. regenerateVoices, detectWithAssemblyAI, manualDetectSpeakers)');
     }, []);
 
     useEffect(() => {
@@ -2244,39 +2244,42 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                 {/* ── Nuclear Clear & Regenerate (diagnostic) ── */}
                                                 <button
                                                     onClick={() => {
-                                                        console.log('[BTN-CLICK] ==========================================');
-                                                        console.log('[BTN-CLICK] Nuclear Clear button clicked');
-                                                        console.log('[BTN-CLICK] speakerConfig state:', JSON.stringify(speakerConfig));
-                                                        console.log('[BTN-CLICK] detectedSpeakers:', JSON.stringify(detectedSpeakers));
+                                                        console.log('[NUCLEAR] ==========================================');
+                                                        console.log('[NUCLEAR] Nuclear Clear button clicked');
+                                                        console.log('[NUCLEAR] speakerConfig BEFORE:', JSON.stringify(speakerConfig));
+                                                        console.log('[NUCLEAR] detectedSpeakers:', JSON.stringify(detectedSpeakers));
 
                                                         // Clear all storage
-                                                        try { localStorage.clear(); } catch (e) { console.warn('[BTN-CLICK] localStorage.clear failed:', e); }
-                                                        try { sessionStorage.clear(); } catch (e) { console.warn('[BTN-CLICK] sessionStorage.clear failed:', e); }
-                                                        console.log('[BTN-CLICK] Storage cleared');
+                                                        try { localStorage.clear(); } catch (e) { console.warn('[NUCLEAR] localStorage.clear failed:', e); }
+                                                        try { sessionStorage.clear(); } catch (e) { console.warn('[NUCLEAR] sessionStorage.clear failed:', e); }
+                                                        console.log('[NUCLEAR] Storage cleared');
 
-                                                        // Build FULL config — alternate male/female defaults for distinct voices
+                                                        // ★ VISIBLY reset speaker config to alternating defaults
                                                         const nuclearDefaults = ['female', 'male', 'female', 'male', 'female', 'male'] as const;
-                                                        const fullConfig: Record<string, 'male' | 'female'> = {};
+                                                        const resetConfig: Record<string, 'male' | 'female'> = {};
                                                         detectedSpeakers.forEach((sid, i) => {
-                                                            fullConfig[sid] = speakerConfig[sid] || nuclearDefaults[i % nuclearDefaults.length];
+                                                            resetConfig[sid] = nuclearDefaults[i % nuclearDefaults.length];
                                                         });
-                                                        console.log('[BTN-CLICK] Config to apply:', JSON.stringify(fullConfig));
+                                                        setSpeakerConfig(resetConfig);
+                                                        console.log('[NUCLEAR] ★ Speaker config RESET to:', JSON.stringify(resetConfig));
 
+                                                        const fullConfig = { ...resetConfig };
+                                                        console.log('[NUCLEAR] Config to apply:', JSON.stringify(fullConfig));
                                                         if (clarifyHandlersRef.current?.regenerateVoices) {
-                                                            console.log('[BTN-CLICK] Handler found, calling regenerateVoices...');
+                                                            console.log('[NUCLEAR] Handler found, calling regenerateVoices...');
                                                             setIsRegenerating(true);
                                                             Promise.resolve(clarifyHandlersRef.current.regenerateVoices(fullConfig)).then(() => {
-                                                                console.log('[BTN-CLICK] Regeneration complete');
+                                                                console.log('[NUCLEAR] Regeneration complete');
                                                                 setIsRegenerating(false);
                                                             }).catch((err: Error) => {
-                                                                console.error('[BTN-CLICK] Regeneration failed:', err);
+                                                                console.error('[NUCLEAR] Regeneration failed:', err);
                                                                 setIsRegenerating(false);
                                                             });
                                                         } else {
-                                                            console.error('[BTN-CLICK] ERROR: regenerateVoices handler NOT FOUND!');
-                                                            console.error('[BTN-CLICK] clarifyHandlersRef.current:', clarifyHandlersRef.current);
+                                                            console.error('[NUCLEAR] ERROR: regenerateVoices handler NOT FOUND!');
+                                                            console.error('[NUCLEAR] clarifyHandlersRef.current:', clarifyHandlersRef.current);
                                                         }
-                                                        console.log('[BTN-CLICK] ==========================================');
+                                                        console.log('[NUCLEAR] ==========================================');
                                                     }}
                                                     disabled={isRegenerating}
                                                     style={{
@@ -2364,6 +2367,39 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                     </span>
                                                 ) : '🎯 Detect Speakers with AI'}
                                             </button>
+
+                                            {/* ── Manual (Gap-Based) Detection Button ── */}
+                                            <button
+                                                onClick={() => {
+                                                    console.log('[MANUAL] Manual detection button clicked');
+                                                    if (!clarifyHandlersRef.current?.manualDetectSpeakers) {
+                                                        console.error('[MANUAL] manualDetectSpeakers handler not registered');
+                                                        return;
+                                                    }
+                                                    const speakers = clarifyHandlersRef.current.manualDetectSpeakers();
+                                                    console.log('[MANUAL] Detected speakers:', speakers);
+                                                    if (speakers && speakers.length > 0) {
+                                                        setDetectedSpeakers(speakers);
+                                                    }
+                                                }}
+                                                style={{
+                                                    width: '100%',
+                                                    marginTop: '6px',
+                                                    padding: '6px 12px',
+                                                    backgroundColor: '#475569',
+                                                    color: 'white',
+                                                    border: 'none',
+                                                    borderRadius: '6px',
+                                                    fontSize: '11px',
+                                                    fontWeight: 'bold',
+                                                    cursor: 'pointer',
+                                                }}
+                                            >
+                                                {'🔧'} Manual Detection (Gap-Based)
+                                            </button>
+                                            <p style={{ fontSize: '10px', color: '#64748b', marginTop: '4px', lineHeight: '1.3' }}>
+                                                Manual detection uses time gaps to identify speakers (less accurate but faster, no API needed)
+                                            </p>
                                         </div>
                                     </div>
                                 )}
