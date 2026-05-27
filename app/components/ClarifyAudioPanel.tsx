@@ -735,8 +735,10 @@ export function ClarifyAudioPanel({
       const gender = configGender
         || (FEMALE_VOICES.includes(voice) ? 'female' : 'male');
 
-      // ═══ VOICE DEBUG — shows exactly what happened ═══
-      console.log(`[VOICE] Seg ${i}: speaker="${speakerId}" voice="${voice}" source=${source} gender=${gender} frozen=${hasFrozenMap}${speakerOverride ? ` override="${speakerOverride}"` : ''}`);
+      // ═══ VOICE DEBUG — shows exactly what happened (first 5 + every 20th) ═══
+      if (i < 5 || i % 20 === 0) {
+        console.log(`[VOICE] Seg ${i}: speaker="${speakerId}" voice="${voice}" source=${source} gender=${gender} frozen=${hasFrozenMap}${speakerOverride ? ` override="${speakerOverride}"` : ''}`);
+      }
 
       // ═══ REQUEST BODY — voice is a PLAIN STRING (not an object!) ═══
       const requestBody = {
@@ -752,7 +754,7 @@ export function ClarifyAudioPanel({
       };
 
       const bodyJson = JSON.stringify(requestBody);
-      console.log(`[DIAGNOSTIC] Request: voice="${voice}" gender="${gender}" speaker="${speakerId}"`);
+      if (i < 3) console.log(`[DIAGNOSTIC] Request: voice="${voice}" gender="${gender}" speaker="${speakerId}"`);
 
       // ── Fetch with client-side retry for transient errors ──
       let res: Response | null = null;
@@ -1259,6 +1261,25 @@ export function ClarifyAudioPanel({
         await Promise.allSettled(batch.map((s, j) => generateSeg(batchStart + j, s.text, s.speaker)));
         console.log(`[REGEN] Batch ${batchStart}-${batchStart + batch.length - 1} done`);
       }
+      // ═══ POST-GENERATION AUDIT — verify voices are actually different ═══
+      const voiceAudit: Record<string, number> = {};
+      Object.keys(cacheRef.current).forEach(key => {
+        const v = cacheRef.current[parseInt(key)]?.voice || '(none)';
+        voiceAudit[v] = (voiceAudit[v] || 0) + 1;
+      });
+      console.log('[REGEN] ╔══════════════════════════════════════════════╗');
+      console.log('[REGEN] ║   POST-GENERATION VOICE AUDIT               ║');
+      console.log('[REGEN] ╠══════════════════════════════════════════════╣');
+      Object.entries(voiceAudit).forEach(([voice, count]) => {
+        console.log(`[REGEN] ║   ${voice}: ${count} segments`.padEnd(49) + '║');
+      });
+      const uniqueVoices = Object.keys(voiceAudit).filter(v => v !== '(none)');
+      if (uniqueVoices.length >= 2) {
+        console.log('[REGEN] ║   ✅ MULTI-VOICE CONFIRMED!                 ║');
+      } else {
+        console.log('[REGEN] ║   ❌ SINGLE VOICE! Something went wrong     ║');
+      }
+      console.log('[REGEN] ╚══════════════════════════════════════════════╝');
       console.log(`[REGEN] ✅ All ${segs.length} segments regenerated with multi-voice!`);
     } else {
       console.warn('[REGEN] ⚠️ NO SEGMENTS to regenerate! Both translated and original are empty.');
