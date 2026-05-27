@@ -89,17 +89,18 @@ export function matchSpeakerSegments(
     }
 
     // Strategy 2: Time overlap match (fallback)
-    // Find the AssemblyAI segment with the most time overlap
+    // Find the AssemblyAI segment with the most time overlap.
+    // ★ FIX: Check ALL AssemblyAI segments for overlap, not just midpoint-inside.
+    //   A YouTube caption can span a speaker change, so we pick the speaker
+    //   who covers MORE of the caption's time range.
     let bestTimeMatch: { speaker: string; overlap: number } | null = null;
-    const ytMid = (ytSeg.start + ytSeg.end) / 2;
 
     for (const asmSeg of assemblySegments) {
-      // Check if YouTube segment midpoint falls within AssemblyAI segment
-      if (ytMid >= asmSeg.start && ytMid <= asmSeg.end) {
-        const overlap = Math.min(ytSeg.end, asmSeg.end) - Math.max(ytSeg.start, asmSeg.start);
-        if (!bestTimeMatch || overlap > bestTimeMatch.overlap) {
-          bestTimeMatch = { speaker: asmSeg.speaker, overlap };
-        }
+      const overlapStart = Math.max(ytSeg.start, asmSeg.start);
+      const overlapEnd = Math.min(ytSeg.end, asmSeg.end);
+      const overlap = overlapEnd - overlapStart;
+      if (overlap > 0 && (!bestTimeMatch || overlap > bestTimeMatch.overlap)) {
+        bestTimeMatch = { speaker: asmSeg.speaker, overlap };
       }
     }
 
@@ -108,12 +109,13 @@ export function matchSpeakerSegments(
       speakerMap.set(ytSeg.idx, normalized);
       timeMatches++;
       if (ytSeg.idx < 10) {
-        console.log(`[MATCH] Seg ${ytSeg.idx}: "${ytSeg.text.substring(0, 35)}" → ${normalized} (time overlap)`);
+        console.log(`[MATCH] Seg ${ytSeg.idx}: "${ytSeg.text.substring(0, 35)}" → ${normalized} (time overlap: ${bestTimeMatch.overlap.toFixed(1)}s)`);
       }
       return;
     }
 
     // Strategy 3: Nearest-in-time AssemblyAI segment
+    const ytMid = (ytSeg.start + ytSeg.end) / 2;
     let nearest: { speaker: string; distance: number } | null = null;
     for (const asmSeg of assemblySegments) {
       const dist = Math.abs(ytMid - (asmSeg.start + asmSeg.end) / 2);

@@ -1012,7 +1012,9 @@ export function ClarifyAudioPanel({
 
         const seg = translatedTxRef.current[i];
         const age = cached.generatedAt ? `${((Date.now() - cached.generatedAt) / 1000).toFixed(0)}s ago` : '?';
-        console.log(`[TRACE-7-PLAY] Seg ${i}: voice="${cached.voice || '?'}" speaker=${seg?.speaker || '?'} | OpenAI (${age})`);
+        const videoNow = currentTimeRef.current;
+        const expectedVoice = frozenVoiceMapRef.current?.[seg?.speaker || 'speaker_0'] || '(no map)';
+        console.log(`[▶ PLAY] Seg ${i}: speaker=${seg?.speaker || '?'} | voice="${cached.voice || '?'}" expected="${expectedVoice}" ${cached.voice !== expectedVoice ? '❌ MISMATCH' : '✅'} | time=${seg?.start?.toFixed(1)}-${seg?.end?.toFixed(1)}s videoAt=${videoNow.toFixed(1)}s | text="${(seg?.text || '').substring(0, 50)}" (${age})`);
 
         a.onended = () => {
           // Segment finished naturally — scheduler will pick up next one
@@ -1073,6 +1075,59 @@ export function ClarifyAudioPanel({
     }
 
     console.log(`[scheduler] === SCHEDULER STARTED ===`);
+
+    // ═══ ONE-TIME DIAGNOSTIC: Segment/Speaker/Voice/Timestamp alignment check ═══
+    {
+      const segs = translatedTxRef.current;
+      const frozenMap = frozenVoiceMapRef.current;
+      console.log('[🔍 SCHEDULER-DIAG] ════════════════════════════════════════════');
+      console.log(`[🔍 SCHEDULER-DIAG] ${segs.length} segments, frozenMap=${frozenMap ? Object.keys(frozenMap).length + ' entries' : 'NULL'}`);
+      if (frozenMap) console.log('[🔍 SCHEDULER-DIAG] Map:', JSON.stringify(frozenMap));
+
+      // Check timestamp ordering and overlaps
+      let overlaps = 0, outOfOrder = 0, bigGaps = 0;
+      for (let i = 0; i < segs.length - 1; i++) {
+        if (segs[i + 1].start < segs[i].start) outOfOrder++;
+        if (segs[i].end > segs[i + 1].start + 0.1) overlaps++;
+        if (segs[i + 1].start - segs[i].end > 5) bigGaps++;
+      }
+      if (overlaps) console.warn(`[🔍 SCHEDULER-DIAG] ⚠️ ${overlaps} overlapping segments!`);
+      if (outOfOrder) console.error(`[🔍 SCHEDULER-DIAG] ❌ ${outOfOrder} out-of-order segments!`);
+      if (bigGaps) console.warn(`[🔍 SCHEDULER-DIAG] ⚠️ ${bigGaps} gaps >5s between segments`);
+
+      // Show first 15 segments: index, time range, speaker, cached voice, expected voice, text
+      const showN = Math.min(15, segs.length);
+      console.log(`[🔍 SCHEDULER-DIAG] First ${showN} segments:`);
+      for (let i = 0; i < showN; i++) {
+        const s = segs[i];
+        const cached = cacheRef.current[i];
+        const speaker = s.speaker || 'speaker_0';
+        const cachedVoice = cached?.voice || '(none)';
+        const expectedVoice = frozenMap?.[speaker] || '(no map)';
+        const match = cachedVoice === expectedVoice;
+        const icon = !cached?.url ? '⚠️' : match ? '✅' : '❌';
+        console.log(`[🔍 SCHEDULER-DIAG]  ${icon} [${i}] ${s.start.toFixed(1)}-${s.end.toFixed(1)}s ${speaker} voice=${cachedVoice} exp=${expectedVoice} "${(s.text || '').substring(0, 40)}"`);
+      }
+
+      // Speaker distribution summary
+      const dist: Record<string, { count: number; voices: Set<string> }> = {};
+      segs.forEach((s, i) => {
+        const sp = s.speaker || 'speaker_0';
+        if (!dist[sp]) dist[sp] = { count: 0, voices: new Set() };
+        dist[sp].count++;
+        const v = cacheRef.current[i]?.voice;
+        if (v) dist[sp].voices.add(v);
+      });
+      console.log('[🔍 SCHEDULER-DIAG] Speaker summary:');
+      Object.entries(dist).forEach(([sp, d]) => {
+        const expected = frozenMap?.[sp] || '?';
+        const actual = Array.from(d.voices).join(',') || '(none cached)';
+        const ok = d.voices.size === 1 && d.voices.has(expected);
+        console.log(`[🔍 SCHEDULER-DIAG]   ${ok ? '✅' : '❌'} ${sp}: ${d.count} segs | expected=${expected} actual=[${actual}]`);
+      });
+      console.log('[🔍 SCHEDULER-DIAG] ════════════════════════════════════════════');
+    }
+
     const SEEK_THRESHOLD = 2.0;  // seconds — detect user seeking
 
     schedulerRef.current = setInterval(() => {
@@ -1488,16 +1543,26 @@ export function ClarifyAudioPanel({
 
       // Step 3: Match AssemblyAI segments to our YouTube-based segments
       console.log('[ASSEMBLY-DETECT] Step 3: Matching to YouTube caption segments...');
-      const segments = translatedTxRef.current.length > 0
-        ? translatedTxRef.current
-        : originalTxRef.current;
 
-      if (segments.length === 0) {
+      // ★ CRITICAL FIX: Use ORIGINAL (German) segments for text matching!
+      //   AssemblyAI returns German text. If we match against translated (English) text,
+      //   text similarity = ~0% and all matching falls to imprecise time-based.
+      //   Using original German text allows real text matching for accurate speaker labels.
+      const originalSegs = originalTxRef.current;
+      const translatedSegs = translatedTxRef.current;
+      // Use original for matching, translated for playback. Both should have same count + timestamps.
+      const matchingSegs = originalSegs.length > 0 ? originalSegs : translatedSegs;
+      const targetSegs = translatedSegs.length > 0 ? translatedSegs : originalSegs;
+
+      if (matchingSegs.length === 0) {
         console.warn('[ASSEMBLY-DETECT] No transcript segments available yet!');
         return ['speaker_0'];
       }
 
-      const ytSegments: YouTubeSegment[] = segments.map((seg, i) => ({
+      console.log(`[ASSEMBLY-DETECT] Using ${originalSegs.length > 0 ? 'ORIGINAL (German)' : 'translated'} text for matching (${matchingSegs.length} segs)`);
+      console.log(`[ASSEMBLY-DETECT] Target segments for labels: ${targetSegs.length} (${translatedSegs.length > 0 ? 'translated' : 'original'})`);
+
+      const ytSegments: YouTubeSegment[] = matchingSegs.map((seg, i) => ({
         idx: i,
         text: seg.text,
         start: seg.start,
@@ -1513,9 +1578,9 @@ export function ClarifyAudioPanel({
       console.log('[ASSEMBLY-DETECT] ★ Speaker map saved to assemblyAISpeakerMapRef (' + speakerMap.size + ' entries)');
       console.log('[ASSEMBLY-DETECT] ★ assemblyAILabelsActiveRef = true — gap-based detection DISABLED');
 
-      // Step 4: Apply speaker labels to transcript segments
-      console.log('[ASSEMBLY-DETECT] Step 4: Applying speaker labels...');
-      const updatedSegments = segments.map((seg, i) => ({
+      // Step 4: Apply speaker labels to translated transcript segments (for playback)
+      console.log('[ASSEMBLY-DETECT] Step 4: Applying speaker labels to', targetSegs.length, 'segments...');
+      const updatedSegments = targetSegs.map((seg: ClarifyTranscriptSegment, i: number) => ({
         ...seg,
         speaker: speakerMap.get(i) || seg.speaker || 'speaker_0',
       }));
@@ -1532,7 +1597,7 @@ export function ClarifyAudioPanel({
 
       // Log results with speaker distribution
       const speakerDist: Record<string, number> = {};
-      updatedSegments.forEach(seg => {
+      updatedSegments.forEach((seg: ClarifyTranscriptSegment) => {
         const sp = seg.speaker || '(none)';
         speakerDist[sp] = (speakerDist[sp] || 0) + 1;
       });
@@ -1542,7 +1607,7 @@ export function ClarifyAudioPanel({
       console.log('[ASSEMBLY-DETECT] Detected speakers:', uniqueSpeakers);
       console.log('[ASSEMBLY-DETECT] Speaker distribution:', JSON.stringify(speakerDist));
       console.log('[ASSEMBLY-DETECT] Sample assignments:');
-      updatedSegments.slice(0, 15).forEach((seg, i) => {
+      updatedSegments.slice(0, 15).forEach((seg: ClarifyTranscriptSegment, i: number) => {
         console.log(`[ASSEMBLY-DETECT]   Seg ${i}: "${seg.text.substring(0, 40)}" → ${seg.speaker}`);
       });
       console.log('[ASSEMBLY-DETECT] ════════════════════════════════════════');
