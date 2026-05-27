@@ -254,7 +254,7 @@ function WatchPageContent() {
     }, []);
 
     // ── Ref to ClarifyAudioPanel handlers (for spacebar + video sync control) ──
-    const clarifyHandlersRef = useRef<{ play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[] } | null>(null);
+    const clarifyHandlersRef = useRef<{ play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[]; testAudioBlobs: () => void; hasAudioBlobs: () => boolean } | null>(null);
     const [assemblyAILoading, setAssemblyAILoading] = useState(false);
 
     // ── Stable callbacks for ClarifyAudioPanel (prevent re-render unmute bug) ──
@@ -281,9 +281,9 @@ function WatchPageContent() {
         setClarifySegmentIndex(idx);
     }, []);
 
-    const handleClarifyRegisterHandlers = useCallback((handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[] }) => {
+    const handleClarifyRegisterHandlers = useCallback((handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[]; testAudioBlobs: () => void; hasAudioBlobs: () => boolean }) => {
         clarifyHandlersRef.current = handlers;
-        console.log('[watch] ClarifyAudioPanel handlers registered (incl. regenerateVoices, detectWithAssemblyAI, manualDetectSpeakers)');
+        console.log('[watch] ClarifyAudioPanel handlers registered (incl. regenerateVoices, detectWithAssemblyAI, manualDetectSpeakers, testAudioBlobs)');
     }, []);
 
     useEffect(() => {
@@ -2240,6 +2240,31 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                         {isRegenerating ? '⏳ Regenerating...' : '🔄 Apply & Regenerate Audio'}
                                                     </button>
                                                 )}
+
+                                                {/* ── Test Audio Blobs (diagnostic) ── */}
+                                                <button
+                                                    onClick={() => {
+                                                        if (!clarifyHandlersRef.current?.testAudioBlobs) {
+                                                            alert('Test function not available yet. Generate audio first.');
+                                                            return;
+                                                        }
+                                                        if (!clarifyHandlersRef.current.hasAudioBlobs()) {
+                                                            alert('No audio blobs in cache yet! Click "Apply & Regenerate Audio" first, then try again.');
+                                                            return;
+                                                        }
+                                                        alert('Playing first 5 audio blobs with 4-second gaps.\n\nOpen browser console (F12) for detailed voice info.\n\nListen carefully — does each blob match its expected voice?');
+                                                        clarifyHandlersRef.current.testAudioBlobs();
+                                                    }}
+                                                    style={{
+                                                        width: '100%', marginTop: '6px', padding: '6px 12px',
+                                                        backgroundColor: '#7c3aed',
+                                                        color: 'white', border: 'none', borderRadius: '6px',
+                                                        fontWeight: 600, fontSize: '11px', cursor: 'pointer',
+                                                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
+                                                    }}
+                                                >
+                                                    {'🧪'} Test Audio Blobs (Play First 5)
+                                                </button>
 
                                                 {/* ── Nuclear Clear & Regenerate (diagnostic) ── */}
                                                 <button
