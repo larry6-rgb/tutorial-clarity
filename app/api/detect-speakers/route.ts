@@ -121,25 +121,65 @@ export async function POST(req: NextRequest) {
 
     const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
 
+    // We try multiple format strategies because YouTube doesn't always
+    // have separate audio-only streams (especially for some videos).
+    // Strategy order:
+    //   1. bestaudio (audio-only stream — smallest, fastest)
+    //   2. bestaudio*/best with --extract-audio (download anything, extract audio)
+    const formatStrategies = [
+      { label: 'bestaudio', fmt: 'bestaudio', extract: false },
+      { label: 'best+extract', fmt: 'bestaudio*/best', extract: true },
+    ];
+
+    let downloadSuccess = false;
+    let lastError = '';
+
+    for (const strategy of formatStrategies) {
+      try {
+        const extractFlags = strategy.extract
+          ? ' --extract-audio --audio-format mp3'
+          : '';
+        const cmd = `"${ytdlpPath}" -f "${strategy.fmt}"${extractFlags} --no-playlist --no-warnings -o "${tempFileTemplate}" "${youtubeUrl}"`;
+        console.log(`[AssemblyAI] Trying [${strategy.label}]:`, cmd);
+
+        execSync(cmd, {
+          encoding: 'utf8',
+          timeout: 180000,  // 3 minute timeout for download + possible extraction
+          maxBuffer: 5 * 1024 * 1024,
+          windowsHide: true,
+          stdio: ['pipe', 'pipe', 'pipe'],
+        });
+
+        downloadSuccess = true;
+        console.log(`[AssemblyAI] Strategy [${strategy.label}] succeeded`);
+        break;
+      } catch (tryErr: any) {
+        const stderr = tryErr.stderr?.toString() || tryErr.message || '';
+        console.warn(`[AssemblyAI] Strategy [${strategy.label}] failed:`, stderr.substring(0, 200));
+        lastError = stderr;
+        // Clean up any partial files before trying next strategy
+        try {
+          const cleanCmd = process.platform === 'win32'
+            ? `del /q "${join(tmpdir(), tempFileName)}.*" 2>nul`
+            : `rm -f ${tempFileGlob} 2>/dev/null`;
+          execSync(cleanCmd, { stdio: 'pipe', timeout: 5000 });
+        } catch { /* ignore cleanup errors */ }
+      }
+    }
+
+    if (!downloadSuccess) {
+      throw new Error(
+        `Audio download failed — all format strategies exhausted.\n` +
+        `Last error: ${lastError.substring(0, 300)}\n\n` +
+        `Possible fixes:\n` +
+        `  1. Update yt-dlp: pip install -U yt-dlp\n` +
+        `  2. Try a different video\n` +
+        `  3. Check if the video is age-restricted or geo-blocked`
+      );
+    }
+
+    // Find the actual file that was created (yt-dlp chose the extension)
     try {
-      // Download best audio to temp file
-      // --no-playlist: don't download entire playlist
-      // -f bestaudio: get best quality audio-only stream
-      // --no-warnings: suppress warnings
-      // -o: output template
-      const cmd = `"${ytdlpPath}" -f "bestaudio" --no-playlist --no-warnings -o "${tempFileTemplate}" "${youtubeUrl}"`;
-      console.log('[AssemblyAI] Running:', cmd);
-
-      execSync(cmd, {
-        encoding: 'utf8',
-        timeout: 120000,  // 2 minute timeout for download
-        maxBuffer: 5 * 1024 * 1024,
-        windowsHide: true,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
-
-      // Find the actual file that was created (yt-dlp chose the extension)
-      // Use a simple approach: list files matching our pattern
       const findCmd = process.platform === 'win32'
         ? `dir /b "${join(tmpdir(), tempFileName)}.*"`
         : `ls -1 ${tempFileGlob} 2>/dev/null`;
@@ -167,12 +207,8 @@ export async function POST(req: NextRequest) {
       const fileSizeMB = (fileStats.size / 1024 / 1024).toFixed(2);
       console.log(`[AssemblyAI] STEP 1: ✅ Downloaded ${fileSizeMB} MB (${fmtTime(Date.now() - step1Start)})`);
 
-    } catch (dlErr: any) {
-      const elapsed = fmtTime(Date.now() - step1Start);
-      console.error(`[AssemblyAI] STEP 1: ❌ Download failed after ${elapsed}`);
-      console.error('[AssemblyAI] Error:', dlErr.message);
-      if (dlErr.stderr) console.error('[AssemblyAI] stderr:', dlErr.stderr.toString().substring(0, 500));
-      throw new Error(`Audio download failed: ${dlErr.message}`);
+    } catch (findErr: any) {
+      throw new Error(`Audio file not found after download: ${findErr.message}`);
     }
 
     // ── STEP 2: Upload to AssemblyAI ────────────────────────────────
