@@ -247,8 +247,14 @@ export function previewVoiceAssignments(config: SpeakerConfig): Record<string, s
  * YouTube captions often OVERLAP (negative gaps), so pure gap detection
  * misses within-scene speaker changes. Text signals fill that gap.
  */
-function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscriptSegment[] {
+function detectSpeakers(segments: ClarifyTranscriptSegment[], forceSkipIfAssemblyAI?: boolean): ClarifyTranscriptSegment[] {
   if (segments.length === 0) return segments;
+
+  // ═══ FORCE-SKIP: If caller says AssemblyAI labels are active, return segments as-is ═══
+  if (forceSkipIfAssemblyAI) {
+    console.log(`[speaker-detect] ⛔ SKIPPED — forceSkipIfAssemblyAI=true, returning ${segments.length} segments unchanged`);
+    return segments;
+  }
 
   // ═══ CRITICAL: If segments already have AssemblyAI speaker labels, PRESERVE them! ═══
   // AssemblyAI labels look like "speaker_0", "speaker_1", etc.
@@ -600,6 +606,7 @@ export function ClarifyAudioPanel({
   const regenEpochRef = useRef(0);  // Incremented on each regeneration to invalidate stale generations
   const frozenVoiceMapRef = useRef<Record<string, string> | null>(null);  // FROZEN voice assignments — set once at regen, used for ALL segments
   const assemblyAISpeakerMapRef = useRef<Map<number, string> | null>(null);  // Stores AssemblyAI speaker labels by segment index — survives React re-renders
+  const assemblyAILabelsActiveRef = useRef(false);  // Protection flag — when true, gap-based detection is disabled
 
   // Keep refs synced
   useEffect(() => { volRef.current = volume / 100; }, [volume]);
@@ -617,7 +624,19 @@ export function ClarifyAudioPanel({
     }
   }, [aiPlaybackSpeed]);
   useEffect(() => { originalTxRef.current = originalTranscript; }, [originalTranscript]);
-  useEffect(() => { translatedTxRef.current = translatedTranscript; }, [translatedTranscript]);
+  useEffect(() => {
+    // Sync ref from state, BUT re-apply AssemblyAI labels if they exist
+    // (React state updates can lose speaker labels via intermediate renders)
+    if (assemblyAILabelsActiveRef.current && assemblyAISpeakerMapRef.current) {
+      const map = assemblyAISpeakerMapRef.current;
+      translatedTxRef.current = translatedTranscript.map((seg, i) => ({
+        ...seg,
+        speaker: map.get(i) || seg.speaker || 'speaker_0',
+      }));
+    } else {
+      translatedTxRef.current = translatedTranscript;
+    }
+  }, [translatedTranscript]);
   useEffect(() => {
     // Only update the ref if we're NOT in the middle of a regeneration
     // (frozenVoiceMapRef being set means regen calculated assignments — don't overwrite)
@@ -921,9 +940,23 @@ export function ClarifyAudioPanel({
           speaker: s.speaker || undefined,
         }));
         // detectSpeakers will preserve AssemblyAI labels if they exist in combined
+        // ★ PROTECTION: If AssemblyAI labels are active, skip gap-based detection entirely
+        //   and re-apply frozen labels from assemblyAISpeakerMapRef
         setTranslatedTranscript(prev => {
           const combined = [...prev, ...rawNewSegs];
-          const withSpeakers = detectSpeakers(combined);
+          const isAssemblyAIActive = assemblyAILabelsActiveRef.current;
+          const withSpeakers = detectSpeakers(combined, isAssemblyAIActive);
+          // If AssemblyAI labels are active, re-apply from the frozen map
+          if (isAssemblyAIActive && assemblyAISpeakerMapRef.current) {
+            const map = assemblyAISpeakerMapRef.current;
+            const reLabeled = withSpeakers.map((seg, i) => ({
+              ...seg,
+              speaker: map.get(i) || seg.speaker || 'speaker_0',
+            }));
+            console.log('[requestMoreTranslation] ★ Re-applied AssemblyAI labels to', reLabeled.length, 'segments');
+            translatedTxRef.current = reLabeled;
+            return reLabeled;
+          }
           translatedTxRef.current = withSpeakers;
           return withSpeakers;
         });
@@ -1476,7 +1509,9 @@ export function ClarifyAudioPanel({
 
       // ★ PERSIST the speaker map in a ref so it survives React re-renders
       assemblyAISpeakerMapRef.current = speakerMap;
+      assemblyAILabelsActiveRef.current = true;  // ★ PROTECTION: disable gap-based detection
       console.log('[ASSEMBLY-DETECT] ★ Speaker map saved to assemblyAISpeakerMapRef (' + speakerMap.size + ' entries)');
+      console.log('[ASSEMBLY-DETECT] ★ assemblyAILabelsActiveRef = true — gap-based detection DISABLED');
 
       // Step 4: Apply speaker labels to transcript segments
       console.log('[ASSEMBLY-DETECT] Step 4: Applying speaker labels...');
@@ -1511,6 +1546,36 @@ export function ClarifyAudioPanel({
         console.log(`[ASSEMBLY-DETECT]   Seg ${i}: "${seg.text.substring(0, 40)}" → ${seg.speaker}`);
       });
       console.log('[ASSEMBLY-DETECT] ════════════════════════════════════════');
+
+      // ★ VERIFICATION: Check labels survived after 1 second
+      setTimeout(() => {
+        console.log('');
+        console.log('🔍 CHECKING IF LABELS WERE PRESERVED (after 1 second)...');
+        const checkCounts = new Map<string, number>();
+        translatedTxRef.current.forEach(seg => {
+          const speaker = seg.speaker || 'speaker_0';
+          checkCounts.set(speaker, (checkCounts.get(speaker) || 0) + 1);
+        });
+        console.log('Current speaker distribution:');
+        checkCounts.forEach((count, speaker) => {
+          console.log(`  ${speaker}: ${count} segments`);
+        });
+        if (checkCounts.size === 1 && checkCounts.has('speaker_0')) {
+          console.error('❌ LABELS WERE OVERWRITTEN! All segments are speaker_0!');
+          console.error('Re-applying from frozen map...');
+          // Emergency re-apply
+          if (assemblyAISpeakerMapRef.current) {
+            const map = assemblyAISpeakerMapRef.current;
+            translatedTxRef.current = translatedTxRef.current.map((seg, i) => ({
+              ...seg,
+              speaker: map.get(i) || seg.speaker || 'speaker_0',
+            }));
+            console.log('✅ Emergency re-apply complete');
+          }
+        } else {
+          console.log('✅ Labels still preserved after 1 second');
+        }
+      }, 1000);
 
       // ★ AUTO-CREATE frozen voice map immediately so TTS uses correct voices
       // (Don't wait for user to click Apply & Regenerate)
