@@ -1185,9 +1185,62 @@ export function ClarifyAudioPanel({
     }
 
     // ── STEP 3: CALCULATE voice assignments ONCE ──
+    console.log('');
+    console.log('═══════════════════════════════════════════════════════');
+    console.log('🔧 VOICE ASSIGNMENT DEBUG');
+    console.log('═══════════════════════════════════════════════════════');
+    console.log('');
+    console.log('Speaker Config received:');
+    console.log(JSON.stringify(frozenConfig, null, 2));
+    console.log('');
+    console.log('Detailed breakdown:');
+    console.log(`  speaker_0: ${frozenConfig.speaker_0 || 'MISSING'}`);
+    console.log(`  speaker_1: ${frozenConfig.speaker_1 || 'MISSING'}`);
+    console.log(`  speaker_2: ${frozenConfig.speaker_2 || 'MISSING'}`);
+    console.log('');
+
     _assignCallCounter = 0;
     const voiceMap = assignVoicesToSpeakers(frozenConfig);
-    console.log('[REGEN] Voice map calculated:', JSON.stringify(voiceMap));
+
+    console.log('');
+    console.log('Voice Map created:');
+    console.log(JSON.stringify(voiceMap, null, 2));
+    console.log('');
+    console.log('Expected result (with F/M/F config):');
+    console.log('  speaker_0 (female) → nova');
+    console.log('  speaker_1 (male)   → onyx');
+    console.log('  speaker_2 (female) → shimmer');
+    console.log('');
+    console.log('Actual result:');
+    console.log(`  speaker_0 (${frozenConfig.speaker_0 || '?'}) → ${voiceMap.speaker_0 || '?'}`);
+    console.log(`  speaker_1 (${frozenConfig.speaker_1 || '?'}) → ${voiceMap.speaker_1 || '?'}`);
+    console.log(`  speaker_2 (${frozenConfig.speaker_2 || '?'}) → ${voiceMap.speaker_2 || '?'}`);
+    console.log('');
+
+    // Check for bugs
+    const allVoices = Object.values(voiceMap);
+    const allSame = allVoices.length > 1 && allVoices.every(v => v === allVoices[0]);
+    if (allSame) {
+      console.error('❌ BUG: All speakers assigned same voice!');
+      console.error(`   All assigned to: ${allVoices[0]}`);
+      console.error('   This is wrong - should be different voices!');
+    } else if (allVoices.length > 1) {
+      console.log('✅ Multiple distinct voices assigned');
+    }
+
+    // Check gender-voice consistency
+    Object.entries(frozenConfig).forEach(([speaker, gender]) => {
+      const voice = voiceMap[speaker];
+      if (gender === 'female' && !FEMALE_VOICES.includes(voice)) {
+        console.error(`❌ ${speaker}: gender=female but voice=${voice} (not female!)`);
+      }
+      if (gender === 'male' && !MALE_VOICES.includes(voice)) {
+        console.error(`❌ ${speaker}: gender=male but voice=${voice} (not male!)`);
+      }
+    });
+
+    console.log('═══════════════════════════════════════════════════════');
+    console.log('');
 
     if (Object.keys(voiceMap).length === 0) {
       console.error('[REGEN] ⚠️ VOICE MAP IS EMPTY! Segments will fall back to default.');
@@ -1503,6 +1556,43 @@ export function ClarifyAudioPanel({
     const totalBlobs = keys.length;
     const totalSegments = translatedTxRef.current.length;
     const frozenMap = frozenVoiceMapRef.current || {};
+
+    // ── VOICE ASSIGNMENT VERIFICATION ──
+    console.log('🔍 VOICE ASSIGNMENT VERIFICATION');
+    console.log('  Speaker Config (speakerConfigRef):', JSON.stringify(speakerConfigRef.current));
+    console.log('  Frozen Voice Map:', JSON.stringify(frozenMap));
+    console.log('  AssemblyAI Speaker Map:', assemblyAISpeakerMapRef.current ? `${assemblyAISpeakerMapRef.current.size} entries` : 'null');
+    console.log('');
+
+    // Check for common bugs
+    const issues: string[] = [];
+    const cfg = speakerConfigRef.current || {};
+    const mapVoices = Object.values(frozenMap);
+    if (Object.keys(frozenMap).length === 0) {
+      issues.push('Frozen voice map is EMPTY — no voices assigned!');
+    }
+    if (Object.keys(cfg).length === 0) {
+      issues.push('Speaker config is EMPTY — defaults were never set!');
+    }
+    if (mapVoices.length > 1 && mapVoices.every(v => v === mapVoices[0])) {
+      issues.push(`All speakers assigned SAME voice: ${mapVoices[0]}`);
+    }
+    Object.entries(cfg).forEach(([speaker, gender]) => {
+      const voice = frozenMap[speaker];
+      if (voice && gender === 'female' && !FEMALE_VOICES.includes(voice)) {
+        issues.push(`${speaker}: gender=female but voice=${voice} (not female!)`);
+      }
+      if (voice && gender === 'male' && !MALE_VOICES.includes(voice)) {
+        issues.push(`${speaker}: gender=male but voice=${voice} (not male!)`);
+      }
+    });
+    if (issues.length > 0) {
+      console.error('❌ ISSUES FOUND:');
+      issues.forEach(issue => console.error(`   - ${issue}`));
+    } else {
+      console.log('✅ Voice assignment verification passed');
+    }
+    console.log('');
 
     console.log(`📊 Total audio blobs in cache: ${totalBlobs}`);
     console.log(`📊 Total transcript segments: ${totalSegments}`);

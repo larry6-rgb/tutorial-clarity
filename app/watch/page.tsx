@@ -968,6 +968,26 @@ function WatchPageContent() {
             console.log(`[speaker-ui] Speakers detected: ${speakers.length} new, ${merged.length} total`, merged);
             // Persist so UI survives remounts / page reload
             try { localStorage.setItem(`detected-speakers-${videoId}`, JSON.stringify(merged)); } catch {}
+
+            // ★ FIX: Set actual speakerConfig defaults (not just visual preview)
+            // Without this, speakerConfig stays {} and voice map never gets created
+            setSpeakerConfig(prevConfig => {
+                const defaultGenders = ['female', 'male', 'female', 'male', 'female', 'male'] as const;
+                const updated = { ...prevConfig };
+                let changed = false;
+                merged.forEach((sid, idx) => {
+                    if (!updated[sid]) {
+                        updated[sid] = defaultGenders[idx % defaultGenders.length];
+                        changed = true;
+                    }
+                });
+                if (changed) {
+                    console.log(`[speaker-ui] ★ Set default speakerConfig:`, updated);
+                    try { localStorage.setItem(`speaker-config-${videoId}`, JSON.stringify(updated)); } catch {}
+                }
+                return updated;
+            });
+
             return merged;
         });
     }, [videoId]);
