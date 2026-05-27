@@ -250,6 +250,34 @@ export function previewVoiceAssignments(config: SpeakerConfig): Record<string, s
 function detectSpeakers(segments: ClarifyTranscriptSegment[]): ClarifyTranscriptSegment[] {
   if (segments.length === 0) return segments;
 
+  // ═══ CRITICAL: If segments already have AssemblyAI speaker labels, PRESERVE them! ═══
+  // AssemblyAI labels look like "speaker_0", "speaker_1", etc.
+  // Gap-based detection should ONLY run when there are NO existing labels.
+  const hasExistingSpeakers = segments.filter(s => s.speaker && s.speaker !== 'speaker_0').length;
+  const uniqueExistingSpeakers = new Set(segments.filter(s => s.speaker).map(s => s.speaker)).size;
+  
+  if (hasExistingSpeakers > 0 && uniqueExistingSpeakers >= 2) {
+    console.log(`[speaker-detect] ✅ PRESERVING existing speaker labels (${uniqueExistingSpeakers} unique speakers, ${hasExistingSpeakers} labeled segments)`);
+    // Fill in any segments that DON'T have a speaker label
+    const result = segments.map((seg, i) => {
+      if (seg.speaker) return seg;
+      // For unlabeled segments, inherit from nearest labeled neighbor
+      let nearest = 'speaker_0';
+      let minDist = Infinity;
+      for (let j = 0; j < segments.length; j++) {
+        if (segments[j].speaker && Math.abs(j - i) < minDist) {
+          minDist = Math.abs(j - i);
+          nearest = segments[j].speaker!;
+        }
+      }
+      return { ...seg, speaker: nearest };
+    });
+    console.log(`[speaker-detect] Filled ${segments.length - hasExistingSpeakers} unlabeled segments`);
+    return result;
+  }
+
+  console.log(`[speaker-detect] No AssemblyAI labels found — running gap-based detection`);
+
   const N = segments.length;
   const TARGET_SPEAKERS = 3; // We want 3 speakers (user sees 3 radio button rows)
   const numBoundaries = TARGET_SPEAKERS - 1; // 2 boundaries → 3 groups
@@ -861,18 +889,16 @@ export function ClarifyAudioPanel({
           end: s.end || (data.transcript[i + 1]?.start || (s.start || 0) + 3),
           speaker: s.speaker || undefined,
         }));
-        // Detect speakers for new batch (uses gap-based detection)
-        const newSegs = detectSpeakers(rawNewSegs);
+        // detectSpeakers will preserve AssemblyAI labels if they exist in combined
         setTranslatedTranscript(prev => {
-          // Re-detect speakers across the full combined transcript for continuity
-          const combined = [...prev, ...newSegs];
+          const combined = [...prev, ...rawNewSegs];
           const withSpeakers = detectSpeakers(combined);
           translatedTxRef.current = withSpeakers;
           return withSpeakers;
         });
-        setTranslatedUpTo(prev => prev + newSegs.length);
+        setTranslatedUpTo(prev => prev + rawNewSegs.length);
         setNeedsMoreTranslation(!data.done);
-        console.log(`[clarify] Got ${newSegs.length} more translated segments (done: ${data.done})`);
+        console.log(`[clarify] Got ${rawNewSegs.length} more translated segments (done: ${data.done})`);
       } else {
         setNeedsMoreTranslation(false);
       }
@@ -1298,15 +1324,24 @@ export function ClarifyAudioPanel({
       // Notify parent
       if (onSpeakersDetected) onSpeakersDetected(uniqueSpeakers);
 
-      // Log results
+      // Log results with speaker distribution
+      const speakerDist: Record<string, number> = {};
+      updatedSegments.forEach(seg => {
+        const sp = seg.speaker || '(none)';
+        speakerDist[sp] = (speakerDist[sp] || 0) + 1;
+      });
+      
       console.log('[ASSEMBLY-DETECT] ════════════════════════════════════════');
       console.log('[ASSEMBLY-DETECT] ✅ AssemblyAI Detection Complete!');
       console.log('[ASSEMBLY-DETECT] Detected speakers:', uniqueSpeakers);
+      console.log('[ASSEMBLY-DETECT] Speaker distribution:', JSON.stringify(speakerDist));
       console.log('[ASSEMBLY-DETECT] Sample assignments:');
       updatedSegments.slice(0, 15).forEach((seg, i) => {
         console.log(`[ASSEMBLY-DETECT]   Seg ${i}: "${seg.text.substring(0, 40)}" → ${seg.speaker}`);
       });
       console.log('[ASSEMBLY-DETECT] ════════════════════════════════════════');
+      console.log('[ASSEMBLY-DETECT] 🔑 KEY: When you click Apply & Generate, the frozenVoiceMapRef');
+      console.log('[ASSEMBLY-DETECT]   will map these speakers to voices. Watch for [REGEN] logs.');
 
       return uniqueSpeakers;
 
