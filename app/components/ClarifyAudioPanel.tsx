@@ -599,6 +599,7 @@ export function ClarifyAudioPanel({
   const translatingMoreRef = useRef(false);
   const regenEpochRef = useRef(0);  // Incremented on each regeneration to invalidate stale generations
   const frozenVoiceMapRef = useRef<Record<string, string> | null>(null);  // FROZEN voice assignments — set once at regen, used for ALL segments
+  const assemblyAISpeakerMapRef = useRef<Map<number, string> | null>(null);  // Stores AssemblyAI speaker labels by segment index — survives React re-renders
 
   // Keep refs synced
   useEffect(() => { volRef.current = volume / 100; }, [volume]);
@@ -858,7 +859,11 @@ export function ClarifyAudioPanel({
     const start = Math.max(0, currentSegIdx);
     // Generate TTS for segments ahead of current position
     for (let i = start; i < Math.min(start + 8, translatedTranscript.length); i++) {
-      if (!cacheRef.current[i]) generateSeg(i, translatedTranscript[i].text);
+      if (!cacheRef.current[i]) {
+        // Pass speaker explicitly — use stored AssemblyAI map if available, else segment data
+        const speaker = assemblyAISpeakerMapRef.current?.get(i) || translatedTranscript[i].speaker;
+        generateSeg(i, translatedTranscript[i].text, speaker);
+      }
     }
 
     // Request more translation if approaching the edge of translated segments
@@ -1196,6 +1201,23 @@ export function ClarifyAudioPanel({
     }
 
     if (segs.length > 0) {
+      // ═══ ★ CRITICAL FIX: Re-apply AssemblyAI speaker labels from stored map ═══
+      // React re-renders can overwrite translatedTxRef via the useEffect sync,
+      // losing the AssemblyAI speaker labels. The stored map is the source of truth.
+      if (assemblyAISpeakerMapRef.current && assemblyAISpeakerMapRef.current.size > 0) {
+        const storedMap = assemblyAISpeakerMapRef.current;
+        console.log(`[REGEN] ★ Re-applying stored AssemblyAI speaker map (${storedMap.size} entries)`);
+        segs = segs.map((seg, i) => ({
+          ...seg,
+          speaker: storedMap.get(i) || seg.speaker || 'speaker_0',
+        }));
+        translatedTxRef.current = segs;
+        setTranslatedTranscript(segs);
+        console.log('[REGEN] ★ Speaker labels restored from assemblyAISpeakerMapRef');
+      } else {
+        console.log('[REGEN] No stored AssemblyAI speaker map — will use gap-based detection');
+      }
+
       // ═══ CRITICAL: Check speaker labels on segments ═══
       const dist: Record<string, number> = {};
       let noSpeakerCount = 0;
@@ -1213,15 +1235,16 @@ export function ClarifyAudioPanel({
         console.log(`[REGEN]   Seg ${i}: speaker="${s.speaker}" text="${(s.text || '').substring(0, 40)}"`);
       });
 
-      // ═══ ALWAYS re-detect speakers to ensure labels are present ═══
-      // This is the SAFETY NET — even if detection already ran, re-run to guarantee
-      // speaker labels exist on every segment before we generate TTS
-      console.log(`[REGEN] Running detectSpeakers() as safety net (${noSpeakerCount} missing speakers)...`);
-      segs = detectSpeakers(segs);
-      translatedTxRef.current = segs;
-      // CRITICAL: Also sync the STATE so the useEffect (translatedTxRef.current = translatedTranscript)
-      // doesn't overwrite our re-detected speakers with stale data during React re-renders
-      setTranslatedTranscript(segs);
+      // ═══ SAFETY NET: Only run gap-based detection if we DON'T have AssemblyAI labels ═══
+      // (If AssemblyAI map was applied above, skip — gap-based detection is less accurate)
+      if (!assemblyAISpeakerMapRef.current || assemblyAISpeakerMapRef.current.size === 0) {
+        console.log(`[REGEN] Running detectSpeakers() as safety net (${noSpeakerCount} missing speakers)...`);
+        segs = detectSpeakers(segs);
+        translatedTxRef.current = segs;
+        setTranslatedTranscript(segs);
+      } else {
+        console.log('[REGEN] Skipping gap-based detectSpeakers() — AssemblyAI labels already applied');
+      }
 
       // Verify result
       const dist2: Record<string, number> = {};
@@ -1337,6 +1360,10 @@ export function ClarifyAudioPanel({
 
       const asmSegments: AssemblySegment[] = detectData.segments;
       const speakerMap = matchSpeakerSegments(ytSegments, asmSegments);
+
+      // ★ PERSIST the speaker map in a ref so it survives React re-renders
+      assemblyAISpeakerMapRef.current = speakerMap;
+      console.log('[ASSEMBLY-DETECT] ★ Speaker map saved to assemblyAISpeakerMapRef (' + speakerMap.size + ' entries)');
 
       // Step 4: Apply speaker labels to transcript segments
       console.log('[ASSEMBLY-DETECT] Step 4: Applying speaker labels...');
