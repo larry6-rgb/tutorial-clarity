@@ -726,9 +726,33 @@ export function ClarifyAudioPanel({
           }
         }
       } else {
-        // NO FROZEN MAP — pre-Apply mode, use default
-        voice = DEFAULT_VOICE;
-        source = 'PRE-APPLY';
+        // NO FROZEN MAP — try to auto-create one from available speaker info
+        const cfg = speakerConfigRef.current;
+        if (cfg && Object.keys(cfg).length > 0) {
+          // Config exists (user has seen speaker UI) → auto-freeze a voice map
+          _assignCallCounter = 0;
+          const autoMap = assignVoicesToSpeakers(cfg);
+          frozenVoiceMapRef.current = Object.freeze({ ...autoMap });
+          voice = autoMap[speakerId] || DEFAULT_VOICE;
+          source = 'AUTO-FROZEN-FROM-CONFIG';
+          console.log(`[VOICE] Auto-created frozen map from config:`, autoMap);
+        } else if (assemblyAISpeakerMapRef.current && assemblyAISpeakerMapRef.current.size > 0) {
+          // AssemblyAI detected speakers but no config yet → use default genders
+          const uniqueSpeakers = Array.from(new Set(assemblyAISpeakerMapRef.current.values())).sort();
+          const defaultGenders = ['female', 'male', 'female', 'male', 'female', 'male'];
+          const autoConfig: Record<string, 'male' | 'female'> = {};
+          uniqueSpeakers.forEach((sp, idx) => { autoConfig[sp] = defaultGenders[idx % defaultGenders.length] as 'male' | 'female'; });
+          _assignCallCounter = 0;
+          const autoMap = assignVoicesToSpeakers(autoConfig);
+          frozenVoiceMapRef.current = Object.freeze({ ...autoMap });
+          voice = autoMap[speakerId] || DEFAULT_VOICE;
+          source = 'AUTO-FROZEN-FROM-ASSEMBLY';
+          console.log(`[VOICE] Auto-created frozen map from AssemblyAI:`, autoMap);
+        } else {
+          // No speaker info at all — true pre-detection mode
+          voice = DEFAULT_VOICE;
+          source = 'PRE-DETECT';
+        }
       }
       
       // Determine gender: prefer explicit config, else infer from voice pool membership
@@ -1434,8 +1458,20 @@ export function ClarifyAudioPanel({
         console.log(`[ASSEMBLY-DETECT]   Seg ${i}: "${seg.text.substring(0, 40)}" → ${seg.speaker}`);
       });
       console.log('[ASSEMBLY-DETECT] ════════════════════════════════════════');
-      console.log('[ASSEMBLY-DETECT] 🔑 KEY: When you click Apply & Generate, the frozenVoiceMapRef');
-      console.log('[ASSEMBLY-DETECT]   will map these speakers to voices. Watch for [REGEN] logs.');
+
+      // ★ AUTO-CREATE frozen voice map immediately so TTS uses correct voices
+      // (Don't wait for user to click Apply & Regenerate)
+      if (uniqueSpeakers.length > 1) {
+        const defaultGenders = ['female', 'male', 'female', 'male', 'female', 'male'] as const;
+        const autoConfig: Record<string, 'male' | 'female'> = {};
+        uniqueSpeakers.forEach((sp, idx) => { autoConfig[sp] = defaultGenders[idx % defaultGenders.length]; });
+        _assignCallCounter = 0;
+        const autoMap = assignVoicesToSpeakers(autoConfig);
+        frozenVoiceMapRef.current = Object.freeze({ ...autoMap });
+        console.log('[ASSEMBLY-DETECT] ★ Auto-created frozen voice map:', autoMap);
+        console.log('[ASSEMBLY-DETECT] ★ New TTS segments will now use distinct voices!');
+        console.log('[ASSEMBLY-DETECT] ★ Click "Apply & Regenerate" to re-generate existing audio with these voices.');
+      }
 
       return uniqueSpeakers;
 
@@ -1683,6 +1719,17 @@ export function ClarifyAudioPanel({
           uniqueSpeakers.sort();
           console.log(`[speaker-config] Detected ${uniqueSpeakers.length} speakers:`, uniqueSpeakers);
           onSpeakersDetected(uniqueSpeakers);
+
+          // ★ AUTO-CREATE initial frozen voice map so TTS generation uses distinct voices immediately
+          if (uniqueSpeakers.length > 1 && (!frozenVoiceMapRef.current || Object.keys(frozenVoiceMapRef.current).length === 0)) {
+            const defaultGenders = ['female', 'male', 'female', 'male', 'female', 'male'] as const;
+            const autoConfig: Record<string, 'male' | 'female'> = {};
+            uniqueSpeakers.forEach((sp, idx) => { autoConfig[sp] = defaultGenders[idx % defaultGenders.length]; });
+            _assignCallCounter = 0;
+            const autoMap = assignVoicesToSpeakers(autoConfig);
+            frozenVoiceMapRef.current = Object.freeze({ ...autoMap });
+            console.log(`[speaker-config] ★ Auto-created initial voice map:`, autoMap);
+          }
         }
       }
 
@@ -1694,12 +1741,16 @@ export function ClarifyAudioPanel({
       setProcessingStage(`Ready! ${translated}/${total} segments translated`);
 
       if (mode !== 'subtitles_only') {
-        // Generate first batch of TTS audio
+        // Generate first batch of TTS audio — pass speaker overrides from detected speakers
         setProcessingStage('Generating AI audio...');
         const segsForTTS = data.transcript || [];
         const batch = segsForTTS.slice(0, 8);
-        const parsedBatch = batch.map((s: any) => s.text || '');
-        await Promise.allSettled(parsedBatch.map((text: string, i: number) => generateSeg(i, text)));
+        await Promise.allSettled(batch.map((s: any, i: number) => {
+          const text = s.text || '';
+          // Use speaker from transSegs (which has gap-based detection labels)
+          const speaker = transSegs[i]?.speaker;
+          return generateSeg(i, text, speaker);
+        }));
 
         setProcessingStage('Ready! Scheduler mode - natural speed playback');
         setPhase('ready');
