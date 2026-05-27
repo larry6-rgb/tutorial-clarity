@@ -1238,6 +1238,16 @@ export function ClarifyAudioPanel({
         }
       });
 
+      // ═══ VOICE ASSIGNMENT SUMMARY — what you should hear ═══
+      console.log('[REGEN] ╔══════════════════════════════════════════════╗');
+      console.log('[REGEN] ║   VOICE ASSIGNMENT SUMMARY                  ║');
+      console.log('[REGEN] ╠══════════════════════════════════════════════╣');
+      Object.entries(frozenMap).forEach(([speaker, voice]) => {
+        const count = segs.filter(s => s.speaker === speaker).length;
+        console.log(`[REGEN] ║   ${speaker} → ${voice} (${count} segments)`.padEnd(49) + '║');
+      });
+      console.log('[REGEN] ╚══════════════════════════════════════════════╝');
+
       for (let batchStart = 0; batchStart < segs.length; batchStart += 8) {
         if (regenEpochRef.current !== thisEpoch) {
           console.log(`[REGEN] Epoch ${thisEpoch} superseded, aborting`);
@@ -1249,7 +1259,7 @@ export function ClarifyAudioPanel({
         await Promise.allSettled(batch.map((s, j) => generateSeg(batchStart + j, s.text, s.speaker)));
         console.log(`[REGEN] Batch ${batchStart}-${batchStart + batch.length - 1} done`);
       }
-      console.log(`[REGEN] All ${segs.length} segments regenerated`);
+      console.log(`[REGEN] ✅ All ${segs.length} segments regenerated with multi-voice!`);
     } else {
       console.warn('[REGEN] ⚠️ NO SEGMENTS to regenerate! Both translated and original are empty.');
     }

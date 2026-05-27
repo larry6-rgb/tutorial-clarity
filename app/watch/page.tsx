@@ -999,10 +999,12 @@ function WatchPageContent() {
         console.log('[TRACE-3-APPLY] Current speakerConfig state:', speakerConfig);
         console.log('[TRACE-3-APPLY] Detected speakers:', detectedSpeakers);
 
-        // Build COMPLETE config: include defaults ('male') for any speaker not explicitly set
+        // Build COMPLETE config — alternate male/female by default for distinct voices
+        // (Only 2 male voices exist, so 3 males would give duplicate voices)
+        const defaultGenders = ['female', 'male', 'female', 'male', 'female', 'male'] as const;
         const fullConfig: SpeakerConfig = {};
-        detectedSpeakers.forEach(sid => {
-            fullConfig[sid] = speakerConfig[sid] || 'male';
+        detectedSpeakers.forEach((sid, idx) => {
+            fullConfig[sid] = speakerConfig[sid] || defaultGenders[idx % defaultGenders.length];
         });
         console.log('[TRACE-3-APPLY] Full config to save:', fullConfig);
 
@@ -2140,9 +2142,10 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                     </div>
                                                 )}
                                                 {(() => {
+                                                    const defaultGenders = ['female', 'male', 'female', 'male', 'female', 'male'] as const;
                                                     const previewConfig: SpeakerConfig = {};
-                                                    detectedSpeakers.forEach(sid => {
-                                                        previewConfig[sid] = speakerConfig[sid] || 'male';
+                                                    detectedSpeakers.forEach((sid, i) => {
+                                                        previewConfig[sid] = speakerConfig[sid] || defaultGenders[i % defaultGenders.length];
                                                     });
                                                     const voiceMap = previewVoiceAssignments(previewConfig);
 
@@ -2251,10 +2254,11 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                         try { sessionStorage.clear(); } catch (e) { console.warn('[BTN-CLICK] sessionStorage.clear failed:', e); }
                                                         console.log('[BTN-CLICK] Storage cleared');
 
-                                                        // Build FULL config with all detected speakers
+                                                        // Build FULL config — alternate male/female defaults for distinct voices
+                                                        const nuclearDefaults = ['female', 'male', 'female', 'male', 'female', 'male'] as const;
                                                         const fullConfig: Record<string, 'male' | 'female'> = {};
-                                                        detectedSpeakers.forEach(sid => {
-                                                            fullConfig[sid] = speakerConfig[sid] || 'male';
+                                                        detectedSpeakers.forEach((sid, i) => {
+                                                            fullConfig[sid] = speakerConfig[sid] || nuclearDefaults[i % nuclearDefaults.length];
                                                         });
                                                         console.log('[BTN-CLICK] Config to apply:', JSON.stringify(fullConfig));
 
