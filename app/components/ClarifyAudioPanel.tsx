@@ -605,6 +605,7 @@ export function ClarifyAudioPanel({
   const translatingMoreRef = useRef(false);
   const regenEpochRef = useRef(0);  // Incremented on each regeneration to invalidate stale generations
   const frozenVoiceMapRef = useRef<Record<string, string> | null>(null);  // FROZEN voice assignments — set once at regen, used for ALL segments
+  const frozenConfigRef = useRef<SpeakerConfig | null>(null);  // The config used to CREATE frozenVoiceMapRef — must stay in sync
   const assemblyAISpeakerMapRef = useRef<Map<number, string> | null>(null);  // Stores AssemblyAI speaker labels by segment index — survives React re-renders
   const assemblyAILabelsActiveRef = useRef(false);  // Protection flag — when true, gap-based detection is disabled
 
@@ -752,6 +753,7 @@ export function ClarifyAudioPanel({
           _assignCallCounter = 0;
           const autoMap = assignVoicesToSpeakers(cfg);
           frozenVoiceMapRef.current = Object.freeze({ ...autoMap });
+          frozenConfigRef.current = { ...cfg };  // ★ Store config alongside map
           voice = autoMap[speakerId] || DEFAULT_VOICE;
           source = 'AUTO-FROZEN-FROM-CONFIG';
           console.log(`[VOICE] Auto-created frozen map from config:`, autoMap);
@@ -764,6 +766,7 @@ export function ClarifyAudioPanel({
           _assignCallCounter = 0;
           const autoMap = assignVoicesToSpeakers(autoConfig);
           frozenVoiceMapRef.current = Object.freeze({ ...autoMap });
+          frozenConfigRef.current = { ...autoConfig };  // ★ Store config alongside map
           voice = autoMap[speakerId] || DEFAULT_VOICE;
           source = 'AUTO-FROZEN-FROM-ASSEMBLY';
           console.log(`[VOICE] Auto-created frozen map from AssemblyAI:`, autoMap);
@@ -774,8 +777,10 @@ export function ClarifyAudioPanel({
         }
       }
       
-      // Determine gender: prefer explicit config, else infer from voice pool membership
-      const configGender = speakerConfigRef.current?.[speakerId];
+      // Determine gender: use FROZEN config (matches frozen map), fallback to speakerConfigRef, else infer from voice
+      // ★ FIX: Must use frozenConfigRef — speakerConfigRef can be overwritten by React useEffect
+      const configGender = frozenConfigRef.current?.[speakerId]
+        || speakerConfigRef.current?.[speakerId];
       const gender = configGender
         || (FEMALE_VOICES.includes(voice) ? 'female' : 'male');
 
@@ -1334,9 +1339,10 @@ export function ClarifyAudioPanel({
       console.error('[REGEN] ⚠️ VOICE MAP IS EMPTY! Segments will fall back to default.');
     }
 
-    // ── STEP 4: FREEZE the map ──
+    // ── STEP 4: FREEZE the map AND the config that created it ──
     const frozenMap = Object.freeze({ ...voiceMap });
     frozenVoiceMapRef.current = frozenMap;
+    frozenConfigRef.current = { ...frozenConfig };  // ★ Store config alongside map
     console.log('[REGEN] ════════════════════════════════════════════════');
     console.log('[REGEN] FROZEN MAP CREATED:');
     console.log('[REGEN]', JSON.stringify(frozenMap));
@@ -1651,6 +1657,7 @@ export function ClarifyAudioPanel({
         _assignCallCounter = 0;
         const autoMap = assignVoicesToSpeakers(autoConfig);
         frozenVoiceMapRef.current = Object.freeze({ ...autoMap });
+        frozenConfigRef.current = { ...autoConfig };  // ★ Store config alongside map
         console.log('[ASSEMBLY-DETECT] ★ Auto-created frozen voice map:', autoMap);
         console.log('[ASSEMBLY-DETECT] ★ New TTS segments will now use distinct voices!');
         console.log('[ASSEMBLY-DETECT] ★ Click "Apply & Regenerate" to re-generate existing audio with these voices.');
@@ -1689,14 +1696,17 @@ export function ClarifyAudioPanel({
 
     // ── VOICE ASSIGNMENT VERIFICATION ──
     console.log('🔍 VOICE ASSIGNMENT VERIFICATION');
-    console.log('  Speaker Config (speakerConfigRef):', JSON.stringify(speakerConfigRef.current));
+    console.log('  Frozen Config (used to create map):', JSON.stringify(frozenConfigRef.current));
+    console.log('  Speaker Config (current prop):', JSON.stringify(speakerConfigRef.current));
     console.log('  Frozen Voice Map:', JSON.stringify(frozenMap));
     console.log('  AssemblyAI Speaker Map:', assemblyAISpeakerMapRef.current ? `${assemblyAISpeakerMapRef.current.size} entries` : 'null');
     console.log('');
 
     // Check for common bugs
+    // ★ FIX: Use frozenConfigRef (the config that CREATED the frozen map), not speakerConfigRef
+    //   speakerConfigRef can be overwritten by React useEffect after map creation
     const issues: string[] = [];
-    const cfg = speakerConfigRef.current || {};
+    const cfg = frozenConfigRef.current || speakerConfigRef.current || {};
     const mapVoices = Object.values(frozenMap);
     if (Object.keys(frozenMap).length === 0) {
       issues.push('Frozen voice map is EMPTY — no voices assigned!');
@@ -1948,6 +1958,7 @@ export function ClarifyAudioPanel({
             _assignCallCounter = 0;
             const autoMap = assignVoicesToSpeakers(autoConfig);
             frozenVoiceMapRef.current = Object.freeze({ ...autoMap });
+            frozenConfigRef.current = { ...autoConfig };  // ★ Store config alongside map
             console.log(`[speaker-config] ★ Auto-created initial voice map:`, autoMap);
           }
         }
