@@ -45,6 +45,7 @@ function WatchPageContent() {
     const [currentTime, setCurrentTime] = useState(0);
     const [duration, setDuration] = useState(0);
     const [savedVideos, setSavedVideos] = useState<SavedVideo[]>([]);
+    const savedVideosLoaded = useRef(false); // prevents sync wiping data before initial load
     const [newVideoUrl, setNewVideoUrl] = useState('');
     const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
     const [transcriptLoading, setTranscriptLoading] = useState(false);
@@ -345,8 +346,9 @@ function WatchPageContent() {
             });
 
             setSavedVideos(merged);
+            savedVideosLoaded.current = true; // now safe to sync changes back
 
-            // If we had local-only videos, push them to the API so extension can see them too
+            // If we had local-only videos, clear them (now stored in API)
             if (localVideos.length > 0) {
                 localStorage.removeItem('tutorialClaritySavedVideos');
             }
@@ -439,7 +441,9 @@ function WatchPageContent() {
     }, [currentTime, transcript, expandedSections]);
 
     // Sync savedVideos state to API file whenever it changes
+    // Guard: don't run until initial load is complete (prevents wiping data on mount)
     useEffect(() => {
+        if (!savedVideosLoaded.current) return;
         fetch('/api/save-video', {
             method: 'PUT',
             headers: { 'Content-Type': 'application/json' },
@@ -2060,36 +2064,20 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                                 <p style={{ fontSize: '10px', color: '#9ca3af', marginBottom: '4px' }}>
                                                                     {formatDate(video.dateSaved)}
                                                                 </p>
-                                                                <div style={{ display: 'flex', gap: '4px' }}>
-                                                                    <button
-                                                                        onClick={() => handleTogglePersistent(video.id)}
-                                                                        style={{
-                                                                            fontSize: '10px',
-                                                                            padding: '3px 6px',
-                                                                            borderRadius: '3px',
-                                                                            border: 'none',
-                                                                            cursor: 'pointer',
-                                                                            backgroundColor: video.isPersistent ? '#eab308' : '#374151',
-                                                                            color: 'white'
-                                                                        }}
-                                                                    >
-                                                                        {video.isPersistent ? '📌 Pinned' : '📌 Pin'}
-                                                                    </button>
-                                                                    <button
-                                                                        onClick={() => handleDeleteVideo(video.id)}
-                                                                        style={{
-                                                                            fontSize: '10px',
-                                                                            padding: '3px 6px',
-                                                                            borderRadius: '3px',
-                                                                            border: 'none',
-                                                                            cursor: 'pointer',
-                                                                            backgroundColor: '#ef4444',
-                                                                            color: 'white'
-                                                                        }}
-                                                                    >
-                                                                        Delete
-                                                                    </button>
-                                                                </div>
+                                                                <button
+                                                                    onClick={() => handleDeleteVideo(video.id)}
+                                                                    style={{
+                                                                        fontSize: '10px',
+                                                                        padding: '3px 6px',
+                                                                        borderRadius: '3px',
+                                                                        border: 'none',
+                                                                        cursor: 'pointer',
+                                                                        backgroundColor: '#ef4444',
+                                                                        color: 'white'
+                                                                    }}
+                                                                >
+                                                                    🗑 Delete
+                                                                </button>
                                                             </div>
                                                         </div>
                                                     </div>
