@@ -85,6 +85,31 @@ function WatchPageContent() {
     const [hasUnsavedVoiceConfig, setHasUnsavedVoiceConfig] = useState(false);
     const [isRegenerating, setIsRegenerating] = useState(false);
 
+    // ── ZOOM STATE ──
+    const [zoomBase, setZoomBase] = useState<{ sx: number; sy: number; tx: number; ty: number } | null>(null);
+    const [zoomSize, setZoomSize] = useState(100);
+    const [zoomMode, setZoomMode] = useState(false); // true = draw-box mode active
+    const [zoomDrawing, setZoomDrawing] = useState(false);
+    const zoomStartRef = useRef<{ x: number; y: number } | null>(null);
+    const [zoomRect, setZoomRect] = useState<{ x: number; y: number; w: number; h: number } | null>(null);
+    const videoContainerRef = useRef<HTMLDivElement>(null);
+    // Ref so keyboard handler always sees current zoom state without stale closure
+    const zoomBaseRef = useRef<{ sx: number; sy: number; tx: number; ty: number } | null>(null);
+    useEffect(() => { zoomBaseRef.current = zoomBase; }, [zoomBase]);
+
+    // Derive CSS transform from base + size slider
+    const zoomTransform = zoomBase ? (() => {
+        const f = zoomSize / 100;
+        const sx = zoomBase.sx * f;
+        const sy = zoomBase.sy * f;
+        const container = videoContainerRef.current;
+        const W = container?.offsetWidth ?? 0;
+        const H = container?.offsetHeight ?? 0;
+        const tx = zoomBase.tx * f + (W * (1 - f)) / 2;
+        const ty = zoomBase.ty * f + (H * (1 - f)) / 2;
+        return { scale: `${sx}, ${sy}`, translate: `${tx}px, ${ty}px` };
+    })() : null;
+
     // Clarify bar position/size — persisted to localStorage
     const CLARIFY_BAR_KEY = 'clarifyBarLayout';
     const getInitialClarifyLayout = () => {
@@ -500,13 +525,28 @@ function WatchPageContent() {
     useEffect(() => {
         const handleKeyPress = (e: KeyboardEvent) => {
             // Don't intercept keyboard events when user is typing in input fields
+            // Exception: always allow spacebar to exit zoom mode
             const activeTag = (document.activeElement?.tagName || '').toLowerCase();
             if (activeTag === 'input' || activeTag === 'textarea' || activeTag === 'select') {
-                return;
+                if (!(e.code === 'Space' && zoomBaseRef.current)) return;
             }
             if (e.code === 'Space') {
                 e.preventDefault();
                 e.stopPropagation();
+
+                // Exit zoom mode and resume play
+                if (zoomBaseRef.current) {
+                    setZoomBase(null);
+                    setZoomMode(false);
+                    setZoomRect(null);
+                    if (iframeRef.current?.contentWindow) {
+                        iframeRef.current.contentWindow.postMessage(
+                            JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'
+                        );
+                    }
+                    setIsPlaying(true);
+                    return;
+                }
 
                 console.log(`[watch-spacebar] Pressed. isPlaying=${isPlaying}, aiActive=${clarifyHandlersRef.current?.isPlaying() ?? 'no-ref'}`);
 
@@ -553,7 +593,7 @@ function WatchPageContent() {
         return () => {
             window.removeEventListener('keydown', handleKeyPress, true);
         };
-    }, [isPlaying]);
+    }, [isPlaying, zoomTransform]);
 
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
@@ -989,6 +1029,14 @@ function WatchPageContent() {
         });
     }, [videoId]);
 
+    // Reset zoom when navigating to a new video
+    useEffect(() => {
+        setZoomBase(null);
+        setZoomSize(100);
+        setZoomMode(false);
+        setZoomRect(null);
+    }, [videoId]);
+
     // Clarify bar drag handler
     useEffect(() => {
         if (!isDraggingClarifyBar) return;
@@ -1110,13 +1158,134 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                 className="flex-1 outline-none relative"
                 style={{ marginRight: '240px' }}
             >
-                <iframe
-                    ref={iframeRef}
-                    className="w-full h-full pointer-events-auto"
-                    src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=1`}
-                    allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                    allowFullScreen
-                />
+                {/* ── Video wrapper — clips zoomed iframe ── */}
+                <div
+                    ref={videoContainerRef}
+                    style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}
+                >
+                    <iframe
+                        ref={iframeRef}
+                        className="w-full h-full"
+                        style={{
+                            pointerEvents: zoomTransform ? 'none' : 'auto',
+                            transformOrigin: '0 0',
+                            transform: zoomTransform
+                                ? `translate(${zoomTransform.translate}) scale(${zoomTransform.scale})`
+                                : 'none',
+                            transition: zoomTransform ? 'transform 0.2s ease' : 'none',
+                            filter: zoomTransform
+                                ? 'contrast(1.35) saturate(1.15) brightness(1.04)'
+                                : 'none',
+                        }}
+                        src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=1`}
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                    />
+
+                    {/* ── Zoom button — appears when paused and not zoomed ── */}
+                    {!isPlaying && !zoomBase && !zoomMode && (
+                        <div style={{ position: 'absolute', bottom: 12, right: 12, zIndex: 10 }}>
+                            <button
+                                onClick={() => setZoomMode(true)}
+                                style={{
+                                    backgroundColor: 'rgba(0,0,0,0.75)', color: '#facc15',
+                                    border: '1px solid #facc15', borderRadius: '6px',
+                                    padding: '6px 12px', fontSize: '13px', fontWeight: 'bold',
+                                    cursor: 'pointer',
+                                }}
+                            >
+                                🔍 Zoom
+                            </button>
+                        </div>
+                    )}
+
+                    {/* ── Zoom draw overlay — visible when zoomMode is active ── */}
+                    {zoomMode && !zoomBase && (
+                        <div
+                            style={{ position: 'absolute', inset: 0, cursor: 'crosshair', zIndex: 10 }}
+                            onMouseDown={e => {
+                                const rect = videoContainerRef.current!.getBoundingClientRect();
+                                zoomStartRef.current = { x: e.clientX - rect.left, y: e.clientY - rect.top };
+                                setZoomDrawing(true);
+                                setZoomRect(null);
+                            }}
+                            onMouseMove={e => {
+                                if (!zoomDrawing || !zoomStartRef.current) return;
+                                const rect = videoContainerRef.current!.getBoundingClientRect();
+                                const cx = e.clientX - rect.left;
+                                const cy = e.clientY - rect.top;
+                                setZoomRect({
+                                    x: Math.min(zoomStartRef.current.x, cx),
+                                    y: Math.min(zoomStartRef.current.y, cy),
+                                    w: Math.abs(cx - zoomStartRef.current.x),
+                                    h: Math.abs(cy - zoomStartRef.current.y),
+                                });
+                            }}
+                            onMouseUp={() => {
+                                setZoomDrawing(false);
+                                if (!zoomRect || zoomRect.w < 20 || zoomRect.h < 20) {
+                                    setZoomRect(null);
+                                    return;
+                                }
+                                const container = videoContainerRef.current!;
+                                const W = container.offsetWidth;
+                                const H = container.offsetHeight;
+                                const sx = W / zoomRect.w;
+                                const sy = H / zoomRect.h;
+                                setZoomBase({ sx, sy, tx: -zoomRect.x * sx, ty: -zoomRect.y * sy });
+                                setZoomSize(100);
+                                setZoomRect(null);
+                            }}
+                        >
+                            {/* Draw the selection rectangle as user drags */}
+                            {zoomRect && zoomRect.w > 4 && zoomRect.h > 4 && (
+                                <div style={{
+                                    position: 'absolute',
+                                    left: zoomRect.x, top: zoomRect.y,
+                                    width: zoomRect.w, height: zoomRect.h,
+                                    border: '2px solid #facc15',
+                                    backgroundColor: 'rgba(250,204,21,0.1)',
+                                    pointerEvents: 'none',
+                                }} />
+                            )}
+                            {/* Hint text */}
+                            <div style={{
+                                position: 'absolute', bottom: 12, left: '50%',
+                                transform: 'translateX(-50%)',
+                                backgroundColor: 'rgba(0,0,0,0.7)', color: '#facc15',
+                                padding: '4px 12px', borderRadius: '4px',
+                                fontSize: '13px', fontWeight: 'bold', pointerEvents: 'none',
+                                whiteSpace: 'nowrap',
+                            }}>
+                                🔍 Draw a box to zoom — Spacebar to resume
+                            </div>
+                        </div>
+                    )}
+
+                    {/* ── Zoom active indicator + size slider ── */}
+                    {zoomTransform && (
+                        <div style={{
+                            position: 'absolute', bottom: 12, left: '50%',
+                            transform: 'translateX(-50%)',
+                            backgroundColor: 'rgba(0,0,0,0.8)', color: '#facc15',
+                            padding: '8px 16px', borderRadius: '8px',
+                            fontSize: '13px', fontWeight: 'bold',
+                            display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
+                            whiteSpace: 'nowrap',
+                        }}>
+                            <span>🔍 Zoomed — Press Spacebar to exit and resume</span>
+                            <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'normal', fontSize: '12px' }}>
+                                <span>Smaller</span>
+                                <input
+                                    type="range" min={40} max={100} value={zoomSize}
+                                    onChange={e => setZoomSize(Number(e.target.value))}
+                                    style={{ width: '140px', cursor: 'pointer' }}
+                                />
+                                <span>Larger</span>
+                            </div>
+                        </div>
+                    )}
+                </div>
 
                 {/* ── AI subtitle overlay ── */}
                 {clarifySubtitle && (
@@ -2177,6 +2346,41 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                     </div>
                                 )}
                             </div>
+
+                            {/* 8. ZOOM */}
+                            <div style={{ borderBottom: '1px solid #374151' }}>
+                                <h3
+                                    onClick={() => toggleSection('zoom')}
+                                    style={{
+                                        margin: 0, color: 'white', backgroundColor: '#1f2937',
+                                        fontWeight: 'bold', padding: '12px',
+                                        cursor: 'pointer', display: 'flex',
+                                        justifyContent: 'space-between', alignItems: 'center'
+                                    }}
+                                >
+                                    <span>8. ZOOM 🔍</span>
+                                    <span>{expandedSections.has('zoom') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('zoom') && (
+                                    <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '13px', color: '#d1d5db', lineHeight: '1.8' }}>
+                                        <p style={{ margin: '0 0 10px 0' }}>
+                                            Use Zoom to enlarge any area of the video — great for small print, charts, or anything that goes by too fast to read.
+                                        </p>
+                                        <ol style={{ margin: '0 0 10px 0', paddingLeft: '18px' }}>
+                                            <li>Pause your video.</li>
+                                            <li>Click the <strong>🔍 Zoom</strong> button that appears at the bottom-right of the video.</li>
+                                            <li>Left-click and hold your mouse at the <strong>top-left corner</strong> of the area you want to enlarge.</li>
+                                            <li>Continue holding the left button and drag to the <strong>lower-right corner</strong> of the area, then release.</li>
+                                            <li>If the image is too blurry at full size, use the <strong>Smaller / Larger slider</strong> that appears to shrink it — a smaller image is sharper.</li>
+                                            <li>When you are finished reading, press the <strong>Spacebar</strong> to exit zoom and resume play.</li>
+                                        </ol>
+                                        <p style={{ margin: 0, color: '#9ca3af', fontSize: '12px' }}>
+                                            <strong>Note:</strong> Image sharpness depends on the original video quality. High-definition videos will zoom more clearly than lower-resolution ones. The browser cannot sharpen beyond what the video itself contains.
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+
                         </div>
                     </div>
                 )}
