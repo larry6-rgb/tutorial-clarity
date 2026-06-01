@@ -2381,6 +2381,40 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
+                            {/* 9. CURSOR FOLLOWER */}
+                            <div style={{ borderBottom: '1px solid #374151' }}>
+                                <h3
+                                    onClick={() => toggleSection('cursor')}
+                                    style={{
+                                        margin: 0, color: 'white', backgroundColor: '#1f2937',
+                                        fontWeight: 'bold', padding: '12px',
+                                        cursor: 'pointer', display: 'flex',
+                                        justifyContent: 'space-between', alignItems: 'center'
+                                    }}
+                                >
+                                    <span>9. CURSOR FOLLOWER 🖱️</span>
+                                    <span>{expandedSections.has('cursor') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('cursor') && (
+                                    <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '13px', color: '#d1d5db', lineHeight: '1.8' }}>
+                                        <p style={{ margin: '0 0 10px 0' }}>
+                                            Some presenters move their mouse pointer so fast it's impossible to see where they're pointing before they move on. Cursor Follower lets you freeze the action and zoom in on exactly where the pointer landed.
+                                        </p>
+                                        <ol style={{ margin: '0 0 10px 0', paddingLeft: '18px' }}>
+                                            <li>Watch the video until the presenter's pointer lands on something important.</li>
+                                            <li>Press <strong>Spacebar</strong> to instantly freeze the video at that moment.</li>
+                                            <li>Click the <strong>🔍 Zoom</strong> button and draw a box around the area where the pointer stopped.</li>
+                                            <li>Read the enlarged content at your own pace.</li>
+                                            <li>Press <strong>Spacebar</strong> to exit zoom and resume play.</li>
+                                            <li>Repeat at the next key moment.</li>
+                                        </ol>
+                                        <p style={{ margin: 0, color: '#9ca3af', fontSize: '12px' }}>
+                                            You are always in control of the pace — no detail gets by you.
+                                        </p>
+                                    </div>
+                                )}
+                            </div>
+
                         </div>
                     </div>
                 )}
