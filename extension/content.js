@@ -97,56 +97,42 @@ function handleAltPress(e) {
   }
 }
 
-// Save current video to storage
+// Tutorial Clarity app URL — update this if running on a different port or domain
+const TC_URL = 'http://localhost:3000';
+
+// Save current video — POSTs to Tutorial Clarity API so it appears in section 4
 async function saveCurrentVideo() {
   const videoId = getCurrentVideoId();
-  
+
   if (!videoId) {
-    console.log('No video focused');
-    showNotification('No video selected', 'error');
+    showNotification('No video selected — hover over a video first', 'error');
     return;
   }
-  
-  const title = currentFocusedVideo 
+
+  const title = currentFocusedVideo
     ? getVideoTitle(currentFocusedVideo)
     : document.title.replace(' - YouTube', '');
-  
-  const videoData = {
-    id: videoId,
-    url: `https://www.youtube.com/watch?v=${videoId}`,
-    title: title,
-    dateSaved: new Date().toISOString(),
-    isPersistent: false
-  };
-  
-  // Get existing saved videos from localStorage
-  const existingData = localStorage.getItem('tutorialClaritySavedVideos');
-  let savedVideos = existingData ? JSON.parse(existingData) : [];
-  
-  // Check if already saved
-  if (savedVideos.some(v => v.id === videoId)) {
-    console.log('Video already saved');
-    showNotification('Video already saved!', 'info');
-    return;
+
+  try {
+    const response = await fetch(`${TC_URL}/api/save-video`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ videoId, title }),
+    });
+
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const data = await response.json();
+
+    if (data.message === 'Already saved') {
+      showNotification('Already in your saved list!', 'info');
+    } else {
+      showNotification('✅ Saved to Tutorial Clarity!', 'success');
+    }
+    console.log('[TC Extension] Saved:', videoId, title);
+  } catch (err) {
+    console.error('[TC Extension] Save failed:', err);
+    showNotification('Could not reach Tutorial Clarity — is the app running?', 'error');
   }
-  
-  // Add new video
-  savedVideos.push(videoData);
-  
-  // Keep only 20 non-persistent videos
-  const nonPersistent = savedVideos.filter(v => !v.isPersistent);
-  if (nonPersistent.length > 20) {
-    const oldestNonPersistent = nonPersistent.sort((a, b) => 
-      new Date(a.dateSaved).getTime() - new Date(b.dateSaved).getTime()
-    )[0];
-    savedVideos = savedVideos.filter(v => v.id !== oldestNonPersistent.id);
-  }
-  
-  // Save to localStorage
-  localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(savedVideos));
-  
-  console.log('Video saved:', videoData);
-  showNotification('Video saved to Tutorial Clarity!', 'success');
 }
 
 // Show notification

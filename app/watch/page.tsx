@@ -322,24 +322,36 @@ function WatchPageContent() {
         setUnknownSpeakerPrompt({ speakerId, assign });
     }, []);
 
+    // Load saved videos — API file is the source of truth (written by extension),
+    // localStorage is a fallback for videos added via the paste box before extension was set up.
     useEffect(() => {
-        const stored = localStorage.getItem('tutorialClaritySavedVideos');
-        if (stored) {
-            const videos: SavedVideo[] = JSON.parse(stored);
-            const sevenDaysAgo = new Date();
-            sevenDaysAgo.setDate(sevenDaysAgo.getDate() - 7);
+        async function loadSavedVideos() {
+            let apiVideos: SavedVideo[] = [];
+            try {
+                const res = await fetch('/api/save-video');
+                if (res.ok) apiVideos = await res.json();
+            } catch {
+                console.log('[saved-videos] API not available, using localStorage only');
+            }
 
-            const filtered = videos.filter(video => {
-                if (video.isPersistent) return true;
-                const savedDate = new Date(video.dateSaved);
-                return savedDate > sevenDaysAgo;
+            // Merge with any localStorage videos (backward compat)
+            const stored = localStorage.getItem('tutorialClaritySavedVideos');
+            const localVideos: SavedVideo[] = stored ? JSON.parse(stored) : [];
+
+            // Combine — API videos take precedence, add any local-only ones
+            const merged = [...apiVideos];
+            localVideos.forEach(lv => {
+                if (!merged.some(v => v.id === lv.id)) merged.push(lv);
             });
 
-            setSavedVideos(filtered);
-            if (filtered.length !== videos.length) {
-                localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(filtered));
+            setSavedVideos(merged);
+
+            // If we had local-only videos, push them to the API so extension can see them too
+            if (localVideos.length > 0) {
+                localStorage.removeItem('tutorialClaritySavedVideos');
             }
         }
+        loadSavedVideos();
     }, []);
 
     // Derive a primitive boolean so React can reliably detect changes
@@ -426,10 +438,18 @@ function WatchPageContent() {
         }
     }, [currentTime, transcript, expandedSections]);
 
+    // Sync savedVideos state to API file whenever it changes
     useEffect(() => {
-        if (savedVideos.length > 0) {
-            localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(savedVideos));
-        }
+        fetch('/api/save-video', {
+            method: 'PUT',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify(savedVideos),
+        }).catch(() => {
+            // Fallback to localStorage if API unavailable
+            if (savedVideos.length > 0) {
+                localStorage.setItem('tutorialClaritySavedVideos', JSON.stringify(savedVideos));
+            }
+        });
     }, [savedVideos]);
 
     useEffect(() => {
@@ -1899,7 +1919,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
-                            {/* 4. SAVED SURFS */}
+                            {/* 4. SAVED FOR FUTURE VIEWING */}
                             <div style={{ borderBottom: '1px solid #374151' }}>
                                 <h3
                                     onClick={() => toggleSection('saved')}
@@ -1913,14 +1933,47 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         alignItems: 'center'
                                     }}
                                 >
-                                    <span>4. SAVED SURFS</span>
+                                    <span>4. SAVED FOR FUTURE VIEWING</span>
                                     <span>{expandedSections.has('saved') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('saved') && (
                                     <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
+
+                                        {/* ── Extension setup instructions ── */}
+                                        <div style={{
+                                            backgroundColor: 'rgba(37,99,235,0.12)', border: '1px solid #2563eb',
+                                            borderRadius: '8px', padding: '10px 12px', marginBottom: '14px',
+                                        }}>
+                                            <div style={{ fontWeight: 'bold', color: '#60a5fa', marginBottom: '6px', fontSize: '13px' }}>
+                                                🧩 One-Click Saving from YouTube
+                                            </div>
+                                            <p style={{ margin: '0 0 8px 0', color: '#d1d5db', lineHeight: '1.6' }}>
+                                                Install the Tutorial Clarity browser extension once, and you can save any YouTube video with a double-tap of the <strong>Alt key</strong> — without ever leaving YouTube.
+                                            </p>
+                                            <div style={{ color: '#d1d5db', lineHeight: '1.8', marginBottom: '8px' }}>
+                                                <strong style={{ color: '#facc15' }}>One-time setup:</strong>
+                                                <ol style={{ margin: '4px 0 0 0', paddingLeft: '18px' }}>
+                                                    <li>Open Chrome and go to <strong>chrome://extensions</strong></li>
+                                                    <li>Turn on <strong>Developer mode</strong> (toggle in the top-right corner)</li>
+                                                    <li>Click <strong>Load unpacked</strong></li>
+                                                    <li>Navigate to your Tutorial Clarity folder and select the <strong>extension</strong> subfolder</li>
+                                                    <li>Click <strong>Select Folder</strong> — the extension is now installed</li>
+                                                </ol>
+                                            </div>
+                                            <div style={{ color: '#d1d5db', lineHeight: '1.8' }}>
+                                                <strong style={{ color: '#facc15' }}>To save a video from YouTube:</strong>
+                                                <ul style={{ margin: '4px 0 0 0', paddingLeft: '18px' }}>
+                                                    <li>Hover your mouse over any video thumbnail in the YouTube scroll list</li>
+                                                    <li>Press the <strong>Alt key twice quickly</strong></li>
+                                                    <li>A green banner confirms <em>"Saved to Tutorial Clarity!"</em></li>
+                                                    <li>The video appears here in your list — Tutorial Clarity must be running</li>
+                                                </ul>
+                                            </div>
+                                        </div>
+
                                         <div style={{ marginBottom: '12px' }}>
-                                            <label style={{ display: 'block', marginBottom: '8px' }}>
-                                                Add YouTube Video
+                                            <label style={{ display: 'block', marginBottom: '8px', color: '#9ca3af' }}>
+                                                Or paste a YouTube URL manually:
                                             </label>
                                             <div style={{ display: 'flex', gap: '4px' }}>
                                                 <input
