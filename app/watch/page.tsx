@@ -57,6 +57,7 @@ function WatchPageContent() {
         timestamp: number;
         duration: number;
         lastWatched: string;
+        isPinned?: boolean;
     }
     const [resumeSessions, setResumeSessions] = useState<ResumeSession[]>(() => {
         try {
@@ -1002,6 +1003,16 @@ function WatchPageContent() {
         });
     };
 
+    const handleToggleResumePin = (videoId: string) => {
+        setResumeSessions(prev => {
+            const updated = prev.map(s =>
+                s.videoId === videoId ? { ...s, isPinned: !s.isPinned } : s
+            );
+            try { localStorage.setItem(RESUME_KEY, JSON.stringify(updated)); } catch {}
+            return updated;
+        });
+    };
+
     const handleHeightDragStart = (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1136,9 +1147,20 @@ function WatchPageContent() {
                 lastWatched: new Date().toISOString(),
             };
             setResumeSessions(prev => {
-                // Remove existing entry for this video, add updated one at top, keep last 10
+                const existing = prev.find(s => s.videoId === videoId);
+
+                // Auto-remove if finished (within 30s of end) — unless pinned
+                const isFinished = session.duration > 0 && (session.duration - t) < 30;
+                if (isFinished && !existing?.isPinned) {
+                    const updated = prev.filter(s => s.videoId !== videoId);
+                    try { localStorage.setItem(RESUME_KEY, JSON.stringify(updated)); } catch {}
+                    return updated;
+                }
+
+                // Preserve pin status when updating
+                const updatedSession = { ...session, isPinned: existing?.isPinned || false };
                 const filtered = prev.filter(s => s.videoId !== videoId);
-                const updated = [session, ...filtered].slice(0, 10);
+                const updated = [updatedSession, ...filtered].slice(0, 10);
                 try { localStorage.setItem(RESUME_KEY, JSON.stringify(updated)); } catch {}
                 return updated;
             });
@@ -2590,7 +2612,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                                     )}
                                                                     <span style={{ color: '#6b7280', marginLeft: '8px' }}>{formatDate(session.lastWatched)}</span>
                                                                 </div>
-                                                                <div style={{ display: 'flex', gap: '6px' }}>
+                                                                <div style={{ display: 'flex', gap: '6px', flexWrap: 'wrap' }}>
                                                                     <button
                                                                         onClick={() => handleResumeVideo(session)}
                                                                         style={{
@@ -2601,6 +2623,19 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                                         }}
                                                                     >
                                                                         ▶ Resume
+                                                                    </button>
+                                                                    <button
+                                                                        onClick={() => handleToggleResumePin(session.videoId)}
+                                                                        style={{
+                                                                            backgroundColor: session.isPinned ? '#eab308' : 'transparent',
+                                                                            color: session.isPinned ? 'white' : '#6b7280',
+                                                                            border: '1px solid #374151', borderRadius: '4px',
+                                                                            padding: '4px 10px', fontSize: '11px',
+                                                                            cursor: 'pointer',
+                                                                        }}
+                                                                        title={session.isPinned ? 'Pinned — will not auto-remove when finished' : 'Pin to keep after finishing'}
+                                                                    >
+                                                                        📌 {session.isPinned ? 'Pinned' : 'Pin'}
                                                                     </button>
                                                                     <button
                                                                         onClick={() => handleClearResume(session.videoId)}
