@@ -2,7 +2,7 @@
 
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { ClarifyAudioPanel, SpeakerConfig, previewVoiceAssignments, FEMALE_VOICES, MALE_VOICES } from '../components/ClarifyAudioPanel';
+import { ClarifyAudioPanel, SpeakerConfig } from '../components/ClarifyAudioPanel';
 
 interface SavedVideo {
     id: string;
@@ -80,6 +80,7 @@ function WatchPageContent() {
     const SPEAKER_CONFIG_KEY = `speaker-config-${videoId}`;
     const [speakerConfig, setSpeakerConfig] = useState<SpeakerConfig>({});
     const [detectedSpeakers, setDetectedSpeakers] = useState<string[]>([]);
+    const [speakerFirstSeen, setSpeakerFirstSeen] = useState<Record<string, number>>({});
     const [speakerStateHydrated, setSpeakerStateHydrated] = useState(false);
     const [hasUnsavedVoiceConfig, setHasUnsavedVoiceConfig] = useState(false);
     const [isRegenerating, setIsRegenerating] = useState(false);
@@ -255,11 +256,17 @@ function WatchPageContent() {
 
     // ── Ref to ClarifyAudioPanel handlers (for spacebar + video sync control) ──
     const clarifyHandlersRef = useRef<{ play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[]; testAudioBlobs: () => void; hasAudioBlobs: () => boolean } | null>(null);
+    // Captures auto-detected genders from the onSpeakersDetected callback so the button handler can apply them
+    const detectedGenderMapRef = useRef<Record<string, 'male' | 'female'>>({});
     const [assemblyAILoading, setAssemblyAILoading] = useState(false);
+    const [detectionRun, setDetectionRun] = useState(false);
+    const [unknownSpeakerPrompt, setUnknownSpeakerPrompt] = useState<{ speakerId: string; assign: (gender: 'male' | 'female' | null) => void } | null>(null);
 
     // ── Stable callbacks for ClarifyAudioPanel (prevent re-render unmute bug) ──
+    const fmtTime = (sec: number) => { const m = Math.floor(sec / 60); const s = Math.floor(sec % 60); return `${m}:${s.toString().padStart(2, '0')}`; };
+    const [clarifySubtitle, setClarifySubtitle] = useState<string | null>(null);
     const handleClarifySubtitle = useCallback((subtitle: string | null) => {
-        if (subtitle) console.log('[watch] Clarify subtitle:', subtitle);
+        setClarifySubtitle(subtitle);
     }, []);
 
     const handleClarifyPlayYouTube = useCallback(() => {
@@ -284,6 +291,10 @@ function WatchPageContent() {
     const handleClarifyRegisterHandlers = useCallback((handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[]; testAudioBlobs: () => void; hasAudioBlobs: () => boolean }) => {
         clarifyHandlersRef.current = handlers;
         console.log('[watch] ClarifyAudioPanel handlers registered (incl. regenerateVoices, detectWithAssemblyAI, manualDetectSpeakers, testAudioBlobs)');
+    }, []);
+
+    const handleUnknownSpeaker = useCallback((speakerId: string, assign: (gender: 'male' | 'female' | null) => void) => {
+        setUnknownSpeakerPrompt({ speakerId, assign });
     }, []);
 
     useEffect(() => {
@@ -699,6 +710,9 @@ function WatchPageContent() {
 
     const handlePlaybackSpeedChange = (speed: number) => {
         setPlaybackSpeed(speed);
+        // Slave AI audio speed to video speed — both must move together
+        // so the translated voice stays in sync with the video pace.
+        setAiPlaybackSpeed(speed);
         if (iframeRef.current?.contentWindow) {
             iframeRef.current.contentWindow.postMessage(
                 JSON.stringify({ event: 'command', func: 'setPlaybackRate', args: [speed] }),
@@ -927,14 +941,8 @@ function WatchPageContent() {
 
     // Hydrate speaker state from localStorage AFTER mount (avoids SSR mismatch)
     useEffect(() => {
-        try {
-            const savedConfig = localStorage.getItem(`speaker-config-${videoId}`);
-            if (savedConfig) {
-                const parsed = JSON.parse(savedConfig);
-                console.log('[speaker-config] Hydrated from localStorage:', parsed);
-                setSpeakerConfig(parsed);
-            }
-        } catch {}
+        // Do NOT restore speakerConfig — user must always assign genders fresh after detection
+        // Load detected speakers list only (so the panel shows the right speakers)
         try {
             const savedSpeakers = localStorage.getItem(`detected-speakers-${videoId}`);
             if (savedSpeakers) {
@@ -955,6 +963,7 @@ function WatchPageContent() {
         }
     }, [speakerConfig, videoId, speakerStateHydrated]);
 
+
     // Debug: track detectedSpeakers state changes
     useEffect(() => {
         console.log(`[speaker-ui] detectedSpeakers changed -> ${detectedSpeakers.length} speakers:`, detectedSpeakers);
@@ -962,101 +971,23 @@ function WatchPageContent() {
     }, [detectedSpeakers]);
 
     // Callbacks for speaker config — only GROW the list, never shrink
-    const handleSpeakersDetected = useCallback((speakers: string[]) => {
-        setDetectedSpeakers(prev => {
-            const merged = [...new Set([...prev, ...speakers])].sort();
-            console.log(`[speaker-ui] Speakers detected: ${speakers.length} new, ${merged.length} total`, merged);
-            // Persist so UI survives remounts / page reload
-            try { localStorage.setItem(`detected-speakers-${videoId}`, JSON.stringify(merged)); } catch {}
-
-            // ★ FIX: Set actual speakerConfig defaults (not just visual preview)
-            // Without this, speakerConfig stays {} and voice map never gets created
-            setSpeakerConfig(prevConfig => {
-                const defaultGenders = ['female', 'male', 'female', 'male', 'female', 'male'] as const;
-                const updated = { ...prevConfig };
-                let changed = false;
-                merged.forEach((sid, idx) => {
-                    if (!updated[sid]) {
-                        updated[sid] = defaultGenders[idx % defaultGenders.length];
-                        changed = true;
-                    }
-                });
-                if (changed) {
-                    console.log(`[speaker-ui] ★ Set default speakerConfig:`, updated);
-                    try { localStorage.setItem(`speaker-config-${videoId}`, JSON.stringify(updated)); } catch {}
-                }
-                return updated;
-            });
-
-            return merged;
-        });
-    }, [videoId]);
-
-    const handleSpeakerGenderChange = useCallback((speakerId: string, gender: 'male' | 'female') => {
-        console.log(`[TRACE-1-UI] Radio clicked: ${speakerId} -> ${gender}`);
-        setSpeakerConfig(prev => {
-            const updated = { ...prev, [speakerId]: gender };
-            console.log(`[TRACE-2-STATE] speakerConfig updated:`, updated);
-            return updated;
-        });
-        setHasUnsavedVoiceConfig(true);
-    }, []);
-
-    const handleResetSpeakerConfig = useCallback(() => {
+    const handleSpeakersDetected = useCallback((speakers: string[], firstSeenAt?: Record<string, number>, genderMap?: Record<string, 'male' | 'female'>) => {
+        // Store auto-detected genders in ref so button handler can apply them
+        detectedGenderMapRef.current = genderMap || {};
+        console.log('[speaker-ui] Auto-detected genders stored:', genderMap);
         setSpeakerConfig({});
         setHasUnsavedVoiceConfig(false);
         try { localStorage.removeItem(`speaker-config-${videoId}`); } catch {}
-        // Keep detectedSpeakers — only clear voice assignments, not speaker list
-        console.log('[speaker-config] Reset to default single voice');
-        // Also regenerate with default voices
-        if (clarifyHandlersRef.current?.regenerateVoices) {
-            clarifyHandlersRef.current.regenerateVoices();
-        }
-    }, [videoId]);
 
-    const handleApplyAndRegenerate = useCallback(async () => {
-        console.log('[TRACE-3-APPLY] === APPLY & REGENERATE CLICKED ===');
-        console.log('[TRACE-3-APPLY] Current speakerConfig state:', speakerConfig);
-        console.log('[TRACE-3-APPLY] Detected speakers:', detectedSpeakers);
+        if (firstSeenAt) setSpeakerFirstSeen(firstSeenAt);
 
-        // Build COMPLETE config — alternate male/female by default for distinct voices
-        // (Only 2 male voices exist, so 3 males would give duplicate voices)
-        const defaultGenders = ['female', 'male', 'female', 'male', 'female', 'male'] as const;
-        const fullConfig: SpeakerConfig = {};
-        detectedSpeakers.forEach((sid, idx) => {
-            fullConfig[sid] = speakerConfig[sid] || defaultGenders[idx % defaultGenders.length];
+        setDetectedSpeakers(prev => {
+            const merged = [...new Set([...prev, ...speakers])].sort();
+            console.log(`[speaker-ui] Speakers detected: ${speakers.length} new, ${merged.length} total`, merged);
+            try { localStorage.setItem(`detected-speakers-${videoId}`, JSON.stringify(merged)); } catch {}
+            return merged;
         });
-        console.log('[TRACE-3-APPLY] Full config to save:', fullConfig);
-
-        setIsRegenerating(true);
-
-        // Update React state to the full config so prop flows to ClarifyAudioPanel
-        setSpeakerConfig(fullConfig);
-
-        // Save full config to localStorage immediately
-        const storageKey = `speaker-config-${videoId}`;
-        try {
-            localStorage.setItem(storageKey, JSON.stringify(fullConfig));
-            // Verify it was saved correctly
-            const readBack = localStorage.getItem(storageKey);
-            console.log('[TRACE-3-APPLY] Verified localStorage:', readBack);
-        } catch (e) {
-            console.error('[TRACE-3-APPLY] localStorage save failed:', e);
-        }
-
-        // Call ClarifyAudioPanel to clear cache and regenerate — pass config directly
-        if (clarifyHandlersRef.current?.regenerateVoices) {
-            console.log('[TRACE-4-REGEN] Calling regenerateVoices with:', fullConfig);
-            await clarifyHandlersRef.current.regenerateVoices(fullConfig);
-            console.log('[TRACE-4-REGEN] Regeneration complete');
-        } else {
-            console.error('[TRACE-4-REGEN] ERROR: regenerateVoices handler not found!');
-        }
-
-        setHasUnsavedVoiceConfig(false);
-        setIsRegenerating(false);
-        console.log('[TRACE-3-APPLY] Configuration applied successfully');
-    }, [speakerConfig, detectedSpeakers, videoId]);
+    }, [videoId]);
 
     // Clarify bar drag handler
     useEffect(() => {
@@ -1187,6 +1118,20 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                     allowFullScreen
                 />
 
+                {/* ── AI subtitle overlay ── */}
+                {clarifySubtitle && (
+                    <div style={{
+                        position: 'absolute', bottom: '80px', left: '50%', transform: 'translateX(-50%)',
+                        maxWidth: '80%', padding: '6px 16px', borderRadius: '4px',
+                        backgroundColor: 'rgba(0,0,0,0.75)', color: 'white',
+                        fontSize: '18px', fontWeight: 500, textAlign: 'center',
+                        pointerEvents: 'none', lineHeight: 1.4,
+                        textShadow: '0 1px 3px rgba(0,0,0,0.9)',
+                    }}>
+                        {clarifySubtitle}
+                    </div>
+                )}
+
                 {duration > 0 && (
                   <div
                     style={{
@@ -1265,6 +1210,50 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                       {aiPlaybackSpeed.toFixed(aiPlaybackSpeed % 1 === 0 ? 0 : 2)}x
                     </div>
                   </div>
+                )}
+
+                {/* ── UNKNOWN SPEAKER POPUP ── */}
+                {unknownSpeakerPrompt && (
+                    <div style={{
+                        position: 'fixed', inset: 0, zIndex: 99999,
+                        display: 'flex', alignItems: 'center', justifyContent: 'center',
+                        backgroundColor: 'rgba(0,0,0,0.7)',
+                    }}>
+                        <div style={{
+                            backgroundColor: '#1e293b', borderRadius: '12px',
+                            padding: '24px', maxWidth: '340px', width: '100%',
+                            border: '1px solid #6366f1', boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
+                            textAlign: 'center',
+                        }}>
+                            <div style={{ fontSize: '28px', marginBottom: '10px' }}>🎤</div>
+                            <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#e2e8f0', marginBottom: '4px' }}>
+                                New Speaker Detected
+                            </div>
+                            <div style={{ fontSize: '12px', color: '#6366f1', fontWeight: 'bold', marginBottom: '8px' }}>
+                                {`Speaker ${parseInt(unknownSpeakerPrompt.speakerId.replace('speaker_', ''))}`} is speaking right now
+                            </div>
+                            <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '20px', lineHeight: '1.5' }}>
+                                Would you like to assign them a gender going forward?
+                            </div>
+                            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
+                                <button onClick={() => { unknownSpeakerPrompt.assign('male'); setUnknownSpeakerPrompt(null); }} style={{
+                                    padding: '10px 20px', backgroundColor: '#3b82f6', color: 'white',
+                                    border: 'none', borderRadius: '8px', cursor: 'pointer',
+                                    fontSize: '14px', fontWeight: 'bold',
+                                }}>♂ Male</button>
+                                <button onClick={() => { unknownSpeakerPrompt.assign('female'); setUnknownSpeakerPrompt(null); }} style={{
+                                    padding: '10px 20px', backgroundColor: '#ec4899', color: 'white',
+                                    border: 'none', borderRadius: '8px', cursor: 'pointer',
+                                    fontSize: '14px', fontWeight: 'bold',
+                                }}>♀ Female</button>
+                                <button onClick={() => { unknownSpeakerPrompt.assign(null); setUnknownSpeakerPrompt(null); }} style={{
+                                    padding: '10px 20px', backgroundColor: '#475569', color: '#e2e8f0',
+                                    border: 'none', borderRadius: '8px', cursor: 'pointer',
+                                    fontSize: '14px',
+                                }}>Skip</button>
+                            </div>
+                        </div>
+                    </div>
                 )}
 
                 {definitionPopup && (() => {
@@ -2081,7 +2070,68 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 </h3>
                                 {expandedSections.has('clarify') && (
                                     <div style={{ padding: '0', backgroundColor: '#111827' }}>
-                                        {/* YouTube mute status indicator */}
+
+                                        {/* ─── STEP 1: DETECT SPEAKERS ─── */}
+                                        <div style={{ margin: '10px 8px' }}>
+                                            <button
+                                                onClick={async () => {
+                                                    if (!clarifyHandlersRef.current?.detectWithAssemblyAI) return;
+                                                    setAssemblyAILoading(true);
+                                                    try {
+                                                        // Detection also fires onSpeakersDetected which sets detectedGenderMapRef
+                                                        const speakers = await clarifyHandlersRef.current.detectWithAssemblyAI();
+                                                        if (speakers && speakers.length >= 1) {
+                                                            setDetectedSpeakers(speakers);
+
+                                                            // Build config from auto-detected genders and apply immediately
+                                                            const genderMap = detectedGenderMapRef.current;
+                                                            const fullConfig: SpeakerConfig = {};
+                                                            speakers.forEach(sid => {
+                                                                if (genderMap[sid]) fullConfig[sid] = genderMap[sid];
+                                                            });
+                                                            setSpeakerConfig(fullConfig);
+                                                            try { localStorage.setItem(`speaker-config-${videoId}`, JSON.stringify(fullConfig)); } catch {}
+                                                            console.log('[auto-apply] Applying gender config:', fullConfig);
+
+                                                            setIsRegenerating(true);
+                                                            if (clarifyHandlersRef.current?.regenerateVoices) {
+                                                                await clarifyHandlersRef.current.regenerateVoices(fullConfig);
+                                                            }
+                                                            setIsRegenerating(false);
+                                                            setDetectionRun(true);
+                                                        }
+                                                    } catch (err: any) {
+                                                        alert(`Speaker detection failed: ${err.message || 'Unknown error'}`);
+                                                        setIsRegenerating(false);
+                                                    } finally {
+                                                        setAssemblyAILoading(false);
+                                                    }
+                                                }}
+                                                disabled={assemblyAILoading}
+                                                style={{
+                                                    width: '100%', padding: '8px 12px',
+                                                    backgroundColor: assemblyAILoading ? '#475569' : detectionRun ? '#1e3a5f' : '#2563eb',
+                                                    color: detectionRun && !assemblyAILoading ? '#64748b' : 'white',
+                                                    border: detectionRun && !assemblyAILoading ? '1px solid #334155' : 'none',
+                                                    borderRadius: '6px',
+                                                    fontSize: '12px', fontWeight: 'bold',
+                                                    cursor: assemblyAILoading ? 'wait' : 'pointer',
+                                                    opacity: assemblyAILoading ? 0.7 : 1,
+                                                }}
+                                            >
+                                                {assemblyAILoading ? (
+                                                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
+                                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ animation: 'spin 1s linear infinite' }}>
+                                                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.25" />
+                                                            <path d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" fill="currentColor" opacity="0.75" />
+                                                        </svg>
+                                                        Detecting Speakers…
+                                                    </span>
+                                                ) : '🎯 Detect Speakers'}
+                                            </button>
+                                        </div>
+
+                                        {/* ─── STEP 2: PLAY ─── */}
                                         {ytMuteStatus !== 'unmuted' && (
                                             <div style={{
                                                 padding: '6px 12px',
@@ -2119,333 +2169,11 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             onTranscriptReady={handleClarifyTranscriptReady}
                                             onSegmentChange={handleClarifySegmentChange}
                                             registerHandlers={handleClarifyRegisterHandlers}
+                                            detectionRun={detectionRun}
+                                            readyToPlay={detectionRun && !assemblyAILoading && !isRegenerating}
+                                            onUnknownSpeaker={handleUnknownSpeaker}
                                         />
 
-                                        {/* ─── SPEAKER VOICE CONFIGURATION (comes first — configure what you want) ─── */}
-                                        {detectedSpeakers.length > 1 && (
-                                            <div style={{
-                                                margin: '10px 8px', padding: '10px',
-                                                backgroundColor: '#1e293b', borderRadius: '8px',
-                                                border: '1px solid #6366f1',
-                                            }}>
-                                                <div style={{
-                                                    fontSize: '13px', fontWeight: 'bold', color: '#c7d2fe',
-                                                    marginBottom: '6px', display: 'flex', justifyContent: 'space-between', alignItems: 'center',
-                                                }}>
-                                                    <span>{'🎭'} Speaker Voices</span>
-                                                    {Object.keys(speakerConfig).length > 0 && (
-                                                        <button onClick={handleResetSpeakerConfig} style={{
-                                                            background: 'none', border: '1px solid #475569',
-                                                            color: '#9ca3af', cursor: 'pointer', fontSize: '10px',
-                                                            padding: '2px 6px', borderRadius: '4px',
-                                                        }}>Reset</button>
-                                                    )}
-                                                </div>
-                                                <div style={{ fontSize: '10px', color: '#94a3b8', marginBottom: '8px' }}>
-                                                    {detectedSpeakers.length} speakers detected.
-                                                    {Object.keys(speakerConfig).length === 0
-                                                        ? ' Assign male/female for distinct voices.'
-                                                        : hasUnsavedVoiceConfig
-                                                            ? ' Click Apply to regenerate audio with new voices.'
-                                                            : ' Each speaker has a distinct voice.'}
-                                                </div>
-                                                {detectedSpeakers.length > 3 && (
-                                                    <div style={{
-                                                        fontSize: '10px', color: '#fbbf24', marginBottom: '8px',
-                                                        padding: '5px 8px', backgroundColor: 'rgba(251,191,36,0.1)',
-                                                        borderRadius: '4px', lineHeight: '1.4',
-                                                        border: '1px solid rgba(251,191,36,0.2)',
-                                                    }}>
-                                                        {'ℹ️'} <strong>{detectedSpeakers.length} speakers detected.</strong>
-                                                        {' '}Configure the first 3 speakers below.
-                                                        Speakers 3+ automatically use remaining voices for variety.
-                                                    </div>
-                                                )}
-                                                {(() => {
-                                                    const defaultGenders = ['female', 'male', 'female', 'male', 'female', 'male'] as const;
-                                                    const previewConfig: SpeakerConfig = {};
-                                                    detectedSpeakers.forEach((sid, i) => {
-                                                        previewConfig[sid] = speakerConfig[sid] || defaultGenders[i % defaultGenders.length];
-                                                    });
-                                                    const voiceMap = previewVoiceAssignments(previewConfig);
-
-                                                    return detectedSpeakers.map((speakerId, idx) => {
-                                                        const currentGender = previewConfig[speakerId];
-                                                        const assignedVoice = voiceMap[speakerId] || 'onyx';
-                                                        const isConfigured = !!speakerConfig[speakerId];
-
-                                                        const altGender = currentGender === 'male' ? 'female' : 'male';
-                                                        const altConfig = { ...previewConfig, [speakerId]: altGender as 'male' | 'female' };
-                                                        const altMap = previewVoiceAssignments(altConfig);
-                                                        const maleVoice = currentGender === 'male' ? assignedVoice : altMap[speakerId];
-                                                        const femaleVoice = currentGender === 'female' ? assignedVoice : altMap[speakerId];
-
-                                                        // Speakers 3+ are auto-assigned — show read-only label
-                                                        const isAutoAssigned = idx >= 3;
-
-                                                        return (
-                                                            <div key={speakerId} style={{
-                                                                display: 'flex', alignItems: 'center', gap: '8px',
-                                                                marginBottom: idx < detectedSpeakers.length - 1 ? '6px' : '0',
-                                                                padding: '5px 6px', borderRadius: '4px',
-                                                                backgroundColor: isAutoAssigned
-                                                                    ? 'rgba(251,191,36,0.08)'
-                                                                    : isConfigured ? 'rgba(99,102,241,0.15)' : 'rgba(255,255,255,0.03)',
-                                                            }}>
-                                                                <span style={{
-                                                                    fontSize: '11px', color: '#e2e8f0',
-                                                                    minWidth: '62px', fontWeight: isConfigured || isAutoAssigned ? 'bold' : 'normal',
-                                                                }}>
-                                                                    Speaker {idx}
-                                                                </span>
-                                                                {isAutoAssigned ? (
-                                                                    /* Auto-assigned: show voice name with auto label */
-                                                                    <span style={{
-                                                                        fontSize: '11px', color: '#fbbf24',
-                                                                        fontStyle: 'italic',
-                                                                    }}>
-                                                                        {'🔄'} auto → {assignedVoice}
-                                                                    </span>
-                                                                ) : (
-                                                                    /* Speakers 0-2: user picks male/female */
-                                                                    <>
-                                                                        <label style={{
-                                                                            display: 'flex', alignItems: 'center', gap: '3px',
-                                                                            fontSize: '11px', color: currentGender === 'male' ? '#93c5fd' : '#9ca3af',
-                                                                            cursor: 'pointer',
-                                                                        }}>
-                                                                            <input
-                                                                                type="radio"
-                                                                                name={`speaker-voice-${idx}`}
-                                                                                checked={currentGender === 'male'}
-                                                                                onChange={() => handleSpeakerGenderChange(speakerId, 'male')}
-                                                                                style={{ accentColor: '#6366f1', width: '12px', height: '12px' }}
-                                                                            />
-                                                                            {'♂'} ({maleVoice})
-                                                                        </label>
-                                                                        <label style={{
-                                                                            display: 'flex', alignItems: 'center', gap: '3px',
-                                                                            fontSize: '11px', color: currentGender === 'female' ? '#f9a8d4' : '#9ca3af',
-                                                                            cursor: 'pointer',
-                                                                        }}>
-                                                                            <input
-                                                                                type="radio"
-                                                                                name={`speaker-voice-${idx}`}
-                                                                                checked={currentGender === 'female'}
-                                                                                onChange={() => handleSpeakerGenderChange(speakerId, 'female')}
-                                                                                style={{ accentColor: '#ec4899', width: '12px', height: '12px' }}
-                                                                            />
-                                                                            {'♀'} ({femaleVoice})
-                                                                        </label>
-                                                                    </>
-                                                                )}
-                                                            </div>
-                                                        );
-                                                    });
-                                                })()}
-
-                                                {/* ── Apply & Regenerate Button ── */}
-                                                {hasUnsavedVoiceConfig && (
-                                                    <button
-                                                        onClick={handleApplyAndRegenerate}
-                                                        disabled={isRegenerating}
-                                                        style={{
-                                                            width: '100%', marginTop: '10px', padding: '8px 16px',
-                                                            backgroundColor: isRegenerating ? '#4b5563' : '#10b981',
-                                                            color: 'white', border: 'none', borderRadius: '6px',
-                                                            fontWeight: 600, fontSize: '12px', cursor: isRegenerating ? 'wait' : 'pointer',
-                                                            display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-                                                        }}
-                                                    >
-                                                        {isRegenerating ? '⏳ Regenerating...' : '🔄 Apply & Regenerate Audio'}
-                                                    </button>
-                                                )}
-
-                                                {/* ── Test Audio Blobs (diagnostic) ── */}
-                                                <button
-                                                    onClick={() => {
-                                                        if (!clarifyHandlersRef.current?.testAudioBlobs) {
-                                                            alert('Test function not available yet. Generate audio first.');
-                                                            return;
-                                                        }
-                                                        if (!clarifyHandlersRef.current.hasAudioBlobs()) {
-                                                            alert('No audio blobs in cache yet! Click "Apply & Regenerate Audio" first, then try again.');
-                                                            return;
-                                                        }
-                                                        alert('Playing first 5 audio blobs with 4-second gaps.\n\nOpen browser console (F12) for detailed voice info.\n\nListen carefully — does each blob match its expected voice?');
-                                                        clarifyHandlersRef.current.testAudioBlobs();
-                                                    }}
-                                                    style={{
-                                                        width: '100%', marginTop: '6px', padding: '6px 12px',
-                                                        backgroundColor: '#7c3aed',
-                                                        color: 'white', border: 'none', borderRadius: '6px',
-                                                        fontWeight: 600, fontSize: '11px', cursor: 'pointer',
-                                                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-                                                    }}
-                                                >
-                                                    {'🧪'} Test Audio Blobs (Play First 5)
-                                                </button>
-
-                                                {/* ── Nuclear Clear & Regenerate (diagnostic) ── */}
-                                                <button
-                                                    onClick={() => {
-                                                        console.log('[NUCLEAR] ==========================================');
-                                                        console.log('[NUCLEAR] Nuclear Clear button clicked');
-                                                        console.log('[NUCLEAR] speakerConfig BEFORE:', JSON.stringify(speakerConfig));
-                                                        console.log('[NUCLEAR] detectedSpeakers:', JSON.stringify(detectedSpeakers));
-
-                                                        // Clear all storage
-                                                        try { localStorage.clear(); } catch (e) { console.warn('[NUCLEAR] localStorage.clear failed:', e); }
-                                                        try { sessionStorage.clear(); } catch (e) { console.warn('[NUCLEAR] sessionStorage.clear failed:', e); }
-                                                        console.log('[NUCLEAR] Storage cleared');
-
-                                                        // ★ VISIBLY reset speaker config to alternating defaults
-                                                        const nuclearDefaults = ['female', 'male', 'female', 'male', 'female', 'male'] as const;
-                                                        const resetConfig: Record<string, 'male' | 'female'> = {};
-                                                        detectedSpeakers.forEach((sid, i) => {
-                                                            resetConfig[sid] = nuclearDefaults[i % nuclearDefaults.length];
-                                                        });
-                                                        setSpeakerConfig(resetConfig);
-                                                        console.log('[NUCLEAR] ★ Speaker config RESET to:', JSON.stringify(resetConfig));
-
-                                                        const fullConfig = { ...resetConfig };
-                                                        console.log('[NUCLEAR] Config to apply:', JSON.stringify(fullConfig));
-                                                        if (clarifyHandlersRef.current?.regenerateVoices) {
-                                                            console.log('[NUCLEAR] Handler found, calling regenerateVoices...');
-                                                            setIsRegenerating(true);
-                                                            Promise.resolve(clarifyHandlersRef.current.regenerateVoices(fullConfig)).then(() => {
-                                                                console.log('[NUCLEAR] Regeneration complete');
-                                                                setIsRegenerating(false);
-                                                            }).catch((err: Error) => {
-                                                                console.error('[NUCLEAR] Regeneration failed:', err);
-                                                                setIsRegenerating(false);
-                                                            });
-                                                        } else {
-                                                            console.error('[NUCLEAR] ERROR: regenerateVoices handler NOT FOUND!');
-                                                            console.error('[NUCLEAR] clarifyHandlersRef.current:', clarifyHandlersRef.current);
-                                                        }
-                                                        console.log('[NUCLEAR] ==========================================');
-                                                    }}
-                                                    disabled={isRegenerating}
-                                                    style={{
-                                                        width: '100%', marginTop: '6px', padding: '6px 12px',
-                                                        backgroundColor: isRegenerating ? '#4b5563' : '#dc2626',
-                                                        color: 'white', border: 'none', borderRadius: '6px',
-                                                        fontWeight: 600, fontSize: '11px', cursor: isRegenerating ? 'wait' : 'pointer',
-                                                        display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '6px',
-                                                    }}
-                                                >
-                                                    {'☢️'} Nuclear Clear & Regenerate
-                                                </button>
-
-                                                {/* ── Confirmation when applied ── */}
-                                                {!hasUnsavedVoiceConfig && Object.keys(speakerConfig).length > 0 && (
-                                                    <div style={{
-                                                        fontSize: '10px', color: '#10b981', marginTop: '8px',
-                                                        padding: '4px 8px', backgroundColor: 'rgba(16,185,129,0.1)',
-                                                        borderRadius: '4px', textAlign: 'center', fontWeight: 600,
-                                                    }}>
-                                                        {'✅'} Voice configuration applied
-                                                    </div>
-                                                )}
-                                            </div>
-                                        )}
-
-                                        {/* ─── divider ─── */}
-                                        <div style={{ margin: '4px 8px', borderTop: '1px solid #334155' }} />
-
-                                        {/* ─── ASSEMBLYAI SPEAKER DETECTION (optional — re-detect with AI) ─── */}
-                                        <div style={{
-                                            margin: '10px 8px', padding: '10px',
-                                            backgroundColor: '#0f172a', borderRadius: '8px',
-                                            border: '1px solid #3b82f6',
-                                        }}>
-                                            <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#93c5fd', marginBottom: '6px' }}>
-                                                {'🎯'} Advanced Speaker Detection
-                                            </div>
-                                            <p style={{ fontSize: '11px', color: '#94a3b8', marginBottom: '8px', lineHeight: '1.4' }}>
-                                                Not satisfied with automatic detection? Use AI to analyze voice
-                                                characteristics for more accurate speaker identification.
-                                            </p>
-                                            <button
-                                                onClick={async () => {
-                                                    console.log('[UI] AssemblyAI detection button clicked');
-                                                    if (!clarifyHandlersRef.current?.detectWithAssemblyAI) {
-                                                        console.error('[UI] detectWithAssemblyAI handler not registered');
-                                                        return;
-                                                    }
-                                                    setAssemblyAILoading(true);
-                                                    try {
-                                                        const speakers = await clarifyHandlersRef.current.detectWithAssemblyAI();
-                                                        console.log('[UI] AssemblyAI detection complete:', speakers);
-                                                        if (speakers && speakers.length > 1) {
-                                                            setDetectedSpeakers(speakers);
-                                                        }
-                                                    } catch (err: any) {
-                                                        console.error('[UI] AssemblyAI detection error:', err);
-                                                        alert(`Speaker detection failed: ${err.message || 'Unknown error'}`);
-                                                    } finally {
-                                                        setAssemblyAILoading(false);
-                                                    }
-                                                }}
-                                                disabled={assemblyAILoading}
-                                                style={{
-                                                    width: '100%',
-                                                    padding: '8px 12px',
-                                                    backgroundColor: assemblyAILoading ? '#475569' : '#2563eb',
-                                                    color: 'white',
-                                                    border: 'none',
-                                                    borderRadius: '6px',
-                                                    fontSize: '12px',
-                                                    fontWeight: 'bold',
-                                                    cursor: assemblyAILoading ? 'wait' : 'pointer',
-                                                    opacity: assemblyAILoading ? 0.7 : 1,
-                                                }}
-                                            >
-                                                {assemblyAILoading ? (
-                                                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ animation: 'spin 1s linear infinite' }}>
-                                                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.25" />
-                                                            <path d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" fill="currentColor" opacity="0.75" />
-                                                        </svg>
-                                                        Analyzing Audio…
-                                                    </span>
-                                                ) : '🎯 Detect Speakers with AI'}
-                                            </button>
-
-                                            {/* ── Manual (Gap-Based) Detection Button ── */}
-                                            <button
-                                                onClick={() => {
-                                                    console.log('[MANUAL] Manual detection button clicked');
-                                                    if (!clarifyHandlersRef.current?.manualDetectSpeakers) {
-                                                        console.error('[MANUAL] manualDetectSpeakers handler not registered');
-                                                        return;
-                                                    }
-                                                    const speakers = clarifyHandlersRef.current.manualDetectSpeakers();
-                                                    console.log('[MANUAL] Detected speakers:', speakers);
-                                                    if (speakers && speakers.length > 0) {
-                                                        setDetectedSpeakers(speakers);
-                                                    }
-                                                }}
-                                                style={{
-                                                    width: '100%',
-                                                    marginTop: '6px',
-                                                    padding: '6px 12px',
-                                                    backgroundColor: '#475569',
-                                                    color: 'white',
-                                                    border: 'none',
-                                                    borderRadius: '6px',
-                                                    fontSize: '11px',
-                                                    fontWeight: 'bold',
-                                                    cursor: 'pointer',
-                                                }}
-                                            >
-                                                {'🔧'} Manual Detection (Gap-Based)
-                                            </button>
-                                            <p style={{ fontSize: '10px', color: '#64748b', marginTop: '4px', lineHeight: '1.3' }}>
-                                                Manual detection uses time gaps to identify speakers (less accurate but faster, no API needed)
-                                            </p>
-                                        </div>
                                     </div>
                                 )}
                             </div>

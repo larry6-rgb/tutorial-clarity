@@ -32,7 +32,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json({ error: 'Invalid JSON', requestId }, { status: 400 });
     }
 
-    const { text, voice, gender, videoId, segmentId, speakerId, ttsModel = 'tts-1', customVoice } = body;
+    const { text, voice, gender, videoId, segmentId, speakerId, ttsModel = 'tts-1', customVoice, targetDuration } = body;
 
     // ── Resolve voice ID (handle both string and object formats) ──
     let voiceId: string;
@@ -70,7 +70,12 @@ export async function POST(request: NextRequest) {
 
     const model = ttsModel === 'tts-1-hd' ? 'tts-1-hd' : 'tts-1';
 
-    console.log(`[API] ${requestId} | CALLING OpenAI: model=${model} voice="${voiceId}" text="${text.substring(0, 50)}..." (${text.length}ch)`);
+    // Always generate at natural speed — forcing TTS to fit exact slot durations causes
+    // audible rate swings (0.5x–1.65x) because translated text isn't always the same
+    // relative length as the original. Natural pauses absorb small mismatches instead.
+    const ttsSpeed = 1.0;
+
+    console.log(`[API] ${requestId} | CALLING OpenAI: model=${model} voice="${voiceId}" speed=1.0 text="${text.substring(0, 50)}..." (${text.length}ch)`);
 
     // ── Call OpenAI TTS with retry ──
     let ttsResponse: Response | null = null;
@@ -90,7 +95,7 @@ export async function POST(request: NextRequest) {
             input: text,
             voice: voiceId,
             response_format: 'mp3',
-            speed: 1.0,
+            speed: ttsSpeed,
           }),
         });
 

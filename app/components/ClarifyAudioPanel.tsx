@@ -44,21 +44,24 @@ interface AudioCache {
   };
 }
 
-// Speaker voice configuration: maps speaker IDs to 'male' | 'female'
-export type SpeakerConfig = Record<string, 'male' | 'female'>;
+// Speaker voice configuration: maps speaker IDs to 'male' | 'female' | 'neutral'
+export type SpeakerConfig = Record<string, 'male' | 'female' | 'neutral'>;
 
 interface ClarifyAudioPanelProps {
   videoId: string;
   currentTime: number;
   aiPlaybackSpeed?: number;
   speakerConfig?: SpeakerConfig;           // Optional manual voice config per speaker
-  onSpeakersDetected?: (speakers: string[]) => void;  // Callback when speakers are detected
+  onSpeakersDetected?: (speakers: string[], firstSeenAt?: Record<string, number>, genderMap?: Record<string, 'male' | 'female'>) => void;
   onSubtitleChange?: (subtitle: string | null) => void;
   onMuteYouTube?: (mute: boolean) => void;
   onPlayYouTube?: () => void;
   onTranscriptReady?: (segments: ClarifyTranscriptSegment[]) => void;
   onSegmentChange?: (index: number) => void;
   registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[]; testAudioBlobs: () => void; hasAudioBlobs: () => boolean }) => void;
+  readyToPlay?: boolean;  // gates the Play button — false until detection + voice setup complete
+  detectionRun?: boolean;  // true once speaker detection has completed
+  onUnknownSpeaker?: (speakerId: string, assign: (gender: 'male' | 'female' | null) => void) => void;
 }
 
 // ═══ MULTI-VOICE SYSTEM — SMART ROTATION ═══
@@ -134,6 +137,8 @@ export function assignVoicesToSpeakers(config: SpeakerConfig): Record<string, st
         FEMALE_VOICES.includes(v)
       ).length;
       voice = FEMALE_VOICES[femaleCount % FEMALE_VOICES.length];
+    } else if (gender === 'neutral') {
+      voice = 'alloy';
     } else {
       // Male voices: onyx, echo — pick based on how many males assigned so far
       const maleCount = Array.from(usedVoices).filter(v =>
@@ -214,6 +219,9 @@ export function previewVoiceAssignments(config: SpeakerConfig): Record<string, s
       const voice = FEMALE_VOICES[femaleCount % FEMALE_VOICES.length];
       voiceMap[id] = voice;
       usedVoices.add(voice);
+    } else if (gender === 'neutral') {
+      voiceMap[id] = 'alloy';
+      usedVoices.add('alloy');
     } else {
       const maleCount = Array.from(usedVoices).filter(v => MALE_VOICES.includes(v)).length;
       const voice = MALE_VOICES[maleCount % MALE_VOICES.length];
@@ -557,11 +565,12 @@ function fmtTime(sec: number): string {
 }
 
 export function ClarifyAudioPanel({
-  videoId, currentTime, aiPlaybackSpeed = 1, speakerConfig, onSpeakersDetected, onSubtitleChange, onMuteYouTube, onPlayYouTube, onTranscriptReady, onSegmentChange, registerHandlers,
+  videoId, currentTime, aiPlaybackSpeed = 1, speakerConfig, onSpeakersDetected, onSubtitleChange, onMuteYouTube, onPlayYouTube, onTranscriptReady, onSegmentChange, registerHandlers, readyToPlay = true, detectionRun = false, onUnknownSpeaker,
 }: ClarifyAudioPanelProps) {
 
   // ═══ STATE ═══
-  type Phase = 'choosing' | 'processing' | 'ready' | 'playing' | 'paused' | 'stopped' | 'error';
+  type Phase = 'choosing' | 'processing' | 'ready' | 'buffering' | 'playing' | 'paused' | 'stopped' | 'error';
+  const BUFFER_THRESHOLD = 15; // segments that must be TTS-ready before playback opens
   const [phase, setPhase] = useState<Phase>('choosing');
   const [selectedMode, setSelectedMode] = useState<OutputMode | null>(null);
   const [selectedLang, setSelectedLang] = useState('en');
@@ -608,6 +617,15 @@ export function ClarifyAudioPanel({
   const frozenConfigRef = useRef<SpeakerConfig | null>(null);  // The config used to CREATE frozenVoiceMapRef — must stay in sync
   const assemblyAISpeakerMapRef = useRef<Map<number, string> | null>(null);  // Stores AssemblyAI speaker labels by segment index — survives React re-renders
   const assemblyAILabelsActiveRef = useRef(false);  // Protection flag — when true, gap-based detection is disabled
+  const assemblyAIRawSegmentsRef = useRef<AssemblySegment[] | null>(null);  // Raw AssemblyAI utterances — used to label segments beyond initial batch
+  const assemblyAISpeakerNormRef = useRef<Map<string, string> | null>(null);  // Maps raw labels ("A","B") → normalized ("speaker_0","speaker_1")
+  // Load previously-prompted speakers from localStorage so popup never fires twice across sessions
+  const promptedSpeakersRef = useRef<Set<string>>((() => {
+    try {
+      const saved = localStorage.getItem(`prompted-speakers-${videoId}`);
+      return saved ? new Set<string>(JSON.parse(saved)) : new Set<string>();
+    } catch { return new Set<string>(); }
+  })());
 
   // Keep refs synced
   useEffect(() => { volRef.current = volume / 100; }, [volume]);
@@ -760,7 +778,7 @@ export function ClarifyAudioPanel({
         } else if (assemblyAISpeakerMapRef.current && assemblyAISpeakerMapRef.current.size > 0) {
           // AssemblyAI detected speakers but no config yet → use default genders
           const uniqueSpeakers = Array.from(new Set(assemblyAISpeakerMapRef.current.values())).sort();
-          const defaultGenders = ['female', 'male', 'female', 'male', 'female', 'male'];
+          const defaultGenders = ['male', 'female', 'male', 'female', 'male', 'female'];
           const autoConfig: Record<string, 'male' | 'female'> = {};
           uniqueSpeakers.forEach((sp, idx) => { autoConfig[sp] = defaultGenders[idx % defaultGenders.length] as 'male' | 'female'; });
           _assignCallCounter = 0;
@@ -901,12 +919,35 @@ export function ClarifyAudioPanel({
     setGeneratedCount(prev => prev + 1);
   }, [videoId, selectedLang]);
 
+  // ═══ BUFFER MONITOR — opens outlet valve when tank reaches threshold ═══
+  useEffect(() => {
+    if (phase !== 'buffering') return;
+
+    // Count ready segments starting from position 0 — must be SEQUENTIAL so that
+    // segment 0 is guaranteed ready when playback opens (avoids leading silence).
+    const threshold = Math.min(BUFFER_THRESHOLD, translatedTranscript.length);
+    let readyCount = 0;
+    for (let i = 0; i < threshold; i++) {
+      const e = cacheRef.current[i];
+      if (e?.url || e?.useClientTTS) readyCount++;
+      else break;  // stop at first gap — segments must be contiguous from 0
+    }
+    console.log(`[buffer] Tank level: ${readyCount}/${threshold} sequential segments ready`);
+
+    if (readyCount >= threshold) {
+      console.log(`[buffer] ✅ Buffer full — opening outlet valve (starting playback)`);
+      isPlayingRef.current = true;
+      setPhase('playing');
+    }
+  }, [phase, generatedCount, translatedTranscript.length]);
+
   // ═══ PRE-GENERATE AHEAD + PROGRESSIVE TRANSLATION ═══
   useEffect(() => {
-    if (phase !== 'playing' || translatedTranscript.length === 0) return;
+    if (phase !== 'playing' && phase !== 'buffering') return;
+    if (translatedTranscript.length === 0) return;
     const start = Math.max(0, currentSegIdx);
-    // Generate TTS for segments ahead of current position
-    for (let i = start; i < Math.min(start + 8, translatedTranscript.length); i++) {
+    // Generate TTS for segments ahead of current position — 20-segment lookahead (~60s buffer)
+    for (let i = start; i < Math.min(start + 20, translatedTranscript.length); i++) {
       if (!cacheRef.current[i]) {
         // Pass speaker explicitly — use stored AssemblyAI map if available, else segment data
         const speaker = assemblyAISpeakerMapRef.current?.get(i) || translatedTranscript[i].speaker;
@@ -915,7 +956,7 @@ export function ClarifyAudioPanel({
     }
 
     // Request more translation if approaching the edge of translated segments
-    if (needsMoreTranslation && !translatingMoreRef.current && currentSegIdx >= translatedUpTo - 15) {
+    if (needsMoreTranslation && !translatingMoreRef.current && currentSegIdx >= translatedUpTo - 30) {
       requestMoreTranslation();
     }
   }, [phase, currentSegIdx, translatedTranscript, generateSeg, needsMoreTranslation, translatedUpTo]);
@@ -951,14 +992,54 @@ export function ClarifyAudioPanel({
           const combined = [...prev, ...rawNewSegs];
           const isAssemblyAIActive = assemblyAILabelsActiveRef.current;
           const withSpeakers = detectSpeakers(combined, isAssemblyAIActive);
-          // If AssemblyAI labels are active, re-apply from the frozen map
+
           if (isAssemblyAIActive && assemblyAISpeakerMapRef.current) {
             const map = assemblyAISpeakerMapRef.current;
-            const reLabeled = withSpeakers.map((seg, i) => ({
-              ...seg,
-              speaker: map.get(i) || seg.speaker || 'speaker_0',
-            }));
-            console.log('[requestMoreTranslation] ★ Re-applied AssemblyAI labels to', reLabeled.length, 'segments');
+            const rawAsm = assemblyAIRawSegmentsRef.current;
+            const normMap = assemblyAISpeakerNormRef.current;
+
+            // Helper: find the nearest already-mapped neighbor's speaker label
+            const nearestMappedSpeaker = (i: number): string | null => {
+              for (let d = 1; d < withSpeakers.length; d++) {
+                if (map.has(i - d)) return map.get(i - d)!;
+                if (map.has(i + d)) return map.get(i + d)!;
+              }
+              return null;
+            };
+
+            const reLabeled = withSpeakers.map((seg, i) => {
+              // Segments in original detection map — use stored label directly
+              if (map.has(i)) return { ...seg, speaker: map.get(i)! };
+
+              // New segments — match by time overlap against raw AssemblyAI utterances
+              if (rawAsm && normMap) {
+                let best: { rawSpeaker: string; overlap: number } | null = null;
+                for (const asm of rawAsm) {
+                  const overlap = Math.min(seg.end, asm.end) - Math.max(seg.start, asm.start);
+                  if (overlap > 0 && (!best || overlap > best.overlap)) {
+                    best = { rawSpeaker: asm.speaker, overlap };
+                  }
+                }
+
+                const neighbor = nearestMappedSpeaker(i);
+                if (best && best.overlap > 0) {
+                  // Any positive overlap — trust AssemblyAI's voice fingerprint
+                  const normalized = normMap.get(best.rawSpeaker) || neighbor || 'speaker_0';
+                  return { ...seg, speaker: normalized };
+                } else if (neighbor) {
+                  // Truly zero overlap (gap in speech) — inherit from nearest mapped neighbor
+                  return { ...seg, speaker: neighbor };
+                } else if (best) {
+                  // No neighbor yet — use nearest-in-time utterance
+                  const normalized = normMap.get(best.rawSpeaker) || 'speaker_0';
+                  return { ...seg, speaker: normalized };
+                }
+              }
+
+              return { ...seg, speaker: seg.speaker || 'speaker_0' };
+            });
+
+            console.log('[requestMoreTranslation] ★ Labels applied (time-matched for new segs):', reLabeled.length, 'segments');
             translatedTxRef.current = reLabeled;
             return reLabeled;
           }
@@ -999,9 +1080,55 @@ export function ClarifyAudioPanel({
     return segs.length - 1;
   }, []);
 
-  // Play a single segment at user's chosen speed — no rate math, no onended chaining
+  // Play a single segment — rate-matched to video segment duration, then chains to next segment
   const playSeg = useCallback((i: number) => {
     if (i < 0 || i >= translatedTxRef.current.length) return;
+
+    // ── UNKNOWN SPEAKER CHECK ──
+    // If this segment's speaker isn't in the frozen map and we haven't asked yet,
+    // let it play for 3 seconds with the fallback voice so the user can hear who
+    // this is, then show the popup while playback continues.
+    const seg0 = translatedTxRef.current[i];
+    const speakerId0 = seg0?.speaker;
+    const frozenMap0 = frozenVoiceMapRef.current;
+    // Fire popup if speaker hasn't been prompted before (this session or any prior session).
+    // promptedSpeakersRef persists to localStorage, so each speaker is only ever asked once per video.
+    const speakerNeedsAssignment = speakerId0 &&
+      frozenMap0 &&
+      !frozenMap0[speakerId0] &&
+      frozenConfigRef.current?.[speakerId0] !== 'neutral' &&
+      !promptedSpeakersRef.current.has(speakerId0) &&
+      onUnknownSpeaker;
+    if (speakerNeedsAssignment) {
+      promptedSpeakersRef.current.add(speakerId0);
+      try { localStorage.setItem(`prompted-speakers-${videoId}`, JSON.stringify([...promptedSpeakersRef.current])); } catch {}
+      // Let the segment play briefly so user can hear who it is, then prompt
+      setTimeout(() => {
+        if (!isPlayingRef.current) return;  // user already stopped
+        onUnknownSpeaker(speakerId0, (gender) => {
+          if (gender && frozenVoiceMapRef.current && frozenConfigRef.current) {
+            const newConfig = { ...frozenConfigRef.current, [speakerId0]: gender };
+            _assignCallCounter = 0;
+            const newMap = assignVoicesToSpeakers(newConfig);
+            frozenVoiceMapRef.current = Object.freeze({ ...newMap });
+            frozenConfigRef.current = newConfig;
+            console.log(`[unknown-speaker] Assigned ${speakerId0} → ${gender} → ${newMap[speakerId0]}`);
+            // Clear cached audio for this speaker so future segments regenerate correctly
+            Object.keys(cacheRef.current).forEach(k => {
+              const idx = parseInt(k);
+              const s = translatedTxRef.current[idx];
+              if (s?.speaker === speakerId0) {
+                const entry = cacheRef.current[idx];
+                if (entry?.url) { try { URL.revokeObjectURL(entry.url); } catch {} }
+                delete cacheRef.current[idx];
+              }
+            });
+          }
+          // Playback was never stopped — nothing to resume
+        });
+      }, 1000);
+      // Fall through and play the segment normally with fallback voice
+    }
 
     playingIdxRef.current = i;
     lastScheduledSegRef.current = i;
@@ -1012,18 +1139,75 @@ export function ClarifyAudioPanel({
       try {
         const a = new Audio(cached.url);
         a.volume = mutedRef.current ? 0 : volRef.current;
-        a.playbackRate = speedRef.current;
+        a.playbackRate = speedRef.current;  // initial rate — adjusted on loadedmetadata
         audioRef.current = a;
 
         const seg = translatedTxRef.current[i];
+        const segVideoDuration = (seg?.end || 0) - (seg?.start || 0);  // seconds in video time
+
+        // ── RATE MATCH: tiny nudge only — TTS plays at natural speed, voice stays consistent ──
+        a.addEventListener('loadedmetadata', () => {
+          if (a.duration > 0 && segVideoDuration > 0) {
+            const realTimeAvailable = segVideoDuration / speedRef.current;
+            const rate = a.duration / realTimeAvailable;
+            // Clamp tightly to ±10% — large mismatches absorbed by natural pauses between segments
+            a.playbackRate = Math.min(1.1, Math.max(0.9, rate));
+          }
+        });
+
         const age = cached.generatedAt ? `${((Date.now() - cached.generatedAt) / 1000).toFixed(0)}s ago` : '?';
         const videoNow = currentTimeRef.current;
         const expectedVoice = frozenVoiceMapRef.current?.[seg?.speaker || 'speaker_0'] || '(no map)';
         console.log(`[▶ PLAY] Seg ${i}: speaker=${seg?.speaker || '?'} | voice="${cached.voice || '?'}" expected="${expectedVoice}" ${cached.voice !== expectedVoice ? '❌ MISMATCH' : '✅'} | time=${seg?.start?.toFixed(1)}-${seg?.end?.toFixed(1)}s videoAt=${videoNow.toFixed(1)}s | text="${(seg?.text || '').substring(0, 50)}" (${age})`);
 
+        // ── VOICE MISMATCH NOTE ──
+        // Log mismatches for diagnostics. We don't discard and silence here —
+        // handleRegenerateVoices (Apply) already clears the cache when voices change.
+        // A safety-net that deletes-and-returns causes silence while TTS re-fetches.
+        if (cached.voice && expectedVoice !== '(no map)' && cached.voice !== expectedVoice) {
+          console.warn(`[▶ PLAY] Seg ${i}: ⚠️ MISMATCH — playing anyway, regen queued in background`);
+          // Regenerate this segment in the background so NEXT time it plays correctly
+          const segText = seg?.text || '';
+          setTimeout(() => {
+            if (cacheRef.current[i]?.voice === expectedVoice) return;  // already fixed
+            if (cacheRef.current[i]?.generating) return;               // already regenerating
+            delete cacheRef.current[i];
+            genSetRef.current.delete(i);
+            generateSeg(i, segText);
+          }, 500);
+          // Fall through — play the current audio rather than go silent
+        }
+
         a.onended = () => {
-          // Segment finished naturally — scheduler will pick up next one
           playingIdxRef.current = -1;
+          if (!isPlayingRef.current) return;
+          const nextIdx = i + 1;
+          const segs = translatedTxRef.current;
+          if (nextIdx >= segs.length) return;
+          const videoNow = currentTimeRef.current;
+          const nextSeg = segs[nextIdx];
+          const drift = videoNow - (nextSeg?.start || 0);
+
+          if (drift > 3) {
+            // Audio well behind video — let scheduler jump forward to correct segment
+            console.log(`[sync] Audio behind ${drift.toFixed(1)}s — returning control to scheduler`);
+          } else if (drift < -0.3) {
+            // TTS finished early — video hasn't reached next segment yet.
+            // Do NOT chain: let the scheduler trigger it when video time arrives.
+            console.log(`[sync] TTS done early, video at ${videoNow.toFixed(1)}s next seg starts ${(nextSeg?.start || 0).toFixed(1)}s — holding for scheduler`);
+          } else {
+            // Video is at or near the next segment boundary — chain directly.
+            const currentSeg = segs[i];
+            const videoGap = nextSeg ? nextSeg.start - (currentSeg?.end || 0) : 99;
+            if (videoGap <= 2.0) {
+              const nextCached = cacheRef.current[nextIdx];
+              if (nextCached?.url || nextCached?.useClientTTS) {
+                playSeg(nextIdx);
+              }
+            } else {
+              console.log(`[sync] Video gap ${videoGap.toFixed(1)}s — holding for scheduler`);
+            }
+          }
         };
         a.onerror = () => {
           console.warn(`[scheduler] Audio error on seg ${i}, marking for client TTS`);
@@ -1155,15 +1339,43 @@ export function ClarifyAudioPanel({
         lastScheduledSegRef.current = -1;  // Reset so scheduler finds new segment
       }
 
-      // ─── If audio is currently playing, don't interrupt it ───
-      if (playingIdxRef.current >= 0) return;
+      // ─── CONTINUOUS DRIFT CORRECTION ───
+      // While audio is playing, gently nudge playback rate to keep in sync with video.
+      // Proportional controller: each 100ms tick, measure drift and adjust rate.
+      if (playingIdxRef.current >= 0 && audioRef.current) {
+        const a = audioRef.current;
+        const seg = translatedTxRef.current[playingIdxRef.current];
+
+        // ── MACRO DRIFT CHECK: if video has moved to a different segment, re-sync now ──
+        // Gentle rate nudging can't recover from large gaps (e.g. speed change mid-play).
+        const videoSegIdx = findSegForTime(videoTime, translatedTxRef.current);
+        if (videoSegIdx >= 0 && videoSegIdx !== playingIdxRef.current) {
+          const segGap = videoSegIdx - playingIdxRef.current;
+          if (segGap > 1) {  // audio is behind video by 2+ segments — hard re-sync forward
+            // Negative segGap means audio is ahead — let rate correction slow it down, never jump back
+            console.log(`[scheduler] Macro drift: playing seg ${playingIdxRef.current}, video at seg ${videoSegIdx} — re-syncing`);
+            a.pause();
+            a.onended = null;
+            playingIdxRef.current = -1;
+            lastScheduledSegRef.current = -1;
+            // Fall through to let scheduler pick the correct segment below
+          } else {
+            return;  // 1 segment off — let drift correction handle it
+          }
+        } else {
+          // No continuous rate adjustment — pre-fitted TTS speed + loadedmetadata rate match
+          // handle sync at segment start. Continuous correction caused audible oscillation.
+          return;
+        }
+      }
 
       // ─── Find which segment the video is currently in ───
       const targetIdx = findSegForTime(videoTime, segs);
       if (targetIdx < 0) return;
 
-      // ─── Don't replay the same segment we just played ───
+      // ─── Don't replay the same segment we just played or are currently playing ───
       if (targetIdx === lastScheduledSegRef.current) return;
+      if (targetIdx === playingIdxRef.current) return;
 
       // ─── Check if video has reached this segment's start (with small tolerance) ───
       const seg = segs[targetIdx];
@@ -1173,9 +1385,12 @@ export function ClarifyAudioPanel({
         if (cached?.url || cached?.useClientTTS) {
           playSeg(targetIdx);
         } else {
-          // TTS not ready yet — skip this segment, scheduler will try next one
-          console.log(`[scheduler] Seg ${targetIdx} not cached yet, skipping`);
-          lastScheduledSegRef.current = targetIdx;
+          // TTS not ready yet — do NOT mark as scheduled, scheduler will retry next tick
+          if (cacheRef.current[targetIdx]?.generating) {
+            console.log(`[scheduler] Seg ${targetIdx} still generating, will retry`);
+          } else {
+            console.log(`[scheduler] Seg ${targetIdx} not cached yet, will retry`);
+          }
         }
       }
     }, 100);
@@ -1193,17 +1408,17 @@ export function ClarifyAudioPanel({
 
   // Speed changes are applied in the aiPlaybackSpeed ref sync useEffect above
 
-  /** User clicks "Play Clarified Audio" or "Resume" — scheduler handles timing */
+  /** User clicks "Play Clarified Audio" or "Resume" — fill buffer first, then open outlet */
   const handlePlay = useCallback(() => {
     if (onMuteYouTube) onMuteYouTube(true);
     if (onPlayYouTube) onPlayYouTube();
-    isPlayingRef.current = true;
+    isPlayingRef.current = false;  // not playing yet — buffering
     playingIdxRef.current = -1;
-    lastScheduledSegRef.current = -1;  // Let scheduler find the right segment
+    lastScheduledSegRef.current = -1;
 
-    console.log(`[scheduler] === PLAY === speed=${speedRef.current}x, videoTime=${currentTimeRef.current.toFixed(1)}`);
-    setPhase('playing');
-    // Scheduler loop (started by phase useEffect) will pick up the first segment
+    console.log(`[buffer] === BUFFERING === filling ${BUFFER_THRESHOLD} segments before playback opens...`);
+    setPhase('buffering');
+    // Buffering effect will watch the cache and switch to 'playing' when threshold is met
   }, [onMuteYouTube, onPlayYouTube]);
 
   /** User clicks "Pause" */
@@ -1351,6 +1566,12 @@ export function ClarifyAudioPanel({
     console.log('[REGEN] ════════════════════════════════════════════════');
 
     // ── STEP 5: NUCLEAR CACHE CLEAR ──
+    // Increment epoch FIRST so any in-flight generateSeg calls from progressive
+    // generation see the mismatch and discard — otherwise they'd write stale-voice
+    // audio into the freshly-cleared cache before the regen loop can fill it.
+    regenEpochRef.current++;
+    const thisEpoch = regenEpochRef.current;
+
     const oldCacheSize = Object.keys(cacheRef.current).length;
     Object.values(cacheRef.current).forEach(e => {
       if (e.url) { try { URL.revokeObjectURL(e.url); } catch {} }
@@ -1358,9 +1579,6 @@ export function ClarifyAudioPanel({
     cacheRef.current = {};
     genSetRef.current = new Set();
     setGeneratedCount(0);
-
-    regenEpochRef.current++;
-    const thisEpoch = regenEpochRef.current;
     console.log(`[REGEN] Cache cleared (${oldCacheSize} entries), epoch=${thisEpoch}`);
 
     // ── STEP 6: REGENERATE all segments ──
@@ -1576,10 +1794,12 @@ export function ClarifyAudioPanel({
       }));
 
       const asmSegments: AssemblySegment[] = detectData.segments;
-      const speakerMap = matchSpeakerSegments(ytSegments, asmSegments);
+      const { speakerMap, normMap } = matchSpeakerSegments(ytSegments, asmSegments, true);
 
-      // ★ PERSIST the speaker map in a ref so it survives React re-renders
+      // ★ PERSIST map, raw utterances, and normalization — all used to label segments 30+
       assemblyAISpeakerMapRef.current = speakerMap;
+      assemblyAIRawSegmentsRef.current = asmSegments;
+      assemblyAISpeakerNormRef.current = normMap;
       assemblyAILabelsActiveRef.current = true;  // ★ PROTECTION: disable gap-based detection
       console.log('[ASSEMBLY-DETECT] ★ Speaker map saved to assemblyAISpeakerMapRef (' + speakerMap.size + ' entries)');
       console.log('[ASSEMBLY-DETECT] ★ assemblyAILabelsActiveRef = true — gap-based detection DISABLED');
@@ -1595,11 +1815,28 @@ export function ClarifyAudioPanel({
       setTranslatedTranscript(updatedSegments);
       translatedTxRef.current = updatedSegments;
 
-      // Extract unique speakers
+      // Extract unique speakers and their first appearance times
       const uniqueSpeakers = Array.from(new Set(speakerMap.values())).sort();
+      const firstSeenAt: Record<string, number> = {};
+      updatedSegments.forEach((seg: ClarifyTranscriptSegment) => {
+        const sp = seg.speaker;
+        if (sp && (firstSeenAt[sp] === undefined || seg.start < firstSeenAt[sp])) {
+          firstSeenAt[sp] = seg.start;
+        }
+      });
 
-      // Notify parent
-      if (onSpeakersDetected) onSpeakersDetected(uniqueSpeakers);
+      // Remap genderMap from AssemblyAI labels ("A","B") to our internal labels ("speaker_0","speaker_1")
+      const remappedGenderMap: Record<string, 'male' | 'female'> = {};
+      if (detectData.genderMap) {
+        Object.entries(detectData.genderMap).forEach(([asmLabel, gender]) => {
+          const internalLabel = normMap.get(asmLabel);
+          if (internalLabel) remappedGenderMap[internalLabel] = gender as 'male' | 'female';
+        });
+      }
+      console.log('[ASSEMBLY-DETECT] Gender map remapped:', remappedGenderMap);
+
+      // Notify parent (include auto-detected genders if available)
+      if (onSpeakersDetected) onSpeakersDetected(uniqueSpeakers, firstSeenAt, remappedGenderMap);
 
       // Log results with speaker distribution
       const speakerDist: Record<string, number> = {};
@@ -1631,10 +1868,13 @@ export function ClarifyAudioPanel({
         checkCounts.forEach((count, speaker) => {
           console.log(`  ${speaker}: ${count} segments`);
         });
-        if (checkCounts.size === 1 && checkCounts.has('speaker_0')) {
+        const uniqueSpeakersInMap = assemblyAISpeakerMapRef.current
+          ? new Set(assemblyAISpeakerMapRef.current.values()).size : 1;
+        if (checkCounts.size === 1 && checkCounts.has('speaker_0') && uniqueSpeakersInMap > 1) {
+          // Only flag as overwritten if AssemblyAI actually found multiple speakers
+          // (single-speaker videos legitimately have all segments as speaker_0)
           console.error('❌ LABELS WERE OVERWRITTEN! All segments are speaker_0!');
           console.error('Re-applying from frozen map...');
-          // Emergency re-apply
           if (assemblyAISpeakerMapRef.current) {
             const map = assemblyAISpeakerMapRef.current;
             translatedTxRef.current = translatedTxRef.current.map((seg, i) => ({
@@ -1644,14 +1884,14 @@ export function ClarifyAudioPanel({
             console.log('✅ Emergency re-apply complete');
           }
         } else {
-          console.log('✅ Labels still preserved after 1 second');
+          console.log('✅ Labels correct — single speaker video or labels preserved');
         }
       }, 1000);
 
       // ★ AUTO-CREATE frozen voice map immediately so TTS uses correct voices
       // (Don't wait for user to click Apply & Regenerate)
       if (uniqueSpeakers.length > 1) {
-        const defaultGenders = ['female', 'male', 'female', 'male', 'female', 'male'] as const;
+        const defaultGenders = ['male', 'female', 'male', 'female', 'male', 'female'] as const;
         const autoConfig: Record<string, 'male' | 'female'> = {};
         uniqueSpeakers.forEach((sp, idx) => { autoConfig[sp] = defaultGenders[idx % defaultGenders.length]; });
         _assignCallCounter = 0;
@@ -1947,12 +2187,18 @@ export function ClarifyAudioPanel({
         if (onSpeakersDetected) {
           const uniqueSpeakers = [...new Set(transSegs.map(s => s.speaker).filter(Boolean))] as string[];
           uniqueSpeakers.sort();
+          const firstSeenAt: Record<string, number> = {};
+          transSegs.forEach(seg => {
+            if (seg.speaker && (firstSeenAt[seg.speaker] === undefined || seg.start < firstSeenAt[seg.speaker])) {
+              firstSeenAt[seg.speaker] = seg.start;
+            }
+          });
           console.log(`[speaker-config] Detected ${uniqueSpeakers.length} speakers:`, uniqueSpeakers);
-          onSpeakersDetected(uniqueSpeakers);
+          onSpeakersDetected(uniqueSpeakers, firstSeenAt);
 
           // ★ AUTO-CREATE initial frozen voice map so TTS generation uses distinct voices immediately
           if (uniqueSpeakers.length > 1 && (!frozenVoiceMapRef.current || Object.keys(frozenVoiceMapRef.current).length === 0)) {
-            const defaultGenders = ['female', 'male', 'female', 'male', 'female', 'male'] as const;
+            const defaultGenders = ['male', 'female', 'male', 'female', 'male', 'female'] as const;
             const autoConfig: Record<string, 'male' | 'female'> = {};
             uniqueSpeakers.forEach((sp, idx) => { autoConfig[sp] = defaultGenders[idx % defaultGenders.length]; });
             _assignCallCounter = 0;
@@ -2131,8 +2377,8 @@ export function ClarifyAudioPanel({
       {phase === 'ready' && !showOptionsOverlay && (
         <div>
           <div style={{ textAlign: 'center', marginBottom: '10px' }}>
-            <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#22c55e', marginBottom: '4px' }}>
-              {'✅'} Audio Ready
+            <div style={{ fontSize: '13px', fontWeight: 'bold', color: readyToPlay ? '#22c55e' : '#f59e0b', marginBottom: '4px' }}>
+              {readyToPlay ? '✅ Audio Ready' : '⏳ Preparing…'}
             </div>
             <div style={{ fontSize: '10px', color: '#9ca3af' }}>
               {translatedUpTo}/{totalSegments} segments translated · {useClientTTS ? 'Browser voices' : 'OpenAI voices'} · {langLabel(selectedLang)}
@@ -2144,18 +2390,7 @@ export function ClarifyAudioPanel({
             )}
           </div>
 
-          {/* Transcript language indicator */}
-          {sourceLanguage && sourceLanguage !== selectedLang && (
-            <div style={{
-              padding: '4px 8px', marginBottom: '8px', borderRadius: '4px',
-              backgroundColor: 'rgba(96,165,250,0.1)', border: '1px solid rgba(96,165,250,0.3)',
-              fontSize: '10px', color: '#93c5fd', textAlign: 'center',
-            }}>
-              {'📖'} Showing {langLabel(sourceLanguage)} transcript (YouTube audio)
-            </div>
-          )}
-
-          {audioMode && (
+          {audioMode && readyToPlay && (
             <button onClick={handlePlay} style={{
               width: '100%', padding: '14px', backgroundColor: '#22c55e', color: 'white',
               border: 'none', borderRadius: '8px', cursor: 'pointer',
@@ -2164,6 +2399,17 @@ export function ClarifyAudioPanel({
             }}>
               {'▶'} Play Clarified Audio
             </button>
+          )}
+          {audioMode && !readyToPlay && (
+            <div style={{
+              width: '100%', padding: '14px', backgroundColor: '#1e293b', color: '#f59e0b',
+              border: '1px dashed #d97706', borderRadius: '8px', textAlign: 'center',
+              fontSize: '13px', marginBottom: '10px', lineHeight: '1.5',
+            }}>
+              {!detectionRun
+                ? '👆 Click "Detect Speakers" above, then assign voices to enable playback'
+                : 'Assign a gender to each speaker above, then click Apply & Reassign to enable playback'}
+            </div>
           )}
 
           {!audioMode && (
@@ -2185,6 +2431,39 @@ export function ClarifyAudioPanel({
               border: '1px solid #4b5563', borderRadius: '6px', cursor: 'pointer', fontSize: '12px',
             }}>{'⚙️'} Options</button>
           </div>
+        </div>
+      )}
+
+      {/* ─── BUFFERING ─── */}
+      {phase === 'buffering' && !showOptionsOverlay && (
+        <div>
+          <div style={{
+            padding: '12px', backgroundColor: 'rgba(96,165,250,0.15)', border: '1px solid #60a5fa',
+            borderRadius: '8px', marginBottom: '10px', textAlign: 'center',
+          }}>
+            <div style={{ fontSize: '13px', fontWeight: 'bold', color: '#60a5fa', marginBottom: '6px' }}>
+              ⏳ Filling audio buffer…
+            </div>
+            <div style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '8px' }}>
+              {Math.min(generatedCount, BUFFER_THRESHOLD)} / {BUFFER_THRESHOLD} segments ready
+            </div>
+            <div style={{
+              height: '6px', backgroundColor: '#1e293b', borderRadius: '3px', overflow: 'hidden',
+            }}>
+              <div style={{
+                height: '100%', borderRadius: '3px', backgroundColor: '#60a5fa',
+                width: `${Math.min(100, (Math.min(generatedCount, BUFFER_THRESHOLD) / BUFFER_THRESHOLD) * 100)}%`,
+                transition: 'width 0.3s ease',
+              }} />
+            </div>
+            <div style={{ fontSize: '10px', color: '#60a5fa', marginTop: '6px' }}>
+              Playback will start automatically when buffer is full
+            </div>
+          </div>
+          <button onClick={handleStop} style={{
+            width: '100%', padding: '7px', backgroundColor: '#dc2626', color: 'white',
+            border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '12px', fontWeight: 'bold',
+          }}>⏹ Cancel</button>
         </div>
       )}
 
@@ -2277,24 +2556,23 @@ export function ClarifyAudioPanel({
             </div>
           </div>
 
-          {/* Transcript language indicator */}
-          {sourceLanguage && sourceLanguage !== selectedLang && (
-            <div style={{
-              padding: '4px 8px', marginBottom: '8px', borderRadius: '4px',
-              backgroundColor: 'rgba(245,158,11,0.1)', border: '1px solid rgba(245,158,11,0.3)',
-              fontSize: '10px', color: '#fcd34d', textAlign: 'center',
+          {readyToPlay ? (
+            <button onClick={handlePlay} style={{
+              width: '100%', padding: '12px', backgroundColor: '#22c55e', color: 'white',
+              border: 'none', borderRadius: '8px', cursor: 'pointer',
+              fontSize: '14px', fontWeight: 'bold', marginBottom: '8px',
             }}>
-              {'📖'} Showing {langLabel(sourceLanguage)} transcript (YouTube audio)
+              {'▶'} Resume Clarified Audio
+            </button>
+          ) : (
+            <div style={{
+              width: '100%', padding: '12px', backgroundColor: '#1e293b', color: '#f59e0b',
+              border: '1px dashed #d97706', borderRadius: '8px', textAlign: 'center',
+              fontSize: '13px', marginBottom: '8px',
+            }}>
+              ⏳ Regenerating voices — please wait...
             </div>
           )}
-
-          <button onClick={handlePlay} style={{
-            width: '100%', padding: '12px', backgroundColor: '#22c55e', color: 'white',
-            border: 'none', borderRadius: '8px', cursor: 'pointer',
-            fontSize: '14px', fontWeight: 'bold', marginBottom: '8px',
-          }}>
-            {'▶'} Resume Clarified Audio
-          </button>
 
           {/* Current segment info */}
           {currentSegIdx >= 0 && transcript[currentSegIdx] && (

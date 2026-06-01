@@ -197,7 +197,9 @@ export async function POST(request: NextRequest) {
       transcriptCache.set(cacheKey, { segments: allOriginalSegments, detectedLang, timestamp: now });
     }
 
-    const needsTranslation = detectedLang !== targetLanguage && detectedLang !== 'unknown';
+    // Translate if detected language differs from target, OR if language is unknown
+    // (unknown = detection failed, but user explicitly chose a target language so try anyway)
+    const needsTranslation = detectedLang !== targetLanguage;
     console.log(`[process-video] Detected: ${detectedLang}, target: ${targetLanguage}, needsTranslation: ${needsTranslation}`);
 
     if (startIndex === 0) {
@@ -217,9 +219,9 @@ export async function POST(request: NextRequest) {
         originalTranscript: allOriginalSegments,
         // Translated segments (just the first buffer)
         transcript: needsTranslation ? translatedBuffer : allOriginalSegments.slice(0, INITIAL_BUFFER),
-        translatedCount: needsTranslation ? translatedBuffer.length : allOriginalSegments.length,
+        translatedCount: INITIAL_BUFFER,
         totalSegments: allOriginalSegments.length,
-        needsMoreTranslation: needsTranslation && allOriginalSegments.length > INITIAL_BUFFER,
+        needsMoreTranslation: allOriginalSegments.length > INITIAL_BUFFER,
         isStreaming: false,
         videoId,
         translatedTo: targetLanguage,

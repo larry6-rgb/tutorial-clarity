@@ -42,21 +42,15 @@ const OUTPUT_OPTIONS: { mode: OutputMode; icon: string; title: string; descripti
     description: 'Translated subtitles overlaid on the video. Quick and lightweight.',
   },
   {
-    mode: 'audio_only',
-    icon: '🔊',
-    title: 'Audio Only',
-    description: 'AI-generated speech replaces original audio. Multiple voices for different speakers.',
-  },
-  {
     mode: 'audio_and_subtitles',
     icon: '🎬',
-    title: 'Audio + Subtitles',
-    description: 'Full experience — translated audio with matching subtitles. Most immersive.',
+    title: 'Audio',
+    description: 'AI-generated speech with matching translated subtitles.',
   },
 ];
 
 export default function ProcessingOptionsModal({ isOpen, onClose, onSelectOption, initialMode, initialLanguage }: ProcessingOptionsModalProps) {
-  const [selectedMode, setSelectedMode] = useState<OutputMode>(initialMode || 'audio_and_subtitles');
+  const [selectedMode, setSelectedMode] = useState<OutputMode>(initialMode === 'audio_only' ? 'audio_and_subtitles' : (initialMode || 'audio_and_subtitles'));
   const [selectedLanguage, setSelectedLanguage] = useState(initialLanguage || 'en');
 
   if (!isOpen) return null;
@@ -89,13 +83,13 @@ export default function ProcessingOptionsModal({ isOpen, onClose, onSelectOption
 
         {/* Language Selection */}
         <div className="mb-5">
-          <label className="block text-sm font-medium text-gray-300 mb-2">
-            Target Language
+          <label className="block text-sm font-medium text-red-400 mb-2">
+            ⚠ Target Language — confirm this before proceeding
           </label>
           <select
             value={selectedLanguage}
             onChange={(e) => setSelectedLanguage(e.target.value)}
-            className="w-full bg-gray-800 border border-gray-600 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 focus:border-transparent"
+            className="w-full bg-gray-800 border border-red-500 rounded-lg px-3 py-2 text-white text-sm focus:outline-none focus:ring-2 focus:ring-red-500 focus:border-transparent"
           >
             {LANGUAGES.map(lang => (
               <option key={lang.code} value={lang.code}>

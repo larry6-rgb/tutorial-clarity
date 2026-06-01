@@ -38,7 +38,17 @@ export interface AssemblySegment {
 export function matchSpeakerSegments(
   youtubeSegments: YouTubeSegment[],
   assemblySegments: AssemblySegment[]
-): Map<number, string> {
+): Map<number, string>;
+export function matchSpeakerSegments(
+  youtubeSegments: YouTubeSegment[],
+  assemblySegments: AssemblySegment[],
+  returnNormMap: true
+): { speakerMap: Map<number, string>; normMap: Map<string, string> };
+export function matchSpeakerSegments(
+  youtubeSegments: YouTubeSegment[],
+  assemblySegments: AssemblySegment[],
+  returnNormMap?: boolean
+): Map<number, string> | { speakerMap: Map<number, string>; normMap: Map<string, string> } {
   console.log('[MATCH] ════════════════════════════════════════════');
   console.log('[MATCH] Matching YouTube segments to AssemblyAI speakers...');
   console.log('[MATCH] YouTube segments:', youtubeSegments.length);
@@ -88,34 +98,31 @@ export function matchSpeakerSegments(
       return;
     }
 
-    // Strategy 2: Time overlap match (fallback)
-    // Find the AssemblyAI segment with the most time overlap.
-    // ★ FIX: Check ALL AssemblyAI segments for overlap, not just midpoint-inside.
-    //   A YouTube caption can span a speaker change, so we pick the speaker
-    //   who covers MORE of the caption's time range.
-    let bestTimeMatch: { speaker: string; overlap: number } | null = null;
+    // Strategy 2: Who is speaking at the midpoint of this YouTube segment?
+    // Find the AssemblyAI utterance that CONTAINS the YouTube segment's midpoint time.
+    // This is more accurate than max-overlap because a dominant speaker's long utterances
+    // would otherwise win every overlap contest even when a different speaker is active.
+    const ytMid = (ytSeg.start + ytSeg.end) / 2;
+    let midpointMatch: { speaker: string } | null = null;
 
     for (const asmSeg of assemblySegments) {
-      const overlapStart = Math.max(ytSeg.start, asmSeg.start);
-      const overlapEnd = Math.min(ytSeg.end, asmSeg.end);
-      const overlap = overlapEnd - overlapStart;
-      if (overlap > 0 && (!bestTimeMatch || overlap > bestTimeMatch.overlap)) {
-        bestTimeMatch = { speaker: asmSeg.speaker, overlap };
+      if (ytMid >= asmSeg.start && ytMid <= asmSeg.end) {
+        midpointMatch = { speaker: asmSeg.speaker };
+        break;
       }
     }
 
-    if (bestTimeMatch && bestTimeMatch.overlap > 0) {
-      const normalized = speakerNormMap.get(bestTimeMatch.speaker) || 'speaker_0';
+    if (midpointMatch) {
+      const normalized = speakerNormMap.get(midpointMatch.speaker) || 'speaker_0';
       speakerMap.set(ytSeg.idx, normalized);
       timeMatches++;
       if (ytSeg.idx < 10) {
-        console.log(`[MATCH] Seg ${ytSeg.idx}: "${ytSeg.text.substring(0, 35)}" → ${normalized} (time overlap: ${bestTimeMatch.overlap.toFixed(1)}s)`);
+        console.log(`[MATCH] Seg ${ytSeg.idx}: "${ytSeg.text.substring(0, 35)}" → ${normalized} (midpoint at ${ytMid.toFixed(1)}s)`);
       }
       return;
     }
 
-    // Strategy 3: Nearest-in-time AssemblyAI segment
-    const ytMid = (ytSeg.start + ytSeg.end) / 2;
+    // Strategy 3: Nearest utterance midpoint (midpoint falls in a gap between utterances)
     let nearest: { speaker: string; distance: number } | null = null;
     for (const asmSeg of assemblySegments) {
       const dist = Math.abs(ytMid - (asmSeg.start + asmSeg.end) / 2);
@@ -146,6 +153,7 @@ export function matchSpeakerSegments(
   console.log('[MATCH] Speaker distribution:', dist);
   console.log('[MATCH] ════════════════════════════════════════════');
 
+  if (returnNormMap) return { speakerMap, normMap: speakerNormMap };
   return speakerMap;
 }
 

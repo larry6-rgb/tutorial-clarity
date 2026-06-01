@@ -8,6 +8,122 @@ import { tmpdir } from 'os';
 
 export const maxDuration = 300; // 5 minutes max for long videos
 
+// ── Helper: Find ffmpeg binary ──────────────────────────────────────
+
+function findFfmpeg(): string | null {
+  const candidates = [
+    'ffmpeg', 'ffmpeg.exe',
+    '/usr/local/bin/ffmpeg', '/usr/bin/ffmpeg',
+    'C:\\ProgramData\\chocolatey\\bin\\ffmpeg.exe',
+    'C:\\ffmpeg\\bin\\ffmpeg.exe',
+    'C:\\Program Files\\ffmpeg\\bin\\ffmpeg.exe',
+  ];
+  for (const cmd of candidates) {
+    try {
+      execSync(`"${cmd}" -version`, { encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] });
+      return cmd;
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+// ── Pitch detection via autocorrelation ────────────────────────────
+// Returns fundamental frequency in Hz, or 0 if undetectable.
+
+function detectF0(pcmBuffer: Buffer, sampleRate: number): number {
+  if (pcmBuffer.length < 512) return 0;
+  const samples = new Float32Array(pcmBuffer.length / 2);
+  for (let i = 0; i < samples.length; i++) {
+    samples[i] = pcmBuffer.readInt16LE(i * 2) / 32768;
+  }
+  // Analyze first 1 second max
+  const len = Math.min(samples.length, sampleRate);
+  // Search period range: 70Hz–300Hz
+  const minPeriod = Math.floor(sampleRate / 300);
+  const maxPeriod = Math.floor(sampleRate / 70);
+  let best = -1, bestPeriod = -1;
+  for (let p = minPeriod; p <= maxPeriod; p++) {
+    let corr = 0, norm = 0;
+    for (let i = 0; i < len - p; i++) {
+      corr += samples[i] * samples[i + p];
+      norm += samples[i] * samples[i] + samples[i + p] * samples[i + p];
+    }
+    const nc = norm > 0 ? (2 * corr) / norm : 0;
+    if (nc > best) { best = nc; bestPeriod = p; }
+  }
+  return bestPeriod > 0 ? sampleRate / bestPeriod : 0;
+}
+
+// ── Auto-detect gender per speaker via pitch analysis ───────────────
+
+function detectSpeakerGenders(
+  ffmpegPath: string,
+  audioFile: string,
+  utterances: any[],
+  speakers: Set<string>
+): Record<string, 'male' | 'female'> {
+  const speakerList = Array.from(speakers);
+
+  // Step 1: measure F0 for each speaker
+  const f0Results: { speaker: string; f0: number }[] = [];
+
+  for (const speaker of speakerList) {
+    const speakerUtts = utterances
+      .filter((u: any) => u.speaker === speaker)
+      .sort((a: any, b: any) => (b.end - b.start) - (a.end - a.start));
+
+    const utt = speakerUtts.find((u: any) => (u.end - u.start) > 1000) || speakerUtts[0];
+
+    if (!utt) {
+      f0Results.push({ speaker, f0: 0 });
+      continue;
+    }
+
+    const startSec = (utt.start / 1000).toFixed(3);
+    const duration = Math.min((utt.end - utt.start) / 1000, 4).toFixed(3);
+
+    try {
+      const pcm = execSync(
+        `"${ffmpegPath}" -ss ${startSec} -i "${audioFile}" -t ${duration} -ar 16000 -ac 1 -f s16le -`,
+        { timeout: 15000, maxBuffer: 10 * 1024 * 1024, stdio: ['pipe', 'pipe', 'pipe'] }
+      ) as Buffer;
+
+      const f0 = detectF0(pcm, 16000);
+      console.log(`[Gender] Speaker ${speaker}: F0=${f0.toFixed(1)}Hz (utterance ${startSec}s, ${duration}s)`);
+      f0Results.push({ speaker, f0 });
+    } catch (err: any) {
+      console.warn(`[Gender] Could not analyze speaker ${speaker}:`, err.message?.substring(0, 100));
+      f0Results.push({ speaker, f0: 0 });
+    }
+  }
+
+  // Step 2: assign genders
+  // If multiple speakers detected: use relative ranking — lower F0 = male, higher F0 = female.
+  // This is more robust than an absolute threshold because male/female voices are reliably
+  // distinguishable relative to each other even when absolute pitch varies by person/language.
+  const genderMap: Record<string, 'male' | 'female'> = {};
+  const validResults = f0Results.filter(r => r.f0 > 0);
+
+  if (validResults.length >= 2) {
+    // Sort ascending by F0 — lower half = male, upper half = female
+    const sorted = [...validResults].sort((a, b) => a.f0 - b.f0);
+    const midpoint = Math.floor(sorted.length / 2);
+    sorted.forEach((r, i) => {
+      genderMap[r.speaker] = i < midpoint ? 'male' : 'female';
+    });
+    // Speakers with failed F0 detection: default to male
+    f0Results.filter(r => r.f0 === 0).forEach(r => { genderMap[r.speaker] = 'male'; });
+  } else {
+    // Single speaker or all failed: use absolute threshold
+    f0Results.forEach(r => {
+      genderMap[r.speaker] = (r.f0 > 0 && r.f0 < 170) ? 'male' : 'female';
+    });
+  }
+
+  console.log('[Gender] Final assignments:', Object.entries(genderMap).map(([s, g]) => `${s}=${g}`).join(', '));
+  return genderMap;
+}
+
 // ── Helper: Find yt-dlp binary ──────────────────────────────────────
 
 function findYtDlp(): string {
@@ -303,10 +419,26 @@ export async function POST(req: NextRequest) {
     console.log(`[AssemblyAI] Utterances: ${segments.length}`);
     console.log('='.repeat(60));
 
+    // ── STEP 4: Auto-detect speaker genders via pitch analysis ─────────
+
+    let genderMap: Record<string, 'male' | 'female'> = {};
+    if (tempFilePath) {
+      const ffmpegPath = findFfmpeg();
+      if (ffmpegPath) {
+        console.log('');
+        console.log('[Gender] STEP 4: Detecting speaker genders via pitch analysis...');
+        genderMap = detectSpeakerGenders(ffmpegPath, tempFilePath, utterances, speakers);
+        console.log('[Gender] STEP 4: ✅ Gender map:', genderMap);
+      } else {
+        console.warn('[Gender] ffmpeg not found — skipping auto gender detection');
+      }
+    }
+
     return NextResponse.json({
       success: true,
       speakers: Array.from(speakers).sort(),
       segments,
+      genderMap,
       totalSegments: segments.length,
       processingTime: totalTime,
     });
