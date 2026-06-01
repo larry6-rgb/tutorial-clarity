@@ -68,8 +68,13 @@ function WatchPageContent() {
     // Refs so the interval always has current values without restarting
     const currentTimeRef = useRef(0);
     const durationRef = useRef(0);
+    const pinnedResumeRef = useRef<Set<string>>(new Set()); // tracks pinned videoIds reliably
     useEffect(() => { currentTimeRef.current = currentTime; }, [currentTime]);
     useEffect(() => { durationRef.current = duration; }, [duration]);
+    // Keep pinnedResumeRef in sync with state
+    useEffect(() => {
+        pinnedResumeRef.current = new Set(resumeSessions.filter(s => s.isPinned).map(s => s.videoId));
+    }, [resumeSessions]);
     const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
     const [transcriptLoading, setTranscriptLoading] = useState(false);
     const [transcriptError, setTranscriptError] = useState('');
@@ -1148,17 +1153,18 @@ function WatchPageContent() {
             };
             setResumeSessions(prev => {
                 const existing = prev.find(s => s.videoId === videoId);
+                const isPinned = pinnedResumeRef.current.has(videoId);
 
                 // Auto-remove if finished (within 30s of end) — unless pinned
                 const isFinished = session.duration > 0 && (session.duration - t) < 30;
-                if (isFinished && !existing?.isPinned) {
+                if (isFinished && !isPinned) {
                     const updated = prev.filter(s => s.videoId !== videoId);
                     try { localStorage.setItem(RESUME_KEY, JSON.stringify(updated)); } catch {}
                     return updated;
                 }
 
                 // Preserve pin status when updating
-                const updatedSession = { ...session, isPinned: existing?.isPinned || false };
+                const updatedSession = { ...session, isPinned: isPinned || existing?.isPinned || false };
                 const filtered = prev.filter(s => s.videoId !== videoId);
                 const updated = [updatedSession, ...filtered].slice(0, 10);
                 try { localStorage.setItem(RESUME_KEY, JSON.stringify(updated)); } catch {}
