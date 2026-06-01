@@ -24,6 +24,7 @@ function WatchPageContent() {
     const searchParams = useSearchParams();
     const router = useRouter();
     const rawUrl = searchParams.get('url');
+    const resumeTimestamp = parseInt(searchParams.get('t') || '0', 10);
     const extractId = (url: string | null): string | null => {
         if (!url) return null;
         const match = url.match(/(?:youtube\.com\/watch\?v=|youtu\.be\/)([^&\s]+)/);
@@ -47,6 +48,22 @@ function WatchPageContent() {
     const [savedVideos, setSavedVideos] = useState<SavedVideo[]>([]);
     const savedVideosLoaded = useRef(false); // prevents sync wiping data before initial load
     const [newVideoUrl, setNewVideoUrl] = useState('');
+
+    // ── RESUME PREVIOUS VIDEO ──
+    const RESUME_KEY = 'tc_resume_session';
+    interface ResumeSession {
+        videoId: string;
+        title: string;
+        timestamp: number;
+        duration: number;
+        lastWatched: string;
+    }
+    const [resumeSession, setResumeSession] = useState<ResumeSession | null>(() => {
+        try {
+            const saved = localStorage.getItem('tc_resume_session');
+            return saved ? JSON.parse(saved) : null;
+        } catch { return null; }
+    });
     const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
     const [transcriptLoading, setTranscriptLoading] = useState(false);
     const [transcriptError, setTranscriptError] = useState('');
@@ -959,6 +976,20 @@ function WatchPageContent() {
         return date.toLocaleDateString('en-US', { month: 'short', day: 'numeric', year: 'numeric' });
     };
 
+    const formatTimestamp = (seconds: number) => {
+        const h = Math.floor(seconds / 3600);
+        const m = Math.floor((seconds % 3600) / 60);
+        const s = seconds % 60;
+        if (h > 0) return `${h}:${m.toString().padStart(2, '0')}:${s.toString().padStart(2, '0')}`;
+        return `${m}:${s.toString().padStart(2, '0')}`;
+    };
+
+    const handleResumeVideo = () => {
+        if (!resumeSession) return;
+        setShowMenu(false);
+        window.location.href = `/watch?url=${resumeSession.videoId}&t=${resumeSession.timestamp}`;
+    };
+
     const handleHeightDragStart = (e: React.MouseEvent) => {
         e.preventDefault();
         e.stopPropagation();
@@ -1060,6 +1091,42 @@ function WatchPageContent() {
         setZoomMode(false);
         setZoomRect(null);
     }, [videoId]);
+
+    // ── SEEK to resume timestamp once video is ready ──
+    useEffect(() => {
+        if (!resumeTimestamp || resumeTimestamp < 1) return;
+        // Wait for iframe to be ready, then seek
+        const timer = setTimeout(() => {
+            if (iframeRef.current?.contentWindow) {
+                iframeRef.current.contentWindow.postMessage(
+                    JSON.stringify({ event: 'command', func: 'seekTo', args: [resumeTimestamp, true] }),
+                    '*'
+                );
+                console.log(`[resume] Seeked to ${resumeTimestamp}s`);
+            }
+        }, 3000); // give YouTube 3s to load before seeking
+        return () => clearTimeout(timer);
+    }, [resumeTimestamp]);
+
+    // ── AUTO-SAVE resume session every 10 seconds while watching ──
+    useEffect(() => {
+        if (!videoId || currentTime < 5) return; // don't save until 5s in
+        const interval = setInterval(() => {
+            const title = document.title.replace(' - YouTube', '').trim() || 'Untitled Video';
+            const session: ResumeSession = {
+                videoId,
+                title,
+                timestamp: Math.floor(currentTime),
+                duration: Math.floor(duration),
+                lastWatched: new Date().toISOString(),
+            };
+            try {
+                localStorage.setItem(RESUME_KEY, JSON.stringify(session));
+                setResumeSession(session);
+            } catch {}
+        }, 10000);
+        return () => clearInterval(interval);
+    }, [videoId, currentTime, duration]);
 
     // Clarify bar drag handler
     useEffect(() => {
@@ -2452,6 +2519,89 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         <p style={{ margin: 0, color: '#9ca3af', fontSize: '12px' }}>
                                             You are always in control of the pace — no detail gets by you.
                                         </p>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 10. RESUME PREVIOUS VIDEO */}
+                            <div style={{ borderBottom: '1px solid #374151' }}>
+                                <h3
+                                    onClick={() => toggleSection('resume')}
+                                    style={{
+                                        margin: 0, color: 'white', backgroundColor: '#1f2937',
+                                        fontWeight: 'bold', padding: '12px',
+                                        cursor: 'pointer', display: 'flex',
+                                        justifyContent: 'space-between', alignItems: 'center'
+                                    }}
+                                >
+                                    <span>10. RESUME PREVIOUS VIDEO ▶</span>
+                                    <span>{expandedSections.has('resume') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('resume') && (
+                                    <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '13px', color: '#d1d5db' }}>
+                                        {resumeSession ? (
+                                            <div>
+                                                <p style={{ margin: '0 0 10px 0', color: '#9ca3af', fontSize: '12px' }}>
+                                                    Last watched {formatDate(resumeSession.lastWatched)}
+                                                </p>
+                                                <div style={{
+                                                    backgroundColor: '#1f2937', borderRadius: '8px',
+                                                    padding: '10px', marginBottom: '12px',
+                                                    border: '1px solid #374151',
+                                                }}>
+                                                    <div style={{ display: 'flex', gap: '10px', alignItems: 'center' }}>
+                                                        <img
+                                                            src={`https://img.youtube.com/vi/${resumeSession.videoId}/default.jpg`}
+                                                            alt={resumeSession.title}
+                                                            style={{ width: '80px', height: '60px', objectFit: 'cover', borderRadius: '4px', flexShrink: 0 }}
+                                                        />
+                                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                                            <div style={{
+                                                                fontWeight: 'bold', fontSize: '12px', marginBottom: '6px',
+                                                                overflow: 'hidden', textOverflow: 'ellipsis',
+                                                                display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical'
+                                                            }}>
+                                                                {resumeSession.title}
+                                                            </div>
+                                                            <div style={{ fontSize: '12px', color: '#facc15', marginBottom: '8px' }}>
+                                                                ⏱ Stopped at {formatTimestamp(resumeSession.timestamp)}
+                                                                {resumeSession.duration > 0 && (
+                                                                    <span style={{ color: '#9ca3af' }}> of {formatTimestamp(resumeSession.duration)}</span>
+                                                                )}
+                                                            </div>
+                                                            <button
+                                                                onClick={handleResumeVideo}
+                                                                style={{
+                                                                    backgroundColor: '#22c55e', color: 'white',
+                                                                    border: 'none', borderRadius: '6px',
+                                                                    padding: '6px 14px', fontSize: '12px',
+                                                                    fontWeight: 'bold', cursor: 'pointer',
+                                                                }}
+                                                            >
+                                                                ▶ Resume from {formatTimestamp(resumeSession.timestamp)}
+                                                            </button>
+                                                        </div>
+                                                    </div>
+                                                </div>
+                                                <button
+                                                    onClick={() => {
+                                                        localStorage.removeItem(RESUME_KEY);
+                                                        setResumeSession(null);
+                                                    }}
+                                                    style={{
+                                                        backgroundColor: 'transparent', color: '#6b7280',
+                                                        border: 'none', fontSize: '11px', cursor: 'pointer',
+                                                        textDecoration: 'underline', padding: 0,
+                                                    }}
+                                                >
+                                                    Clear resume history
+                                                </button>
+                                            </div>
+                                        ) : (
+                                            <p style={{ textAlign: 'center', color: '#6b7280', padding: '16px 0', margin: 0 }}>
+                                                No previous video yet. Once you start watching, Tutorial Clarity will remember your place automatically.
+                                            </p>
+                                        )}
                                     </div>
                                 )}
                             </div>
