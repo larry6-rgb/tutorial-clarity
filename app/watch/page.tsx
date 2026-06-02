@@ -20,6 +20,12 @@ interface TranscriptSegment {
 
 const DEVELOPMENT_MODE = true;
 
+// ── TUTORIAL VIDEO ──
+// When the tutorial video is ready, paste its YouTube video ID here.
+// Example: 'dQw4w9WgXcQ'  (the part after ?v= in the YouTube URL)
+// Leave empty to show the "Coming soon" placeholder.
+const TUTORIAL_VIDEO_ID = '';
+
 function WatchPageContent() {
     const searchParams = useSearchParams();
     const router = useRouter();
@@ -3006,9 +3012,25 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 </h3>
                                 {expandedSections.has('tutorial') && (
                                     <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
-                                        <p style={{ color: '#9ca3af', lineHeight: '1.6' }}>
-                                            Coming soon — a step-by-step guide to using all of Tutorial Clarity's features.
-                                        </p>
+                                        {TUTORIAL_VIDEO_ID ? (
+                                            <>
+                                                <p style={{ color: '#d1d5db', lineHeight: '1.6', marginBottom: '10px' }}>
+                                                    Watch this short video to learn how to use all of Tutorial Clarity's features.
+                                                </p>
+                                                <div style={{ position: 'relative', paddingBottom: '56.25%', height: 0, overflow: 'hidden', borderRadius: '8px' }}>
+                                                    <iframe
+                                                        src={`https://www.youtube.com/embed/${TUTORIAL_VIDEO_ID}?rel=0`}
+                                                        style={{ position: 'absolute', top: 0, left: 0, width: '100%', height: '100%', border: 'none', borderRadius: '8px' }}
+                                                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                                                        allowFullScreen
+                                                    />
+                                                </div>
+                                            </>
+                                        ) : (
+                                            <p style={{ color: '#9ca3af', lineHeight: '1.6' }}>
+                                                Coming soon — a step-by-step video guide to using all of Tutorial Clarity's features.
+                                            </p>
+                                        )}
                                     </div>
                                 )}
                             </div>
