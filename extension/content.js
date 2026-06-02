@@ -79,11 +79,11 @@ function trackVideoFocus() {
 function handleAltPress(e) {
   if (e.key === 'Alt') {
     altPressCount++;
-    
+
     if (altPressTimer) {
       clearTimeout(altPressTimer);
     }
-    
+
     if (altPressCount === 2) {
       // Double Alt press detected!
       saveCurrentVideo();
@@ -95,6 +95,59 @@ function handleAltPress(e) {
       }, 500);
     }
   }
+}
+
+// ── Keyboard shortcuts — open Tutorial Clarity to a specific section ──
+// These only fire when the user is NOT typing in a text field.
+const TC_SECTION_KEYS = {
+  ' ': null,        // Space — open TC without jumping to a section (play/pause)
+  'm': 'audio',
+  ',': 'playback',
+  '.': 'playback',
+  's': 'saved',
+  'a': 'clarify',
+  'v': 'speakers',
+  't': 'scroll',
+  'z': 'zoom',
+  'r': 'resume',
+  'u': 'summary',
+  'x': 'transcriptdoc',
+  'k': 'shortcuts',
+  '?': 'tutorial',
+};
+
+function handleTCShortcut(e) {
+  // Don't intercept when user is typing
+  const tag = (document.activeElement?.tagName || '').toLowerCase();
+  if (tag === 'input' || tag === 'textarea' || tag === 'select' || document.activeElement?.isContentEditable) return;
+
+  // Only handle if Alt is NOT held (Alt combos are reserved for save)
+  if (e.altKey || e.ctrlKey || e.metaKey) return;
+
+  const key = e.key;
+  if (!(key in TC_SECTION_KEYS)) return;
+
+  // Only act when watching a video
+  const videoId = getCurrentVideoId();
+  if (!videoId) return;
+
+  e.preventDefault();
+  e.stopPropagation();
+
+  const section = TC_SECTION_KEYS[key];
+  const url = section
+    ? `${TC_URL}/watch?url=${videoId}&open=${section}`
+    : `${TC_URL}/watch?url=${videoId}`;
+
+  // Mute YouTube so it doesn't conflict with TC audio
+  const video = document.querySelector('video');
+  if (video) {
+    video.muted = true;
+    video.volume = 0;
+  }
+
+  // Focus existing TC tab if open, otherwise open a new one
+  chrome.runtime.sendMessage({ type: 'openTC', url });
 }
 
 // Tutorial Clarity app URL — update this if running on a different port or domain
@@ -167,8 +220,9 @@ function init() {
     subtree: true
   });
   
-  // Listen for Alt key
+  // Listen for Alt key (save) and TC shortcut keys
   document.addEventListener('keydown', handleAltPress);
+  document.addEventListener('keydown', handleTCShortcut, true);
 }
 
 // Wait for YouTube to load

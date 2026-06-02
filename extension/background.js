@@ -3,8 +3,23 @@ console.log('Tutorial Clarity background script loaded');
 
 // Listen for extension icon clicks
 chrome.action.onClicked.addListener((tab) => {
-  // Open Tutorial Clarity app
-  chrome.tabs.create({
-    url: 'http://localhost:3000'
+  chrome.tabs.create({ url: 'http://localhost:3000' });
+});
+
+// Open TC to a specific section — reuse existing TC tab if one is already open
+chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+  if (message.type !== 'openTC') return;
+
+  const targetUrl = message.url;
+
+  chrome.tabs.query({ url: 'http://localhost:3000/*' }, (tabs) => {
+    if (tabs.length > 0) {
+      // TC is already open — update its URL and bring it to the front
+      chrome.tabs.update(tabs[0].id, { url: targetUrl, active: true });
+      chrome.windows.update(tabs[0].windowId, { focused: true });
+    } else {
+      // No TC tab — open a new one
+      chrome.tabs.create({ url: targetUrl });
+    }
   });
 });

@@ -37,8 +37,11 @@ function WatchPageContent() {
     const iframeRef = useRef<HTMLIFrameElement>(null);
     const containerRef = useRef<HTMLDivElement>(null);
     const transcriptRef = useRef<HTMLDivElement>(null);
-    const [showMenu, setShowMenu] = useState(false);
-    const [expandedSections, setExpandedSections] = useState<Set<string>>(new Set());
+    const openSection = searchParams.get('open') || '';
+    const [showMenu, setShowMenu] = useState(!!openSection);
+    const [expandedSections, setExpandedSections] = useState<Set<string>>(
+        openSection ? new Set([openSection]) : new Set()
+    );
     const [volume, setVolume] = useState(100);
     const [isMuted, setIsMuted] = useState(false);
     const [isPlaying, setIsPlaying] = useState(true);
@@ -729,13 +732,33 @@ function WatchPageContent() {
                     }
                 }
             }
+
+            // ── Shortcut: M — Toggle mute ──
+            if (e.key === 'm' || e.key === 'M') {
+                e.preventDefault();
+                toggleMute();
+            }
+
+            // ── Shortcut: , / . — Speed down / up ──
+            const speeds = [0.25, 0.5, 0.75, 1, 1.25, 1.5, 1.75, 2];
+            if (e.key === ',') {
+                e.preventDefault();
+                const idx = speeds.indexOf(playbackSpeed);
+                if (idx > 0) handlePlaybackSpeedChange(speeds[idx - 1]);
+            }
+            if (e.key === '.') {
+                e.preventDefault();
+                const idx = speeds.indexOf(playbackSpeed);
+                if (idx < speeds.length - 1) handlePlaybackSpeedChange(speeds[idx + 1]);
+            }
+
         };
 
         window.addEventListener('keydown', handleKeyPress, true);
         return () => {
             window.removeEventListener('keydown', handleKeyPress, true);
         };
-    }, [isPlaying, zoomTransform]);
+    }, [isPlaying, zoomTransform, playbackSpeed, isMuted]);
 
     useEffect(() => {
         const handleClickOutside = (e: MouseEvent) => {
@@ -2825,7 +2848,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                             </div>
 
                             {/* 12. TRANSCRIPT */}
-                            <div>
+                            <div style={{ borderBottom: '1px solid #374151' }}>
                                 <h3
                                     onClick={() => toggleSection('transcriptdoc')}
                                     style={{
@@ -2913,6 +2936,79 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                 </button>
                                             </>
                                         )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 13. KEYBOARD SHORTCUTS */}
+                            <div style={{ borderBottom: '1px solid #374151' }}>
+                                <h3
+                                    onClick={() => toggleSection('shortcuts')}
+                                    style={{
+                                        fontSize: '16px', fontWeight: 'bold', padding: '12px',
+                                        cursor: 'pointer', display: 'flex',
+                                        justifyContent: 'space-between', alignItems: 'center',
+                                    }}
+                                >
+                                    <span>13. KEYBOARD SHORTCUTS</span>
+                                    <span>{expandedSections.has('shortcuts') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('shortcuts') && (
+                                    <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
+                                        <p style={{ color: '#d1d5db', marginBottom: '10px', lineHeight: '1.6' }}>
+                                            While watching a YouTube video, press any of these keys to jump directly to that feature here in Tutorial Clarity — the menu will open automatically to the right section.
+                                        </p>
+                                        {[
+                                            { key: 'Space', label: 'Pause / Play' },
+                                            { key: 'M', label: 'Toggle Mute' },
+                                            { key: ',  /  .', label: 'Speed Down / Up' },
+                                            { key: 'S', label: 'Saved for Future Viewing' },
+                                            { key: 'A', label: 'Clarify Audio' },
+                                            { key: 'V', label: 'Speaker Voices' },
+                                            { key: 'T', label: 'Scroll Transcript' },
+                                            { key: 'Z', label: 'Zoom' },
+                                            { key: 'R', label: 'Resume Previous Video' },
+                                            { key: 'U', label: 'Summary' },
+                                            { key: 'X', label: 'Transcript' },
+                                            { key: 'K', label: 'Keyboard Shortcuts' },
+                                            { key: '?', label: 'Tutorial' },
+                                        ].map(({ key, label }) => (
+                                            <div key={key} style={{
+                                                display: 'flex', justifyContent: 'space-between',
+                                                alignItems: 'center', padding: '5px 0',
+                                                borderBottom: '1px solid #1f2937',
+                                            }}>
+                                                <span style={{ color: '#d1d5db' }}>{label}</span>
+                                                <span style={{
+                                                    backgroundColor: '#374151', color: '#facc15',
+                                                    borderRadius: '4px', padding: '2px 8px',
+                                                    fontFamily: 'monospace', fontSize: '12px',
+                                                    fontWeight: 'bold', whiteSpace: 'nowrap',
+                                                }}>{key}</span>
+                                            </div>
+                                        ))}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 14. TUTORIAL */}
+                            <div style={{ borderBottom: '1px solid #374151' }}>
+                                <h3
+                                    onClick={() => toggleSection('tutorial')}
+                                    style={{
+                                        fontSize: '16px', fontWeight: 'bold', padding: '12px',
+                                        cursor: 'pointer', display: 'flex',
+                                        justifyContent: 'space-between', alignItems: 'center',
+                                    }}
+                                >
+                                    <span>14. TUTORIAL</span>
+                                    <span>{expandedSections.has('tutorial') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('tutorial') && (
+                                    <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
+                                        <p style={{ color: '#9ca3af', lineHeight: '1.6' }}>
+                                            Coming soon — a step-by-step guide to using all of Tutorial Clarity's features.
+                                        </p>
                                     </div>
                                 )}
                             </div>

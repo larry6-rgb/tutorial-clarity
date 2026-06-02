@@ -5,7 +5,8 @@
   "description": "Save YouTube videos and watch them with enhanced controls",
   "permissions": [
     "storage",
-    "activeTab"
+    "activeTab",
+    "tabs"
   ],
   "host_permissions": [
     "https://www.youtube.com/*"
