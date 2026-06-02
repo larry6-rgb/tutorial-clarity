@@ -2956,7 +2956,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 {expandedSections.has('shortcuts') && (
                                     <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
                                         <p style={{ color: '#d1d5db', marginBottom: '10px', lineHeight: '1.6' }}>
-                                            While watching a YouTube video, press any of these keys to jump directly to that feature here in Tutorial Clarity — the menu will open automatically to the right section.
+                                            While watching a YouTube video, press <strong>Space</strong> first to pause it, then press any of these keys to jump directly to that feature here in Tutorial Clarity — the menu will open automatically to the right section.
                                         </p>
                                         {[
                                             { key: 'Space', label: 'Pause / Play' },

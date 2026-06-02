@@ -139,11 +139,13 @@ function handleTCShortcut(e) {
     ? `${TC_URL}/watch?url=${videoId}&open=${section}`
     : `${TC_URL}/watch?url=${videoId}`;
 
-  // Mute YouTube so it doesn't conflict with TC audio
+  // Pause and mute YouTube so it doesn't conflict with TC audio.
+  // YouTube fights back against programmatic volume changes, so we pause
+  // the video entirely — that guarantees silence in the background tab.
   const video = document.querySelector('video');
   if (video) {
+    video.pause();
     video.muted = true;
-    video.volume = 0;
   }
 
   // Focus existing TC tab if open, otherwise open a new one
