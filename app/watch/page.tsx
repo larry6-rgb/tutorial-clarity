@@ -2803,6 +2803,9 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             Before you spend time watching, find out what this video actually covers.
                                             Click the button below and a plain-English summary will be generated for you.
                                         </p>
+                                        <p style={{ color: '#f59e0b', lineHeight: '1.6', marginBottom: '12px', fontSize: '11px' }}>
+                                            ⚠️ Summary is only available for YouTube videos that have captions. If a video has no captions, this feature will not work.
+                                        </p>
                                         {!summaryFetched && !summaryLoading && (
                                             <button
                                                 onClick={handleFetchSummary}
@@ -2870,6 +2873,9 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                     <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
                                         <p style={{ color: '#d1d5db', lineHeight: '1.6', marginBottom: '12px' }}>
                                             Generate a clean, readable transcript of this video — with proper punctuation and paragraph breaks — that you can download or print.
+                                        </p>
+                                        <p style={{ color: '#f59e0b', lineHeight: '1.6', marginBottom: '12px', fontSize: '11px' }}>
+                                            ⚠️ Transcript is only available for YouTube videos that have captions. If a video has no captions, this feature will not work.
                                         </p>
                                         {!transcriptDocFetched && !transcriptDocLoading && (
                                             <button
