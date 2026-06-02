@@ -146,6 +146,64 @@ function WatchPageContent() {
         }
     };
 
+    // ── TRANSCRIPT DOCUMENT STATE ──
+    const [transcriptDoc, setTranscriptDoc] = useState('');
+    const [transcriptDocTitle, setTranscriptDocTitle] = useState('');
+    const [transcriptDocLoading, setTranscriptDocLoading] = useState(false);
+    const [transcriptDocError, setTranscriptDocError] = useState('');
+    const [transcriptDocFetched, setTranscriptDocFetched] = useState(false);
+
+    const handleFetchTranscriptDoc = async () => {
+        if (transcriptDocLoading) return;
+        setTranscriptDocLoading(true);
+        setTranscriptDocError('');
+        setTranscriptDoc('');
+        try {
+            const pageTitle = videoId ? await fetchVideoTitle(videoId) : '';
+            const res = await fetch('/api/transcript-document', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ videoId, title: pageTitle }),
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                setTranscriptDocError(data.error || 'Could not generate transcript.');
+            } else {
+                setTranscriptDoc(data.transcript);
+                setTranscriptDocTitle(data.title);
+                setTranscriptDocFetched(true);
+            }
+        } catch {
+            setTranscriptDocError('Network error. Please try again.');
+        } finally {
+            setTranscriptDocLoading(false);
+        }
+    };
+
+    const handleDownloadTranscript = () => {
+        const header = `TRANSCRIPT\n${transcriptDocTitle}\n${'─'.repeat(60)}\n\n`;
+        const blob = new Blob([header + transcriptDoc], { type: 'text/plain;charset=utf-8' });
+        const url = URL.createObjectURL(blob);
+        const a = document.createElement('a');
+        a.href = url;
+        a.download = `${transcriptDocTitle.replace(/[^a-z0-9]/gi, '_').slice(0, 60)}_transcript.txt`;
+        a.click();
+        URL.revokeObjectURL(url);
+    };
+
+    const handlePrintTranscript = () => {
+        const header = `<h2 style="font-family:Georgia,serif;margin-bottom:4px">${transcriptDocTitle}</h2><hr/>`;
+        const body = transcriptDoc
+            .split('\n\n')
+            .map(p => `<p style="font-family:Georgia,serif;font-size:13pt;line-height:1.8;margin-bottom:1em">${p.replace(/\n/g, ' ')}</p>`)
+            .join('');
+        const win = window.open('', '_blank');
+        if (!win) return;
+        win.document.write(`<!DOCTYPE html><html><head><title>${transcriptDocTitle}</title><style>body{margin:40px;max-width:800px}</style></head><body>${header}${body}</body></html>`);
+        win.document.close();
+        win.print();
+    };
+
     // ── ZOOM STATE ──
     const [zoomBase, setZoomBase] = useState<{ sx: number; sy: number; tx: number; ty: number } | null>(null);
     const [zoomSize, setZoomSize] = useState(100);
@@ -2759,6 +2817,99 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                     }}
                                                 >
                                                     🔄 Generate new summary
+                                                </button>
+                                            </>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 12. TRANSCRIPT */}
+                            <div>
+                                <h3
+                                    onClick={() => toggleSection('transcriptdoc')}
+                                    style={{
+                                        fontSize: '16px', fontWeight: 'bold', padding: '12px',
+                                        cursor: 'pointer', display: 'flex',
+                                        justifyContent: 'space-between', alignItems: 'center',
+                                    }}
+                                >
+                                    <span>12. TRANSCRIPT</span>
+                                    <span>{expandedSections.has('transcriptdoc') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('transcriptdoc') && (
+                                    <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
+                                        <p style={{ color: '#d1d5db', lineHeight: '1.6', marginBottom: '12px' }}>
+                                            Generate a clean, readable transcript of this video — with proper punctuation and paragraph breaks — that you can download or print.
+                                        </p>
+                                        {!transcriptDocFetched && !transcriptDocLoading && (
+                                            <button
+                                                onClick={handleFetchTranscriptDoc}
+                                                style={{
+                                                    width: '100%', padding: '10px', borderRadius: '6px',
+                                                    border: 'none', cursor: 'pointer', fontWeight: 'bold',
+                                                    fontSize: '13px', backgroundColor: '#0369a1', color: 'white',
+                                                }}
+                                            >
+                                                📄 Create Transcript
+                                            </button>
+                                        )}
+                                        {transcriptDocLoading && (
+                                            <div style={{ textAlign: 'center', color: '#9ca3af', padding: '12px 0' }}>
+                                                <div style={{ fontSize: '20px', marginBottom: '6px' }}>⏳</div>
+                                                <div>Formatting transcript…</div>
+                                                <div style={{ fontSize: '11px', marginTop: '4px', color: '#6b7280' }}>This takes about 15–30 seconds</div>
+                                            </div>
+                                        )}
+                                        {transcriptDocError && (
+                                            <div style={{ color: '#f87171', marginBottom: '10px', lineHeight: '1.5' }}>
+                                                ⚠️ {transcriptDocError}
+                                            </div>
+                                        )}
+                                        {transcriptDoc && (
+                                            <>
+                                                <div style={{ display: 'flex', gap: '8px', marginBottom: '10px' }}>
+                                                    <button
+                                                        onClick={handleDownloadTranscript}
+                                                        style={{
+                                                            flex: 1, padding: '8px', borderRadius: '6px',
+                                                            border: 'none', cursor: 'pointer', fontWeight: 'bold',
+                                                            fontSize: '12px', backgroundColor: '#15803d', color: 'white',
+                                                        }}
+                                                    >
+                                                        ⬇️ Download .txt
+                                                    </button>
+                                                    <button
+                                                        onClick={handlePrintTranscript}
+                                                        style={{
+                                                            flex: 1, padding: '8px', borderRadius: '6px',
+                                                            border: 'none', cursor: 'pointer', fontWeight: 'bold',
+                                                            fontSize: '12px', backgroundColor: '#92400e', color: 'white',
+                                                        }}
+                                                    >
+                                                        🖨️ Print
+                                                    </button>
+                                                </div>
+                                                <div style={{
+                                                    backgroundColor: '#1e293b', border: '1px solid #075985',
+                                                    borderRadius: '8px', padding: '10px',
+                                                    color: '#cbd5e1', lineHeight: '1.7', fontSize: '11px',
+                                                    maxHeight: '200px', overflowY: 'auto',
+                                                    marginBottom: '8px',
+                                                }}>
+                                                    {transcriptDoc.split('\n\n').map((para, i) => (
+                                                        <p key={i} style={{ marginBottom: '10px' }}>{para}</p>
+                                                    ))}
+                                                </div>
+                                                <button
+                                                    onClick={() => { setTranscriptDoc(''); setTranscriptDocFetched(false); setTranscriptDocError(''); }}
+                                                    style={{
+                                                        width: '100%', padding: '7px', borderRadius: '6px',
+                                                        border: '1px solid #374151', cursor: 'pointer',
+                                                        fontSize: '11px', backgroundColor: 'transparent', color: '#9ca3af',
+                                                    }}
+                                                >
+                                                    🔄 Generate new transcript
                                                 </button>
                                             </>
                                         )}
