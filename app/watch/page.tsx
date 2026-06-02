@@ -114,6 +114,38 @@ function WatchPageContent() {
     const [hasUnsavedVoiceConfig, setHasUnsavedVoiceConfig] = useState(false);
     const [isRegenerating, setIsRegenerating] = useState(false);
 
+    // ── SUMMARY STATE ──
+    const [summaryText, setSummaryText] = useState<string>('');
+    const [summaryLoading, setSummaryLoading] = useState(false);
+    const [summaryError, setSummaryError] = useState('');
+    const [summaryFetched, setSummaryFetched] = useState(false);
+
+    const handleFetchSummary = async () => {
+        if (summaryLoading) return;
+        setSummaryLoading(true);
+        setSummaryError('');
+        setSummaryText('');
+        try {
+            const pageTitle = videoId ? await fetchVideoTitle(videoId) : '';
+            const res = await fetch('/api/summarize-video', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ videoId, title: pageTitle }),
+            });
+            const data = await res.json();
+            if (!res.ok || data.error) {
+                setSummaryError(data.error || 'Could not generate summary.');
+            } else {
+                setSummaryText(data.summary);
+                setSummaryFetched(true);
+            }
+        } catch {
+            setSummaryError('Network error. Please try again.');
+        } finally {
+            setSummaryLoading(false);
+        }
+    };
+
     // ── ZOOM STATE ──
     const [zoomBase, setZoomBase] = useState<{ sx: number; sy: number; tx: number; ty: number } | null>(null);
     const [zoomSize, setZoomSize] = useState(100);
@@ -2660,6 +2692,75 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                     </div>
                                                 ))}
                                             </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 11. SUMMARY */}
+                            <div>
+                                <h3
+                                    onClick={() => toggleSection('summary')}
+                                    style={{
+                                        fontSize: '16px', fontWeight: 'bold', padding: '12px',
+                                        cursor: 'pointer', display: 'flex',
+                                        justifyContent: 'space-between', alignItems: 'center',
+                                    }}
+                                >
+                                    <span>11. SUMMARY</span>
+                                    <span>{expandedSections.has('summary') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('summary') && (
+                                    <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
+                                        <p style={{ color: '#d1d5db', lineHeight: '1.6', marginBottom: '12px' }}>
+                                            Before you spend time watching, find out what this video actually covers.
+                                            Click the button below and a plain-English summary will be generated for you.
+                                        </p>
+                                        {!summaryFetched && !summaryLoading && (
+                                            <button
+                                                onClick={handleFetchSummary}
+                                                style={{
+                                                    width: '100%', padding: '10px', borderRadius: '6px',
+                                                    border: 'none', cursor: 'pointer', fontWeight: 'bold',
+                                                    fontSize: '13px', backgroundColor: '#7c3aed', color: 'white',
+                                                }}
+                                            >
+                                                📋 What's this video about?
+                                            </button>
+                                        )}
+                                        {summaryLoading && (
+                                            <div style={{ textAlign: 'center', color: '#9ca3af', padding: '12px 0' }}>
+                                                <div style={{ fontSize: '20px', marginBottom: '6px' }}>⏳</div>
+                                                <div>Reading transcript and generating summary…</div>
+                                                <div style={{ fontSize: '11px', marginTop: '4px', color: '#6b7280' }}>This takes about 10–15 seconds</div>
+                                            </div>
+                                        )}
+                                        {summaryError && (
+                                            <div style={{ color: '#f87171', marginBottom: '10px', lineHeight: '1.5' }}>
+                                                ⚠️ {summaryError}
+                                            </div>
+                                        )}
+                                        {summaryText && (
+                                            <>
+                                                <div style={{
+                                                    backgroundColor: '#1e293b', border: '1px solid #4c1d95',
+                                                    borderRadius: '8px', padding: '12px',
+                                                    color: '#e2e8f0', lineHeight: '1.7', fontSize: '12px',
+                                                    marginBottom: '10px',
+                                                }}>
+                                                    {summaryText}
+                                                </div>
+                                                <button
+                                                    onClick={() => { setSummaryText(''); setSummaryFetched(false); setSummaryError(''); }}
+                                                    style={{
+                                                        width: '100%', padding: '7px', borderRadius: '6px',
+                                                        border: '1px solid #374151', cursor: 'pointer',
+                                                        fontSize: '11px', backgroundColor: 'transparent', color: '#9ca3af',
+                                                    }}
+                                                >
+                                                    🔄 Generate new summary
+                                                </button>
+                                            </>
                                         )}
                                     </div>
                                 )}
