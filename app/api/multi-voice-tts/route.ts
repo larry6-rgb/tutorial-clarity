@@ -2,9 +2,9 @@ import { NextRequest, NextResponse } from 'next/server';
 
 /**
  * /api/multi-voice-tts — Route v81 (fixed voice parameter)
- * 
+ *
  * Generates TTS audio using OpenAI's TTS API.
- * 
+ *
  * Request body:
  *   text: string          — Text to synthesize
  *   voice: string         — Voice ID like "nova", "onyx", "shimmer" (plain string!)
@@ -13,7 +13,7 @@ import { NextRequest, NextResponse } from 'next/server';
  *   segmentId?: string    — Segment identifier
  *   videoId?: string      — Source video ID
  *   ttsModel?: string     — 'tts-1' or 'tts-1-hd'
- * 
+ *
  * Also accepts legacy format: voice: { id: string, ... }
  */
 
@@ -21,7 +21,7 @@ const OPENAI_VOICES = ['nova', 'shimmer', 'alloy', 'echo', 'fable', 'onyx'];
 
 export async function POST(request: NextRequest) {
   const requestId = `req_${Date.now()}_${Math.random().toString(36).slice(2, 6)}`;
-  
+
   try {
     // ── Parse request body ──
     let body: any;
