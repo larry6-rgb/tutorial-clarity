@@ -1,10 +1,43 @@
 generator client {
-    provider = "prisma-client-js"
-    binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x"]
-    output = "/home/ubuntu/tutorial_clarity_app/app/node_modules/.prisma/client"
+  provider      = "prisma-client-js"
+  binaryTargets = ["native", "linux-musl-arm64-openssl-3.0.x"]
 }
 
 datasource db {
-    provider = "postgresql"
-    url      = env("DATABASE_URL")
+  provider = "postgresql"
+  url      = env("DATABASE_URL")
+}
+
+model User {
+  id            String        @id @default(cuid())
+  clerkId       String        @unique
+  email         String        @unique
+  createdAt     DateTime      @default(now())
+  subscription  Subscription?
+  usageRecords  UsageRecord[]
+}
+
+model Subscription {
+  id                   String    @id @default(cuid())
+  userId               String    @unique
+  user                 User      @relation(fields: [userId], references: [id])
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?   @unique
+  plan                 String    @default("trial") // trial | monthly | annual | free
+  status               String    @default("active") // active | canceled | past_due
+  trialEndsAt          DateTime?
+  currentPeriodEnd     DateTime?
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+}
+
+model UsageRecord {
+  id        String   @id @default(cuid())
+  userId    String
+  user      User     @relation(fields: [userId], references: [id])
+  feature   String   // clarify_audio | summary | transcript | definition
+  videoId   String
+  createdAt DateTime @default(now())
+
+  @@index([userId, feature, createdAt])
 }

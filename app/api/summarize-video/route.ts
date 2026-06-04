@@ -1,9 +1,20 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@clerk/nextjs/server';
+import { checkPremiumAccess } from '@/lib/subscription';
 
 export const dynamic = 'force-dynamic';
 
 export async function POST(request: NextRequest) {
     try {
+        const { userId } = await auth();
+        if (!userId) {
+          return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+        }
+        const access = await checkPremiumAccess(userId);
+        if (!access.allowed) {
+          return NextResponse.json({ error: 'subscription_required', reason: access.reason }, { status: 403 });
+        }
+
         const { videoId, title } = await request.json();
         if (!videoId) {
             return NextResponse.json({ error: 'videoId is required' }, { status: 400 });

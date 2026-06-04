@@ -1,6 +1,8 @@
 export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
+import { auth } from '@clerk/nextjs/server';
+import { checkPremiumAccess } from '@/lib/subscription';
 import { AssemblyAI } from 'assemblyai';
 import { execSync } from 'child_process';
 import { unlink, stat } from 'fs/promises';
@@ -180,6 +182,15 @@ function fmtTime(ms: number): string {
 // ═══════════════════════════════════════════════════════════════════════
 
 export async function POST(req: NextRequest) {
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+  }
+  const access = await checkPremiumAccess(userId);
+  if (!access.allowed) {
+    return NextResponse.json({ error: 'subscription_required', reason: access.reason }, { status: 403 });
+  }
+
   const pipelineStart = Date.now();
   let tempFilePath: string | null = null;
 
