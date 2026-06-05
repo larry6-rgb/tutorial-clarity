@@ -145,3 +145,4 @@ yt-api-key.txt
 .logs/
 electron-launcher/node_modules/
 .build/
+python_services/venv311
