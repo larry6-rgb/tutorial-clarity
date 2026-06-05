@@ -60,7 +60,7 @@ export async function POST(req: Request) {
           trialEndsAt: subscription.trial_end
             ? new Date(subscription.trial_end * 1000)
             : null,
-          currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+          currentPeriodEnd: new Date((subscription as any).current_period_end * 1000),
         },
         create: {
           userId: user.id,
@@ -71,7 +71,7 @@ export async function POST(req: Request) {
           trialEndsAt: subscription.trial_end
             ? new Date(subscription.trial_end * 1000)
             : null,
-          currentPeriodEnd: new Date(subscription.current_period_end * 1000),
+          currentPeriodEnd: new Date((subscription as any).current_period_end * 1000),
         },
       });
       break;
@@ -90,7 +90,7 @@ export async function POST(req: Request) {
         where: { userId: user.id },
         data: {
           status: sub.status === 'active' ? 'active' : 'canceled',
-          currentPeriodEnd: new Date(sub.current_period_end * 1000),
+          currentPeriodEnd: new Date((sub as any).current_period_end * 1000),
         },
       });
       break;
