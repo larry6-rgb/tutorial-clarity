@@ -46,7 +46,7 @@ export default function SubscribePage() {
         >
           Tutorial Clarity
         </Link>
-        <UserButton afterSignOutUrl="/" />
+        <UserButton  />
       </nav>
 
       <div className="max-w-4xl mx-auto px-6 py-16">

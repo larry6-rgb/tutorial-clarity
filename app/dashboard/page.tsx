@@ -45,7 +45,7 @@ export default function DashboardPage() {
           <span className="text-gray-400 text-sm">
             {user?.emailAddresses[0]?.emailAddress}
           </span>
-          <UserButton afterSignOutUrl="/" />
+          <UserButton  />
         </div>
       </nav>
 
