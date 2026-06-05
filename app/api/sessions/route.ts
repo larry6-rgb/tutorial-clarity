@@ -1,6 +1,6 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/db';
+import { prisma as db } from '@/lib/db';
 
 const SESSIONS_PER_MONTH = 20;
 
