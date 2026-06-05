@@ -1,4 +1,4 @@
-import { db } from './db';
+import { prisma as db } from './db';
 
 export type AccessResult =
   | { allowed: true }

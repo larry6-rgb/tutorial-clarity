@@ -47,7 +47,7 @@ export default function AppHome() {
     >
       {/* User menu top-right */}
       <div className="absolute top-4 right-4">
-        <UserButton afterSignOutUrl="/" />
+        <UserButton />
       </div>
 
       <div className="bg-black p-12 rounded-2xl shadow-2xl max-w-md w-full">
