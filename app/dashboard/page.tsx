@@ -2,16 +2,27 @@
 
 import { useUser, UserButton } from '@clerk/nextjs';
 import Link from 'next/link';
+import { useEffect, useState } from 'react';
 
 export default function DashboardPage() {
   const { user } = useUser();
-
-  // Placeholder values — will be wired to DB once Stripe is set up
-  const sessionsUsed = 0;
+  const [sessionsUsed, setSessionsUsed] = useState(0);
+  const [bonusSessions, setBonusSessions] = useState(0);
   const sessionsTotal = 20;
-  const percentUsed = (sessionsUsed / sessionsTotal) * 100;
+  const totalAvailable = sessionsTotal + bonusSessions;
+  const percentUsed = Math.min((sessionsUsed / totalAvailable) * 100, 100);
   const planName = 'Free Trial';
   const daysLeft = 14;
+
+  useEffect(() => {
+    fetch('/api/sessions')
+      .then(r => r.json())
+      .then(data => {
+        if (data.sessionsUsed !== undefined) setSessionsUsed(data.sessionsUsed);
+        if (data.bonusSessions !== undefined) setBonusSessions(data.bonusSessions);
+      })
+      .catch(() => {});
+  }, []);
 
   return (
     <div className="min-h-screen bg-gray-950 text-white">
@@ -66,7 +77,7 @@ export default function DashboardPage() {
           <div className="bg-gray-900 border border-gray-700 rounded-2xl p-6">
             <div className="text-sm text-gray-400 mb-1">Clarify Audio Sessions</div>
             <div className="text-2xl font-bold mb-3">
-              {sessionsUsed} <span className="text-gray-500 text-lg">of {sessionsTotal} used this month</span>
+              {sessionsUsed} <span className="text-gray-500 text-lg">of {totalAvailable} used this month</span>
             </div>
             <div className="w-full bg-gray-700 rounded-full h-3">
               <div
@@ -75,7 +86,10 @@ export default function DashboardPage() {
               />
             </div>
             <div className="text-gray-500 text-sm mt-2">
-              {sessionsTotal - sessionsUsed} sessions remaining
+              {totalAvailable - sessionsUsed} sessions remaining
+              {bonusSessions > 0 && (
+                <span className="text-green-400 ml-2">(includes {bonusSessions} bonus)</span>
+              )}
             </div>
           </div>
         </div>

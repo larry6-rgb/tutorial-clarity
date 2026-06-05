@@ -27,6 +27,9 @@ model Subscription {
   status               String    @default("active") // active | canceled | past_due
   trialEndsAt          DateTime?
   currentPeriodEnd     DateTime?
+  sessionsUsed         Int       @default(0)
+  bonusSessions        Int       @default(0)
+  sessionsResetAt      DateTime?
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 }

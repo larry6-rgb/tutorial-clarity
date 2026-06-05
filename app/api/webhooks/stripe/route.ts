@@ -33,12 +33,22 @@ export async function POST(req: Request) {
       const clerkUserId = session.metadata?.clerkUserId;
       if (!clerkUserId) break;
 
+      const user = await db.user.findUnique({ where: { clerkId: clerkUserId } });
+      if (!user) break;
+
+      // One-time overage pack purchase
+      if (session.mode === 'payment') {
+        await db.subscription.updateMany({
+          where: { userId: user.id },
+          data: { bonusSessions: { increment: 20 } },
+        });
+        break;
+      }
+
+      // Subscription purchase
       const subscription = await stripe.subscriptions.retrieve(session.subscription);
       const priceId = subscription.items.data[0]?.price.id;
       const plan = priceId === process.env.STRIPE_PRICE_ANNUAL ? 'annual' : 'monthly';
-
-      const user = await db.user.findUnique({ where: { clerkId: clerkUserId } });
-      if (!user) break;
 
       await db.subscription.upsert({
         where: { userId: user.id },

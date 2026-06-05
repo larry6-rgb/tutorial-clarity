@@ -5,13 +5,15 @@ interface ClarificationLimitPopupProps {
   remainingMinutes: number;
   onContinue?: () => void;
   onStop: () => void;
+  onBuyMore?: () => void;
 }
 
 export default function ClarificationLimitPopup({
   type,
   remainingMinutes,
   onContinue,
-  onStop
+  onStop,
+  onBuyMore
 }: ClarificationLimitPopupProps) {
   return (
     <div style={{
@@ -86,29 +88,45 @@ export default function ClarificationLimitPopup({
               🛑 Daily Limit Reached
             </h2>
             <p style={{ fontSize: '22px', lineHeight: '1.6', marginBottom: '20px' }}>
-              You've used your <strong>30 free minutes</strong> of clarification today.
+              You've used all <strong>20 Clarify Audio sessions</strong> for this month.
             </p>
             <p style={{ fontSize: '20px', lineHeight: '1.6', marginBottom: '30px', color: '#aaa' }}>
-              <strong>Paid tier coming soon!</strong>
+              Need more right now? Add 20 sessions for just $8.99.
             </p>
-            <p style={{ fontSize: '20px', lineHeight: '1.6', marginBottom: '30px', color: '#4CAF50' }}>
-              💡 <strong>Tip:</strong> Use our <strong>Resume Session</strong> feature to save your progress and return tomorrow for 30 more free minutes!
-            </p>
-            <button
-              onClick={onStop}
-              style={{
-                padding: '18px 40px',
-                fontSize: '22px',
-                backgroundColor: '#2196F3',
-                color: 'white',
-                border: 'none',
-                borderRadius: '10px',
-                cursor: 'pointer',
-                fontWeight: 'bold'
-              }}
-            >
-              Got It
-            </button>
+            <div style={{ display: 'flex', gap: '20px', justifyContent: 'center', flexWrap: 'wrap' }}>
+              {onBuyMore && (
+                <button
+                  onClick={onBuyMore}
+                  style={{
+                    padding: '18px 40px',
+                    fontSize: '22px',
+                    backgroundColor: '#4CAF50',
+                    color: 'white',
+                    border: 'none',
+                    borderRadius: '10px',
+                    cursor: 'pointer',
+                    fontWeight: 'bold'
+                  }}
+                >
+                  Add 20 Sessions — $8.99
+                </button>
+              )}
+              <button
+                onClick={onStop}
+                style={{
+                  padding: '18px 40px',
+                  fontSize: '22px',
+                  backgroundColor: '#666',
+                  color: 'white',
+                  border: 'none',
+                  borderRadius: '10px',
+                  cursor: 'pointer',
+                  fontWeight: 'bold'
+                }}
+              >
+                Not Now
+              </button>
+            </div>
           </>
         )}
       </div>
