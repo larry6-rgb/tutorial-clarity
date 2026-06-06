@@ -25,10 +25,18 @@ function createFloatingIcon() {
 function handleIconClick() {
   const videoId = getCurrentVideoId();
   const appUrl = videoId
-    ? `https://tutorialclarity.com/watch?url=${videoId}`
-    : `https://tutorialclarity.com`;
-  
-  window.open(appUrl, '_blank');
+    ? `${TC_URL}/watch?url=${videoId}&open=saved`
+    : `${TC_URL}`;
+
+  // Pause and mute YouTube so it doesn't conflict with TC audio
+  const video = document.querySelector('video');
+  if (video) {
+    video.pause();
+    video.muted = true;
+  }
+
+  // Reuse existing TC tab if open, otherwise open new one
+  chrome.runtime.sendMessage({ type: 'openTC', url: appUrl });
 }
 
 // Get current video ID from focused/hovered element or current page
