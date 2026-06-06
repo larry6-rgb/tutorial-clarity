@@ -24,9 +24,9 @@ function createFloatingIcon() {
 // Handle icon click
 function handleIconClick() {
   const videoId = getCurrentVideoId();
-  const appUrl = videoId 
-    ? `http://localhost:3000/watch?url=${videoId}`
-    : `http://localhost:3000`;
+  const appUrl = videoId
+    ? `https://tutorialclarity.com/watch?url=${videoId}`
+    : `https://tutorialclarity.com`;
   
   window.open(appUrl, '_blank');
 }
@@ -152,8 +152,8 @@ function handleTCShortcut(e) {
   chrome.runtime.sendMessage({ type: 'openTC', url });
 }
 
-// Tutorial Clarity app URL — update this if running on a different port or domain
-const TC_URL = 'http://localhost:3000';
+// Tutorial Clarity app URL
+const TC_URL = 'https://tutorialclarity.com';
 
 // Save current video — POSTs to Tutorial Clarity API so it appears in section 4
 async function saveCurrentVideo() {
