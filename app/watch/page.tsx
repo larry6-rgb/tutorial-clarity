@@ -758,6 +758,30 @@ function WatchPageContent() {
                 if (idx < speeds.length - 1) handlePlaybackSpeedChange(speeds[idx + 1]);
             }
 
+            // ── Navigation shortcuts — open menu and jump to section ──
+            const navKey = e.key.toUpperCase();
+            const sectionMap: Record<string, string> = {
+                'S': 'saved',
+                'A': 'clarify',
+                'V': 'clarify',   // Speaker Voices lives inside the Clarify Audio section
+                'T': 'scroll',
+                'Z': 'zoom',
+                'R': 'resume',
+                'U': 'summary',
+                'X': 'transcriptdoc',
+                'K': 'shortcuts',
+                '?': 'tutorial',
+            };
+            if (sectionMap[navKey]) {
+                e.preventDefault();
+                setShowMenu(true);
+                setExpandedSections(prev => {
+                    const newSet = new Set(prev);
+                    newSet.add(sectionMap[navKey]);
+                    return newSet;
+                });
+            }
+
         };
 
         window.addEventListener('keydown', handleKeyPress, true);
