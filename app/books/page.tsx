@@ -6,9 +6,9 @@ const books = [
   {
     id: 1,
     title: 'Conversational Spices',
-    coverPlaceholder: true,
-    // Replace coverImage with the actual path once artwork is found:
-    // coverImage: '/images/conversational-spices-cover.jpg',
+    coverPlaceholder: false,
+    coverPdf: '/images/conversational-spices-cover.pdf',
+    // coverImage: '/images/conversational-spices-cover.jpg', // swap in when JPG is ready
     sections: [
       {
         heading: 'Storytelling and Narrative Depth',
@@ -139,8 +139,20 @@ function BookCard({ book }: { book: typeof books[0] }) {
       <div className="flip-card-inner">
 
         {/* Front — cover */}
-        <div className="flip-card-front bg-gray-800 border border-gray-700 flex flex-col items-center justify-center">
-          {book.coverPlaceholder ? (
+        <div className="flip-card-front bg-gray-800 border border-gray-700 overflow-hidden">
+          {book.coverPdf ? (
+            <div className="relative w-full h-full">
+              <embed
+                src={`${book.coverPdf}#toolbar=0&navpanes=0&scrollbar=0&page=1&view=FitH`}
+                type="application/pdf"
+                className="w-full h-full"
+                style={{ border: 'none' }}
+              />
+              <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-center py-1.5">
+                <p className="text-gray-300 text-xs">Hover to read about this book</p>
+              </div>
+            </div>
+          ) : (
             <div className="flex flex-col items-center justify-center h-full w-full p-6 text-center">
               <div className="w-44 h-64 bg-gradient-to-br from-red-900 to-red-700 rounded-lg mb-5 flex flex-col items-center justify-center shadow-xl px-4">
                 <span className="text-4xl mb-3">📖</span>
@@ -148,11 +160,7 @@ function BookCard({ book }: { book: typeof books[0] }) {
                 <p className="text-red-300 text-xs mt-2">by Eppler Publishing LLC</p>
               </div>
               <p className="text-gray-400 text-sm">Cover artwork coming soon</p>
-              <p className="text-gray-500 text-xs mt-1">Hover to read about this book</p>
             </div>
-          ) : (
-            // <img src={book.coverImage} alt={book.title} className="w-full h-full object-cover" />
-            null
           )}
         </div>
 
