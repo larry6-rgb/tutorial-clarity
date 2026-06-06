@@ -2,7 +2,7 @@ import React from 'react';
 
 interface ClarificationLimitPopupProps {
   type: 'warning' | 'limit';
-  remainingMinutes: number;
+  remainingMinutes: number; // reused as "remaining sessions" for monthly limit warnings
   onContinue?: () => void;
   onStop: () => void;
   onBuyMore?: () => void;
@@ -41,13 +41,13 @@ export default function ClarificationLimitPopup({
         {type === 'warning' ? (
           <>
             <h2 style={{ fontSize: '32px', marginBottom: '20px', color: '#FFA726' }}>
-              ⚠️ Usage Warning
+              ⚠️ Low Sessions Warning
             </h2>
             <p style={{ fontSize: '22px', lineHeight: '1.6', marginBottom: '30px' }}>
-              You have <strong>{remainingMinutes} minutes</strong> of free clarification remaining today.
+              You have <strong>{remainingMinutes} Clarify Audio {remainingMinutes === 1 ? 'session' : 'sessions'}</strong> remaining this month.
             </p>
             <p style={{ fontSize: '20px', lineHeight: '1.6', marginBottom: '30px', color: '#aaa' }}>
-              This applies across all videos you watch today.
+              Using Clarify Audio now will count as one session. Would you like to continue?
             </p>
             <div style={{ display: 'flex', gap: '20px', justifyContent: 'center', flexWrap: 'wrap' }}>
               <button
@@ -78,7 +78,7 @@ export default function ClarificationLimitPopup({
                   fontWeight: 'bold'
                 }}
               >
-                Stop for Today
+                Cancel
               </button>
             </div>
           </>

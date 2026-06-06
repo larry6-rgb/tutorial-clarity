@@ -24,8 +24,11 @@
  */
 
 import { useState, useEffect, useCallback, useRef } from 'react';
+import { useRouter } from 'next/navigation';
 import ProcessingOptionsModal, { OutputMode } from '@/app/hooks/ProcessingOptionsModal';
 import { matchSpeakerSegments, type YouTubeSegment, type AssemblySegment } from '@/app/utils/matchSpeakerSegments';
+import ClarificationLimitPopup from '@/app/components/ClarificationLimitPopup';
+import type { SubscriptionStatus } from '@/lib/subscription';
 
 export interface ClarifyTranscriptSegment {
   text: string;
@@ -568,6 +571,8 @@ export function ClarifyAudioPanel({
   videoId, currentTime, aiPlaybackSpeed = 1, speakerConfig, onSpeakersDetected, onSubtitleChange, onMuteYouTube, onPlayYouTube, onTranscriptReady, onSegmentChange, registerHandlers, readyToPlay = true, detectionRun = false, onUnknownSpeaker,
 }: ClarifyAudioPanelProps) {
 
+  const router = useRouter();
+
   // ═══ STATE ═══
   type Phase = 'choosing' | 'processing' | 'ready' | 'buffering' | 'playing' | 'paused' | 'stopped' | 'error';
   const BUFFER_THRESHOLD = 15; // segments that must be TTS-ready before playback opens
@@ -575,6 +580,18 @@ export function ClarifyAudioPanel({
   const [selectedMode, setSelectedMode] = useState<OutputMode | null>(null);
   const [selectedLang, setSelectedLang] = useState('en');
   const [error, setError] = useState('');
+
+  // ═══ SESSION ENFORCEMENT ═══
+  const [subStatus, setSubStatus] = useState<SubscriptionStatus | null>(null);
+  const [sessionPopup, setSessionPopup] = useState<'warning' | 'limit' | null>(null);
+  const pendingOptionRef = useRef<{ mode: OutputMode; lang: string } | null>(null);
+
+  useEffect(() => {
+    fetch('/api/subscription-status')
+      .then(r => r.json())
+      .then(setSubStatus)
+      .catch(() => null);
+  }, []);
 
   // Dual transcript: original (source language) + translated
   const [originalTranscript, setOriginalTranscript] = useState<ClarifyTranscriptSegment[]>([]);
@@ -2136,8 +2153,19 @@ export function ClarifyAudioPanel({
   }, [registerHandlers, handlePlay, handlePause, handleRegenerateVoices, detectSpeakersWithAssemblyAI, testAudioBlobs]);
 
 
-  /** User selects options from modal -> start processing */
-  const handleSelectOption = useCallback(async (mode: OutputMode, lang: string) => {
+  /** Actually run the processing after session check passes */
+  const runProcessing = useCallback(async (mode: OutputMode, lang: string) => {
+    // Record session usage
+    fetch('/api/sessions', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ feature: 'clarify_audio', videoId }),
+    }).then(r => r.json()).then(data => {
+      if (data.sessionsUsed !== undefined) {
+        setSubStatus(prev => prev ? { ...prev, sessionsUsed: data.sessionsUsed, sessionsRemaining: Math.max(0, (prev.sessionsLimit) - data.sessionsUsed) } : prev);
+      }
+    }).catch(() => null);
+
     setSelectedMode(mode);
     setSelectedLang(lang);
     setPhase('processing');
@@ -2240,6 +2268,26 @@ export function ClarifyAudioPanel({
     }
   }, [videoId, onTranscriptReady, onSpeakersDetected, generateSeg]);
 
+  /** User selects options from modal -> check session limits before processing */
+  const handleSelectOption = useCallback((mode: OutputMode, lang: string) => {
+    if (!subStatus || subStatus.plan === 'trial' || !subStatus.premiumAllowed) {
+      // No status yet or trial — let it through (server will gate if truly expired)
+      runProcessing(mode, lang);
+      return;
+    }
+    if (subStatus.sessionBlocked) {
+      pendingOptionRef.current = { mode, lang };
+      setSessionPopup('limit');
+      return;
+    }
+    if (subStatus.sessionWarning) {
+      pendingOptionRef.current = { mode, lang };
+      setSessionPopup('warning');
+      return;
+    }
+    runProcessing(mode, lang);
+  }, [subStatus, runProcessing]);
+
   /** handleRestart — full restart (re-choose options) */
   const handleRestart = useCallback(() => {
     handleStop();
@@ -2287,6 +2335,31 @@ export function ClarifyAudioPanel({
   // ═══ RENDER ═══
   return (
     <div style={{ padding: '12px', fontSize: '12px', color: 'white' }}>
+
+      {/* ─── SESSION LIMIT POPUP ─── */}
+      {sessionPopup === 'limit' && (
+        <ClarificationLimitPopup
+          type="limit"
+          remainingMinutes={0}
+          onStop={() => { setSessionPopup(null); pendingOptionRef.current = null; }}
+          onBuyMore={() => router.push('/subscribe')}
+        />
+      )}
+
+      {/* ─── SESSION WARNING POPUP ─── */}
+      {sessionPopup === 'warning' && subStatus && (
+        <ClarificationLimitPopup
+          type="warning"
+          remainingMinutes={subStatus.sessionsRemaining}
+          onContinue={() => {
+            setSessionPopup(null);
+            const pending = pendingOptionRef.current;
+            pendingOptionRef.current = null;
+            if (pending) runProcessing(pending.mode, pending.lang);
+          }}
+          onStop={() => { setSessionPopup(null); pendingOptionRef.current = null; }}
+        />
+      )}
 
       {/* ─── OPTIONS OVERLAY (doesn't restart) ─── */}
       {showOptionsOverlay && (
