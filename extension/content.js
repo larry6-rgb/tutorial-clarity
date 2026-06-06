@@ -23,10 +23,11 @@ function createFloatingIcon() {
 
 // Handle icon click
 function handleIconClick() {
+  const base = 'https://tutorialclarity.com';
   const videoId = getCurrentVideoId();
   const appUrl = videoId
-    ? `${TC_URL}/watch?url=${videoId}&open=saved`
-    : `${TC_URL}`;
+    ? `${base}/watch?url=${videoId}&open=saved`
+    : base;
 
   // Pause and mute YouTube so it doesn't conflict with TC audio
   const video = document.querySelector('video');
