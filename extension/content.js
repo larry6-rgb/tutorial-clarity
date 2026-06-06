@@ -35,8 +35,7 @@ function handleIconClick() {
     video.muted = true;
   }
 
-  // Reuse existing TC tab if open, otherwise open new one
-  chrome.runtime.sendMessage({ type: 'openTC', url: appUrl });
+  window.open(appUrl, '_blank');
 }
 
 // Get current video ID from focused/hovered element or current page
