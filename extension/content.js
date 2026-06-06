@@ -134,6 +134,11 @@ function handleTCShortcut(e) {
   e.preventDefault();
   e.stopPropagation();
 
+  // S key: save the video first, then open the saved section
+  if (key === 's') {
+    saveCurrentVideo();
+  }
+
   const section = TC_SECTION_KEYS[key];
   const url = section
     ? `${TC_URL}/watch?url=${videoId}&open=${section}`

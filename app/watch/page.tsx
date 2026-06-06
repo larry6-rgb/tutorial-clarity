@@ -2992,13 +2992,14 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 {expandedSections.has('shortcuts') && (
                                     <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
                                         <p style={{ color: '#d1d5db', marginBottom: '10px', lineHeight: '1.6' }}>
-                                            While watching a YouTube video, press <strong>Space</strong> first to pause it, then press any of these keys to jump directly to that feature here in Tutorial Clarity — the menu will open automatically to the right section.
+                                            These shortcuts work in the Tutorial Clarity watch page. When using the browser extension on YouTube, the same keys open TC to that section — and <strong>S</strong> also saves the current video automatically.
                                         </p>
                                         {[
                                             { key: 'Space', label: 'Pause / Play' },
                                             { key: 'M', label: 'Toggle Mute' },
                                             { key: ',  /  .', label: 'Speed Down / Up' },
-                                            { key: 'S', label: 'Saved for Future Viewing' },
+                                            { key: 'Alt  Alt', label: 'Save Video (extension — from YouTube)' },
+                                            { key: 'S', label: 'Save & Open Saved Videos' },
                                             { key: 'A', label: 'Clarify Audio' },
                                             { key: 'V', label: 'Speaker Voices' },
                                             { key: 'T', label: 'Scroll Transcript' },

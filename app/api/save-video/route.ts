@@ -1,10 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
-import fs from 'fs';
-import path from 'path';
+import { prisma as db } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
-
-const DATA_FILE = path.join(process.cwd(), 'data', 'saved-videos.json');
 
 // CORS headers — allow YouTube and any origin to reach this endpoint
 const CORS_HEADERS = {
@@ -13,23 +10,7 @@ const CORS_HEADERS = {
   'Access-Control-Allow-Headers': 'Content-Type',
 };
 
-function readVideos(): SavedVideo[] {
-  try {
-    if (!fs.existsSync(DATA_FILE)) {
-      fs.writeFileSync(DATA_FILE, '[]', 'utf-8');
-    }
-    const raw = fs.readFileSync(DATA_FILE, 'utf-8');
-    return JSON.parse(raw);
-  } catch {
-    return [];
-  }
-}
-
-function writeVideos(videos: SavedVideo[]): void {
-  fs.writeFileSync(DATA_FILE, JSON.stringify(videos, null, 2), 'utf-8');
-}
-
-interface SavedVideo {
+interface SavedVideoOut {
   id: string;
   url: string;
   title: string;
@@ -37,86 +18,90 @@ interface SavedVideo {
   isPersistent: boolean;
 }
 
-// Handle preflight CORS request from browser
+function toOut(v: { id: string; url: string; title: string; dateSaved: Date; isPersistent: boolean }): SavedVideoOut {
+  return { id: v.id, url: v.url, title: v.title, dateSaved: v.dateSaved.toISOString(), isPersistent: v.isPersistent };
+}
+
 export async function OPTIONS() {
   return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
 }
 
 // GET — return all saved videos
 export async function GET() {
-  const videos = readVideos();
-  return NextResponse.json(videos, { headers: CORS_HEADERS });
+  try {
+    const videos = await db.savedVideo.findMany({ orderBy: { dateSaved: 'asc' } });
+    return NextResponse.json(videos.map(toOut), { headers: CORS_HEADERS });
+  } catch (err) {
+    console.error('[save-video] GET error:', err);
+    return NextResponse.json([], { headers: CORS_HEADERS });
+  }
 }
 
 // POST — save a new video
 export async function POST(req: NextRequest) {
   try {
-    const body = await req.json();
-    const { videoId, title } = body;
+    const { videoId, title } = await req.json();
 
     if (!videoId || typeof videoId !== 'string') {
-      return NextResponse.json(
-        { error: 'Missing videoId' },
-        { status: 400, headers: CORS_HEADERS }
-      );
+      return NextResponse.json({ error: 'Missing videoId' }, { status: 400, headers: CORS_HEADERS });
     }
 
-    const videos = readVideos();
-
-    // Already saved?
-    if (videos.some(v => v.id === videoId)) {
-      return NextResponse.json(
-        { success: true, message: 'Already saved' },
-        { headers: CORS_HEADERS }
-      );
+    const existing = await db.savedVideo.findUnique({ where: { id: videoId } });
+    if (existing) {
+      return NextResponse.json({ success: true, message: 'Already saved' }, { headers: CORS_HEADERS });
     }
 
-    const newVideo: SavedVideo = {
-      id: videoId,
-      url: `https://www.youtube.com/watch?v=${videoId}`,
-      title: title || 'Untitled Video',
-      dateSaved: new Date().toISOString(),
-      isPersistent: false,
-    };
-
-    // Remove oldest non-persistent if over 50
-    const nonPersistent = videos.filter(v => !v.isPersistent);
+    // Keep list to 50 non-persistent videos — remove oldest if at limit
+    const nonPersistent = await db.savedVideo.findMany({
+      where: { isPersistent: false },
+      orderBy: { dateSaved: 'asc' },
+    });
     if (nonPersistent.length >= 50) {
-      const oldest = nonPersistent.sort(
-        (a, b) => new Date(a.dateSaved).getTime() - new Date(b.dateSaved).getTime()
-      )[0];
-      const idx = videos.findIndex(v => v.id === oldest.id);
-      if (idx !== -1) videos.splice(idx, 1);
+      await db.savedVideo.delete({ where: { id: nonPersistent[0].id } });
     }
 
-    videos.push(newVideo);
-    writeVideos(videos);
+    const video = await db.savedVideo.create({
+      data: {
+        id: videoId,
+        url: `https://www.youtube.com/watch?v=${videoId}`,
+        title: title || 'Untitled Video',
+        isPersistent: false,
+      },
+    });
 
-    console.log(`[save-video] Saved: ${videoId} — "${newVideo.title}"`);
-    return NextResponse.json(
-      { success: true, message: 'Saved!' },
-      { headers: CORS_HEADERS }
-    );
+    console.log(`[save-video] Saved: ${videoId} — "${video.title}"`);
+    return NextResponse.json({ success: true, message: 'Saved!' }, { headers: CORS_HEADERS });
   } catch (err) {
-    console.error('[save-video] Error:', err);
-    return NextResponse.json(
-      { error: 'Server error' },
-      { status: 500, headers: CORS_HEADERS }
-    );
+    console.error('[save-video] POST error:', err);
+    return NextResponse.json({ error: 'Server error' }, { status: 500, headers: CORS_HEADERS });
   }
 }
 
-// PUT — replace entire list (called by watch page on any change: delete, pin, etc.)
+// PUT — replace entire list (called by watch page on pin/delete/etc.)
 export async function PUT(req: NextRequest) {
   try {
-    const videos: SavedVideo[] = await req.json();
-    writeVideos(videos);
+    const videos: SavedVideoOut[] = await req.json();
+
+    await db.$transaction(async (tx) => {
+      await tx.savedVideo.deleteMany();
+      if (videos.length > 0) {
+        await tx.savedVideo.createMany({
+          data: videos.map(v => ({
+            id: v.id,
+            url: v.url,
+            title: v.title,
+            dateSaved: new Date(v.dateSaved),
+            isPersistent: v.isPersistent ?? false,
+          })),
+          skipDuplicates: true,
+        });
+      }
+    });
+
     return NextResponse.json({ success: true }, { headers: CORS_HEADERS });
-  } catch {
-    return NextResponse.json(
-      { error: 'Server error' },
-      { status: 500, headers: CORS_HEADERS }
-    );
+  } catch (err) {
+    console.error('[save-video] PUT error:', err);
+    return NextResponse.json({ error: 'Server error' }, { status: 500, headers: CORS_HEADERS });
   }
 }
 
@@ -124,14 +109,10 @@ export async function PUT(req: NextRequest) {
 export async function DELETE(req: NextRequest) {
   try {
     const { videoId } = await req.json();
-    const videos = readVideos();
-    const updated = videos.filter(v => v.id !== videoId);
-    writeVideos(updated);
+    await db.savedVideo.deleteMany({ where: { id: videoId } });
     return NextResponse.json({ success: true }, { headers: CORS_HEADERS });
-  } catch {
-    return NextResponse.json(
-      { error: 'Server error' },
-      { status: 500, headers: CORS_HEADERS }
-    );
+  } catch (err) {
+    console.error('[save-video] DELETE error:', err);
+    return NextResponse.json({ error: 'Server error' }, { status: 500, headers: CORS_HEADERS });
   }
 }
