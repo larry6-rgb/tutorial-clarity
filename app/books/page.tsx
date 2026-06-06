@@ -5,12 +5,41 @@ export const metadata = { title: 'Books — Tutorial Clarity' };
 const books = [
   {
     id: 1,
-    title: 'Coming Soon',
+    title: 'Conversational Spices',
     coverPlaceholder: true,
     // Replace coverImage with the actual path once artwork is found:
-    // coverImage: '/images/book-cover-1.jpg',
-    backDescription: `[Back cover text goes here — paste the description when ready.]`,
-    amazonUrl: null, // Set to the Amazon KDP URL when published
+    // coverImage: '/images/conversational-spices-cover.jpg',
+    sections: [
+      {
+        heading: 'Storytelling and Narrative Depth',
+        body: 'Facts are not just stated, but told as mini-stories with context. Historical context is provided — dates, locations, people involved. Cause and effect relationships are explained.',
+      },
+      {
+        heading: 'Detailed Explanations and the "Why" Behind Facts',
+        body: 'Goes beyond surface-level information to explain mechanisms. Scientific reasoning provided. Multiple layers of information packed into single facts.',
+      },
+      {
+        heading: 'Conversational and Engaging Tone',
+        body: 'Direct address to the reader: "Astounding, isn\'t it?", "Believe it or not." Rhetorical questions, humor, wit, and personal commentary woven throughout.',
+      },
+      {
+        heading: 'Practical Connections and Comparisons',
+        body: 'Relates abstract concepts to familiar things. Example: lightning energy = toasting 100,000 bread slices. Modern relevance explained.',
+      },
+      {
+        heading: 'Debunking Common Misconceptions',
+        body: 'Corrects popular myths, explains why they exist, and provides accurate information with full context.',
+      },
+      {
+        heading: 'Human Interest and Historical Anecdotes',
+        body: 'Celebrity and historical figure connections, wartime stories, and the personal stories behind great inventions.',
+      },
+      {
+        heading: 'Scientific Accuracy with Accessibility',
+        body: 'Precise numbers and measurements provided. Technical terms explained in plain language. Sources and methodology mentioned when relevant.',
+      },
+    ],
+    amazonUrl: null,
   },
 ];
 
@@ -106,39 +135,43 @@ export default function BooksPage() {
 
 function BookCard({ book }: { book: typeof books[0] }) {
   return (
-    <div className="flip-card w-full" style={{ height: '420px' }}>
+    <div className="flip-card w-full" style={{ height: '520px' }}>
       <div className="flip-card-inner">
 
         {/* Front — cover */}
         <div className="flip-card-front bg-gray-800 border border-gray-700 flex flex-col items-center justify-center">
           {book.coverPlaceholder ? (
             <div className="flex flex-col items-center justify-center h-full w-full p-6 text-center">
-              <div className="w-40 h-56 bg-gradient-to-br from-blue-900 to-indigo-700 rounded-lg mb-6 flex items-center justify-center shadow-xl">
-                <span className="text-5xl">📖</span>
+              <div className="w-44 h-64 bg-gradient-to-br from-red-900 to-red-700 rounded-lg mb-5 flex flex-col items-center justify-center shadow-xl px-4">
+                <span className="text-4xl mb-3">📖</span>
+                <p className="text-white font-bold text-lg text-center leading-tight">{book.title}</p>
+                <p className="text-red-300 text-xs mt-2">by Eppler Publishing LLC</p>
               </div>
               <p className="text-gray-400 text-sm">Cover artwork coming soon</p>
-              <p className="text-gray-500 text-xs mt-1">Hover to preview</p>
+              <p className="text-gray-500 text-xs mt-1">Hover to read about this book</p>
             </div>
           ) : (
-            // Once you have the real cover: uncomment and set coverImage on the book object
-            // <img
-            //   src={book.coverImage}
-            //   alt={book.title}
-            //   className="w-full h-full object-cover"
-            // />
+            // <img src={book.coverImage} alt={book.title} className="w-full h-full object-cover" />
             null
           )}
         </div>
 
-        {/* Back — description */}
-        <div className="flip-card-back bg-gray-900 border border-gray-700 flex flex-col justify-between p-6">
-          <div className="overflow-y-auto flex-1 pr-1">
-            <h2 className="text-lg font-bold text-white mb-3">{book.title}</h2>
-            <p className="text-gray-300 text-sm leading-relaxed whitespace-pre-line">
-              {book.backDescription}
+        {/* Back — AI evaluation / description */}
+        <div className="flip-card-back bg-gray-900 border border-gray-700 flex flex-col justify-between">
+          <div className="overflow-y-auto flex-1 p-5">
+            <p className="text-xs font-semibold text-blue-400 uppercase tracking-wider mb-3">
+              AI Evaluation — {book.title}
             </p>
+            <div className="space-y-3">
+              {book.sections.map((section) => (
+                <div key={section.heading}>
+                  <p className="text-white font-semibold text-xs leading-snug">{section.heading}</p>
+                  <p className="text-gray-400 text-xs leading-relaxed mt-0.5">{section.body}</p>
+                </div>
+              ))}
+            </div>
           </div>
-          <div className="pt-4 border-t border-gray-700 mt-4">
+          <div className="px-5 py-4 border-t border-gray-700">
             {book.amazonUrl ? (
               <a
                 href={book.amazonUrl}
