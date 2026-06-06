@@ -7,18 +7,19 @@ import { UserButton } from '@clerk/nextjs';
 
 const MONTHLY_PRICE_ID = 'price_1TeihB3eI6L9ZOHZQTUS1Q6k';
 const ANNUAL_PRICE_ID = 'price_1TeilR3eI6L9ZOHZbTtRZNiD';
+const OVERAGE_PRICE_ID = 'price_1Tf0wr3eI6L9ZOHZ2Dx9b0FN';
 
 export default function SubscribePage() {
   const [loading, setLoading] = useState<string | null>(null);
   const router = useRouter();
 
-  const handleSubscribe = async (priceId: string, plan: string) => {
+  const handleCheckout = async (priceId: string, plan: string, mode: 'subscription' | 'payment' = 'subscription') => {
     setLoading(plan);
     try {
       const res = await fetch('/api/stripe-checkout', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ priceId }),
+        body: JSON.stringify({ priceId, mode }),
       });
       const data = await res.json();
       if (data.url) {
@@ -73,7 +74,7 @@ export default function SubscribePage() {
               ))}
             </ul>
             <button
-              onClick={() => handleSubscribe(MONTHLY_PRICE_ID, 'monthly')}
+              onClick={() => handleCheckout(MONTHLY_PRICE_ID, 'monthly')}
               disabled={loading !== null}
               className="w-full bg-gray-700 hover:bg-gray-600 disabled:opacity-50 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
             >
@@ -98,7 +99,7 @@ export default function SubscribePage() {
               ))}
             </ul>
             <button
-              onClick={() => handleSubscribe(ANNUAL_PRICE_ID, 'annual')}
+              onClick={() => handleCheckout(ANNUAL_PRICE_ID, 'annual')}
               disabled={loading !== null}
               className="w-full bg-blue-500 hover:bg-blue-400 disabled:opacity-50 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
             >
@@ -110,6 +111,42 @@ export default function SubscribePage() {
         <p className="text-center text-gray-500 text-sm mt-8">
           You won't be charged until your 14-day trial ends. Cancel anytime.
         </p>
+
+        {/* Overage Pack */}
+        <div className="mt-16 border-t border-gray-800 pt-14">
+          <h2 className="text-2xl font-bold text-center mb-2">Need more Clarify Audio sessions?</h2>
+          <p className="text-gray-400 text-center mb-10">
+            Already a subscriber but running low? Add a one-time session pack — no subscription change required.
+          </p>
+          <div className="max-w-sm mx-auto bg-gray-900 border border-gray-700 rounded-2xl p-8">
+            <div className="flex items-center gap-3 mb-4">
+              <span className="text-3xl">🎙️</span>
+              <div>
+                <h3 className="text-lg font-bold">Session Pack</h3>
+                <p className="text-gray-400 text-sm">One-time purchase</p>
+              </div>
+            </div>
+            <div className="text-4xl font-bold mb-1">$8.99</div>
+            <div className="text-gray-400 mb-6">adds 20 sessions to your account</div>
+            <ul className="space-y-2 text-gray-300 text-sm mb-8">
+              <li className="flex items-center gap-2"><span className="text-green-400">✓</span> 20 bonus Clarify Audio sessions</li>
+              <li className="flex items-center gap-2"><span className="text-green-400">✓</span> Sessions added instantly after purchase</li>
+              <li className="flex items-center gap-2"><span className="text-green-400">✓</span> Never expire — use them anytime</li>
+              <li className="flex items-center gap-2"><span className="text-green-400">✓</span> Stack multiple packs if needed</li>
+            </ul>
+            <button
+              onClick={() => handleCheckout(OVERAGE_PRICE_ID, 'overage', 'payment')}
+              disabled={loading !== null}
+              className="w-full bg-green-600 hover:bg-green-500 disabled:opacity-50 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
+            >
+              {loading === 'overage' ? 'Redirecting...' : 'Buy 20 Sessions — $8.99'}
+            </button>
+            <p className="text-center text-gray-600 text-xs mt-3">
+              Requires an active subscription
+            </p>
+          </div>
+        </div>
+
       </div>
     </div>
   );
