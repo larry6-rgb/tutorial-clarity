@@ -20,6 +20,9 @@ export default function LandingPage() {
           Tutorial Clarity
         </span>
         <div className="flex items-center gap-4">
+          <Link href="/books" className="text-gray-300 hover:text-white transition-colors">
+            Books
+          </Link>
           <Link href="/sign-in" className="text-gray-300 hover:text-white transition-colors">
             Sign In
           </Link>
@@ -158,6 +161,7 @@ export default function LandingPage() {
           <span className="font-semibold text-gray-400">Tutorial Clarity</span> — by Eppler Publishing LLC
         </p>
         <div className="flex justify-center gap-6">
+          <Link href="/books" className="hover:text-gray-300 transition-colors">Books</Link>
           <Link href="/privacy" className="hover:text-gray-300 transition-colors">Privacy Policy</Link>
           <Link href="/terms" className="hover:text-gray-300 transition-colors">Terms of Service</Link>
           <Link href="/about" className="hover:text-gray-300 transition-colors">About</Link>
@@ -201,7 +205,7 @@ const features = [
   {
     icon: '⌨️',
     title: 'Keyboard Shortcuts',
-    description: 'Control Tutorial Clarity from any YouTube page with simple keyboard shortcuts — without switching tabs.',
+    description: 'Control playback speed, mute, and play/pause from within Tutorial Clarity using simple keyboard shortcuts.',
     premium: false,
   },
 ];
