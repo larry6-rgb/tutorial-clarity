@@ -1468,34 +1468,49 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                     ref={videoContainerRef}
                     style={{ position: 'absolute', inset: 0, overflow: 'hidden' }}
                 >
+                    {/* Background iframe — always unzoomed, dimmed during spyglass */}
                     <iframe
                         ref={iframeRef}
                         className="w-full h-full"
                         style={{
                             pointerEvents: (zoomTransform || spyglassMode) ? 'none' : 'auto',
                             transformOrigin: '0 0',
-                            transform: (() => {
-                                if (spyglassMode && spyglassPos) {
+                            transform: zoomTransform && !spyglassMode
+                                ? `translate(${zoomTransform.translate}) scale(${zoomTransform.scale})`
+                                : 'none',
+                            transition: (zoomTransform && !spyglassMode) ? 'transform 0.2s ease' : 'none',
+                            filter: zoomTransform && !spyglassMode
+                                ? 'contrast(1.35) saturate(1.15) brightness(1.04)'
+                                : spyglassMode ? 'brightness(0.35)' : 'none',
+                        }}
+                        src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=1`}
+                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        allowFullScreen
+                    />
+
+                    {/* Spyglass lens iframe — zoomed, clipped to lens circle */}
+                    {spyglassMode && spyglassPos && (
+                        <iframe
+                            className="w-full h-full"
+                            style={{
+                                position: 'absolute', inset: 0,
+                                pointerEvents: 'none',
+                                transformOrigin: '0 0',
+                                transform: (() => {
                                     const container = videoContainerRef.current;
                                     const W = container?.offsetWidth ?? 0;
                                     const H = container?.offsetHeight ?? 0;
                                     const tx = -spyglassPos.x * spyglassZoom + W / 2;
                                     const ty = -spyglassPos.y * spyglassZoom + H / 2;
                                     return `translate(${tx}px, ${ty}px) scale(${spyglassZoom})`;
-                                }
-                                return zoomTransform
-                                    ? `translate(${zoomTransform.translate}) scale(${zoomTransform.scale})`
-                                    : 'none';
-                            })(),
-                            transition: (zoomTransform && !spyglassMode) ? 'transform 0.2s ease' : 'none',
-                            filter: (zoomTransform || spyglassMode)
-                                ? 'contrast(1.35) saturate(1.15) brightness(1.04)'
-                                : 'none',
-                        }}
-                        src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=1`}
-                        allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
-                        allowFullScreen
-                    />
+                                })(),
+                                clipPath: `circle(${spyglassRadius}px at ${spyglassPos.x}px ${spyglassPos.y}px)`,
+                                filter: 'contrast(1.35) saturate(1.15) brightness(1.04)',
+                            }}
+                            src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=1`}
+                            allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
+                        />
+                    )}
 
                     {/* ── Zoom + Spyglass buttons — appear when paused and not in any mode ── */}
                     {!isPlaying && !zoomBase && !zoomMode && !spyglassMode && (
@@ -1540,11 +1555,6 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                         >
                             {/* Dark vignette — everything outside the lens is darkened */}
                             {spyglassPos && (
-                                <div style={{
-                                    position: 'absolute', inset: 0, pointerEvents: 'none',
-                                    background: `radial-gradient(circle ${spyglassRadius}px at ${spyglassPos.x}px ${spyglassPos.y}px, transparent ${spyglassRadius - 4}px, rgba(0,0,0,0.92) ${spyglassRadius + 8}px)`,
-                                }} />
-                            )}
                             {/* Golden lens ring */}
                             {spyglassPos && (
                                 <div style={{
