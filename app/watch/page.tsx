@@ -1570,7 +1570,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                             )}
                             {/* Zoom level controls */}
                             <div style={{
-                                position: 'absolute', bottom: 12, left: '50%',
+                                position: 'absolute', top: 12, left: '50%',
                                 transform: 'translateX(-50%)',
                                 backgroundColor: 'rgba(0,0,0,0.8)', color: '#a78bfa',
                                 padding: '8px 16px', borderRadius: '8px',
