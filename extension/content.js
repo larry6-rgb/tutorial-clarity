@@ -23,11 +23,9 @@ function createFloatingIcon() {
 
 // Handle icon click
 function handleIconClick() {
-  const base = 'https://tutorialclarity.com';
+  const base = 'https://tutorial-clarity-production.up.railway.app';
   const videoId = getCurrentVideoId();
-  const appUrl = videoId
-    ? `${base}/watch?url=${videoId}&open=saved`
-    : base;
+  const appUrl = videoId ? `${base}/watch?url=${videoId}` : base;
 
   // Pause and mute YouTube so it doesn't conflict with TC audio
   const video = document.querySelector('video');
@@ -36,7 +34,8 @@ function handleIconClick() {
     video.muted = true;
   }
 
-  window.open(appUrl, '_blank');
+  // Use background script to open tab (avoids popup blocker)
+  chrome.runtime.sendMessage({ type: 'OPEN_TAB', url: appUrl });
 }
 
 // Get current video ID from focused/hovered element or current page
