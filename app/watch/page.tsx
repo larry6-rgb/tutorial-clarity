@@ -1542,7 +1542,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                             {spyglassPos && (
                                 <div style={{
                                     position: 'absolute', inset: 0, pointerEvents: 'none',
-                                    background: `radial-gradient(circle ${spyglassRadius}px at ${spyglassPos.x}px ${spyglassPos.y}px, transparent ${spyglassRadius - 4}px, rgba(0,0,0,0.45) ${spyglassRadius + 8}px)`,
+                                    background: `radial-gradient(circle ${spyglassRadius}px at ${spyglassPos.x}px ${spyglassPos.y}px, transparent ${spyglassRadius - 4}px, rgba(0,0,0,0.92) ${spyglassRadius + 8}px)`,
                                 }} />
                             )}
                             {/* Golden lens ring */}
