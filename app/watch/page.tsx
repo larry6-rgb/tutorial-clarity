@@ -1553,8 +1553,6 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                             }}
                             onMouseLeave={() => setSpyglassPos(null)}
                         >
-                            {/* Dark vignette — everything outside the lens is darkened */}
-                            {spyglassPos && (
                             {/* Golden lens ring */}
                             {spyglassPos && (
                                 <div style={{
