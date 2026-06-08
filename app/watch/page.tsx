@@ -1497,11 +1497,9 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 pointerEvents: 'none',
                                 transformOrigin: '0 0',
                                 transform: (() => {
-                                    const container = videoContainerRef.current;
-                                    const W = container?.offsetWidth ?? 0;
-                                    const H = container?.offsetHeight ?? 0;
-                                    const tx = -spyglassPos.x * spyglassZoom + W / 2;
-                                    const ty = -spyglassPos.y * spyglassZoom + H / 2;
+                                    // Zoom outward FROM the cursor — cursor stays fixed, surroundings expand
+                                    const tx = spyglassPos.x * (1 - spyglassZoom);
+                                    const ty = spyglassPos.y * (1 - spyglassZoom);
                                     return `translate(${tx}px, ${ty}px) scale(${spyglassZoom})`;
                                 })(),
                                 clipPath: `circle(${spyglassRadius}px at ${spyglassPos.x}px ${spyglassPos.y}px)`,
