@@ -225,6 +225,14 @@ function WatchPageContent() {
     const zoomBaseRef = useRef<{ sx: number; sy: number; tx: number; ty: number } | null>(null);
     useEffect(() => { zoomBaseRef.current = zoomBase; }, [zoomBase]);
 
+    // ── SHERLOCK SPYGLASS STATE ──
+    const [spyglassMode, setSpyglassMode] = useState(false);
+    const [spyglassPos, setSpyglassPos] = useState<{ x: number; y: number } | null>(null);
+    const [spyglassZoom, setSpyglassZoom] = useState(2.5);
+    const SPYGLASS_RADIUS = 120; // px — lens circle radius
+    const spyglassModeRef = useRef(false);
+    useEffect(() => { spyglassModeRef.current = spyglassMode; }, [spyglassMode]);
+
     // Derive CSS transform from base + size slider
     const zoomTransform = zoomBase ? (() => {
         const f = zoomSize / 100;
@@ -684,6 +692,19 @@ function WatchPageContent() {
             if (e.code === 'Space') {
                 e.preventDefault();
                 e.stopPropagation();
+
+                // Exit spyglass mode and resume play
+                if (spyglassModeRef.current) {
+                    setSpyglassMode(false);
+                    setSpyglassPos(null);
+                    if (iframeRef.current?.contentWindow) {
+                        iframeRef.current.contentWindow.postMessage(
+                            JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*'
+                        );
+                    }
+                    setIsPlaying(true);
+                    return;
+                }
 
                 // Exit zoom mode and resume play
                 if (zoomBaseRef.current) {
@@ -1255,12 +1276,15 @@ function WatchPageContent() {
         });
     }, [videoId]);
 
-    // Reset zoom when navigating to a new video
+    // Reset zoom and spyglass when navigating to a new video
     useEffect(() => {
         setZoomBase(null);
         setZoomSize(100);
         setZoomMode(false);
         setZoomRect(null);
+        setSpyglassMode(false);
+        setSpyglassPos(null);
+        setSpyglassZoom(2.5);
     }, [videoId]);
 
     // ── SEEK to resume timestamp once video is ready ──
@@ -1447,13 +1471,23 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                         ref={iframeRef}
                         className="w-full h-full"
                         style={{
-                            pointerEvents: zoomTransform ? 'none' : 'auto',
+                            pointerEvents: (zoomTransform || spyglassMode) ? 'none' : 'auto',
                             transformOrigin: '0 0',
-                            transform: zoomTransform
-                                ? `translate(${zoomTransform.translate}) scale(${zoomTransform.scale})`
-                                : 'none',
-                            transition: zoomTransform ? 'transform 0.2s ease' : 'none',
-                            filter: zoomTransform
+                            transform: (() => {
+                                if (spyglassMode && spyglassPos) {
+                                    const container = videoContainerRef.current;
+                                    const W = container?.offsetWidth ?? 0;
+                                    const H = container?.offsetHeight ?? 0;
+                                    const tx = -spyglassPos.x * spyglassZoom + W / 2;
+                                    const ty = -spyglassPos.y * spyglassZoom + H / 2;
+                                    return `translate(${tx}px, ${ty}px) scale(${spyglassZoom})`;
+                                }
+                                return zoomTransform
+                                    ? `translate(${zoomTransform.translate}) scale(${zoomTransform.scale})`
+                                    : 'none';
+                            })(),
+                            transition: (zoomTransform && !spyglassMode) ? 'transform 0.2s ease' : 'none',
+                            filter: (zoomTransform || spyglassMode)
                                 ? 'contrast(1.35) saturate(1.15) brightness(1.04)'
                                 : 'none',
                         }}
@@ -1462,9 +1496,9 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                         allowFullScreen
                     />
 
-                    {/* ── Zoom button — appears when paused and not zoomed ── */}
-                    {!isPlaying && !zoomBase && !zoomMode && (
-                        <div style={{ position: 'absolute', bottom: 12, right: 12, zIndex: 10 }}>
+                    {/* ── Zoom + Spyglass buttons — appear when paused and not in any mode ── */}
+                    {!isPlaying && !zoomBase && !zoomMode && !spyglassMode && (
+                        <div style={{ position: 'absolute', bottom: 12, right: 12, zIndex: 10, display: 'flex', gap: '8px' }}>
                             <button
                                 onClick={() => setZoomMode(true)}
                                 style={{
@@ -1476,6 +1510,75 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                             >
                                 🔍 Zoom
                             </button>
+                            <button
+                                onClick={() => setSpyglassMode(true)}
+                                style={{
+                                    backgroundColor: 'rgba(0,0,0,0.75)', color: '#a78bfa',
+                                    border: '1px solid #a78bfa', borderRadius: '6px',
+                                    padding: '6px 12px', fontSize: '13px', fontWeight: 'bold',
+                                    cursor: 'pointer',
+                                }}
+                            >
+                                🕵️ Spyglass
+                            </button>
+                        </div>
+                    )}
+
+                    {/* ── Spyglass overlay — active when spyglassMode is on ── */}
+                    {spyglassMode && (
+                        <div
+                            style={{ position: 'absolute', inset: 0, cursor: 'none', zIndex: 10 }}
+                            onMouseMove={e => {
+                                const rect = videoContainerRef.current!.getBoundingClientRect();
+                                setSpyglassPos({
+                                    x: e.clientX - rect.left,
+                                    y: e.clientY - rect.top,
+                                });
+                            }}
+                            onMouseLeave={() => setSpyglassPos(null)}
+                        >
+                            {/* Dark vignette — everything outside the lens is darkened */}
+                            {spyglassPos && (
+                                <div style={{
+                                    position: 'absolute', inset: 0, pointerEvents: 'none',
+                                    background: `radial-gradient(circle ${SPYGLASS_RADIUS}px at ${spyglassPos.x}px ${spyglassPos.y}px, transparent ${SPYGLASS_RADIUS - 4}px, rgba(0,0,0,0.45) ${SPYGLASS_RADIUS + 8}px)`,
+                                }} />
+                            )}
+                            {/* Golden lens ring */}
+                            {spyglassPos && (
+                                <div style={{
+                                    position: 'absolute', pointerEvents: 'none',
+                                    left: spyglassPos.x - SPYGLASS_RADIUS,
+                                    top: spyglassPos.y - SPYGLASS_RADIUS,
+                                    width: SPYGLASS_RADIUS * 2,
+                                    height: SPYGLASS_RADIUS * 2,
+                                    borderRadius: '50%',
+                                    border: '3px solid #facc15',
+                                    boxShadow: '0 0 0 1px rgba(250,204,21,0.3), inset 0 0 12px rgba(250,204,21,0.08)',
+                                }} />
+                            )}
+                            {/* Zoom level controls */}
+                            <div style={{
+                                position: 'absolute', bottom: 12, left: '50%',
+                                transform: 'translateX(-50%)',
+                                backgroundColor: 'rgba(0,0,0,0.8)', color: '#a78bfa',
+                                padding: '8px 16px', borderRadius: '8px',
+                                fontSize: '13px', fontWeight: 'bold',
+                                display: 'flex', flexDirection: 'column', alignItems: 'center', gap: '6px',
+                                whiteSpace: 'nowrap', pointerEvents: 'auto',
+                            }}
+                            onMouseMove={e => e.stopPropagation()}>
+                                <span>🕵️ Spyglass — move mouse to explore · Spacebar to resume</span>
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'normal', fontSize: '12px' }}>
+                                    <span>1x</span>
+                                    <input
+                                        type="range" min={1.5} max={5} step={0.5} value={spyglassZoom}
+                                        onChange={e => setSpyglassZoom(Number(e.target.value))}
+                                        style={{ width: '120px', cursor: 'pointer' }}
+                                    />
+                                    <span>5x &nbsp;({spyglassZoom}x)</span>
+                                </div>
+                            </div>
                         </div>
                     )}
 
@@ -2678,10 +2781,10 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
-                            {/* 9. CURSOR FOLLOWER */}
+                            {/* 9. SHERLOCK SPYGLASS */}
                             <div style={{ borderBottom: '1px solid #374151' }}>
                                 <h3
-                                    onClick={() => toggleSection('cursor')}
+                                    onClick={() => toggleSection('spyglass')}
                                     style={{
                                         margin: 0, color: 'white', backgroundColor: '#1f2937',
                                         fontWeight: 'bold', padding: '12px',
@@ -2689,24 +2792,24 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         justifyContent: 'space-between', alignItems: 'center'
                                     }}
                                 >
-                                    <span>9. CURSOR FOLLOWER 🖱️</span>
-                                    <span>{expandedSections.has('cursor') ? '▼' : '▶'}</span>
+                                    <span>9. SHERLOCK SPYGLASS 🕵️</span>
+                                    <span>{expandedSections.has('spyglass') ? '▼' : '▶'}</span>
                                 </h3>
-                                {expandedSections.has('cursor') && (
+                                {expandedSections.has('spyglass') && (
                                     <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '13px', color: '#d1d5db', lineHeight: '1.8' }}>
                                         <p style={{ margin: '0 0 10px 0' }}>
-                                            Some presenters move their mouse pointer so fast it's impossible to see where they're pointing before they move on. Cursor Follower lets you freeze the action and zoom in on exactly where the pointer landed.
+                                            Can't find the instructor's mouse cursor? It may be tiny — just one pixel on a high-resolution screen. The Spyglass is a draggable magnifying lens you move around the paused video until the cursor pops into view.
                                         </p>
                                         <ol style={{ margin: '0 0 10px 0', paddingLeft: '18px' }}>
-                                            <li>Watch the video until the presenter's pointer lands on something important.</li>
-                                            <li>Press <strong>Spacebar</strong> to instantly freeze the video at that moment.</li>
-                                            <li>Click the <strong>🔍 Zoom</strong> button and draw a box around the area where the pointer stopped.</li>
-                                            <li>Read the enlarged content at your own pace.</li>
-                                            <li>Press <strong>Spacebar</strong> to exit zoom and resume play.</li>
-                                            <li>Repeat at the next key moment.</li>
+                                            <li>Press <strong>Spacebar</strong> to pause the video at the moment you want to inspect.</li>
+                                            <li>Click the purple <strong>🕵️ Spyglass</strong> button that appears at the bottom-right of the video.</li>
+                                            <li>Move your mouse slowly over the video — a <strong>golden circular lens</strong> follows your cursor, magnifying everything underneath it.</li>
+                                            <li>Everything outside the lens goes dark so you can focus on just the area inside.</li>
+                                            <li>Use the <strong>zoom slider</strong> at the bottom (1x – 5x) to increase magnification if needed.</li>
+                                            <li>When you've found what you were looking for, press <strong>Spacebar</strong> to exit and resume play.</li>
                                         </ol>
                                         <p style={{ margin: 0, color: '#9ca3af', fontSize: '12px' }}>
-                                            You are always in control of the pace — no detail gets by you.
+                                            <strong>Tip:</strong> Start at 2.5x zoom (the default) and drag across the video slowly. Increase to 4x or 5x only if the cursor is extremely small. The Spyglass works best on high-definition videos.
                                         </p>
                                     </div>
                                 )}
@@ -3004,6 +3107,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             { key: 'V', label: 'Speaker Voices' },
                                             { key: 'T', label: 'Scroll Transcript' },
                                             { key: 'Z', label: 'Zoom' },
+                                            { key: 'Space (in Spyglass)', label: '🕵️ Exit Spyglass & Resume' },
                                             { key: 'R', label: 'Resume Previous Video' },
                                             { key: 'U', label: 'Summary' },
                                             { key: 'X', label: 'Transcript' },
