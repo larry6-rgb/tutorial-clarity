@@ -229,7 +229,7 @@ function WatchPageContent() {
     const [spyglassMode, setSpyglassMode] = useState(false);
     const [spyglassPos, setSpyglassPos] = useState<{ x: number; y: number } | null>(null);
     const [spyglassZoom, setSpyglassZoom] = useState(2.5);
-    const SPYGLASS_RADIUS = 120; // px — lens circle radius
+    const [spyglassRadius, setSpyglassRadius] = useState(120); // px — lens circle radius
     const spyglassModeRef = useRef(false);
     useEffect(() => { spyglassModeRef.current = spyglassMode; }, [spyglassMode]);
 
@@ -1285,6 +1285,7 @@ function WatchPageContent() {
         setSpyglassMode(false);
         setSpyglassPos(null);
         setSpyglassZoom(2.5);
+        setSpyglassRadius(120);
     }, [videoId]);
 
     // ── SEEK to resume timestamp once video is ready ──
@@ -1541,17 +1542,17 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                             {spyglassPos && (
                                 <div style={{
                                     position: 'absolute', inset: 0, pointerEvents: 'none',
-                                    background: `radial-gradient(circle ${SPYGLASS_RADIUS}px at ${spyglassPos.x}px ${spyglassPos.y}px, transparent ${SPYGLASS_RADIUS - 4}px, rgba(0,0,0,0.45) ${SPYGLASS_RADIUS + 8}px)`,
+                                    background: `radial-gradient(circle ${spyglassRadius}px at ${spyglassPos.x}px ${spyglassPos.y}px, transparent ${spyglassRadius - 4}px, rgba(0,0,0,0.45) ${spyglassRadius + 8}px)`,
                                 }} />
                             )}
                             {/* Golden lens ring */}
                             {spyglassPos && (
                                 <div style={{
                                     position: 'absolute', pointerEvents: 'none',
-                                    left: spyglassPos.x - SPYGLASS_RADIUS,
-                                    top: spyglassPos.y - SPYGLASS_RADIUS,
-                                    width: SPYGLASS_RADIUS * 2,
-                                    height: SPYGLASS_RADIUS * 2,
+                                    left: spyglassPos.x - spyglassRadius,
+                                    top: spyglassPos.y - spyglassRadius,
+                                    width: spyglassRadius * 2,
+                                    height: spyglassRadius * 2,
                                     borderRadius: '50%',
                                     border: '3px solid #facc15',
                                     boxShadow: '0 0 0 1px rgba(250,204,21,0.3), inset 0 0 12px rgba(250,204,21,0.08)',
@@ -1569,14 +1570,24 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                             }}
                             onMouseMove={e => e.stopPropagation()}>
                                 <span>🕵️ Spyglass — move mouse to explore · Spacebar to resume</span>
+                                {/* Lens size slider */}
                                 <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'normal', fontSize: '12px' }}>
-                                    <span>1x</span>
+                                    <span>🔍 Size:</span>
                                     <input
-                                        type="range" min={1.5} max={5} step={0.5} value={spyglassZoom}
-                                        onChange={e => setSpyglassZoom(Number(e.target.value))}
+                                        type="range" min={60} max={240} step={10} value={spyglassRadius}
+                                        onChange={e => setSpyglassRadius(Number(e.target.value))}
                                         style={{ width: '120px', cursor: 'pointer' }}
                                     />
-                                    <span>5x &nbsp;({spyglassZoom}x)</span>
+                                    <span>{spyglassRadius}px</span>
+                                </div>
+                                {/* Zoom level buttons */}
+                                <div style={{ display: 'flex', alignItems: 'center', gap: '8px', fontWeight: 'normal', fontSize: '12px' }}>
+                                    <span>🔎 Zoom:</span>
+                                    <button onClick={() => setSpyglassZoom(z => Math.max(1.5, z - 0.5))}
+                                        style={{ background: '#374151', color: 'white', border: 'none', borderRadius: '4px', padding: '2px 8px', cursor: 'pointer', fontSize: '14px' }}>−</button>
+                                    <span style={{ minWidth: '30px', textAlign: 'center' }}>{spyglassZoom}x</span>
+                                    <button onClick={() => setSpyglassZoom(z => Math.min(5, z + 0.5))}
+                                        style={{ background: '#374151', color: 'white', border: 'none', borderRadius: '4px', padding: '2px 8px', cursor: 'pointer', fontSize: '14px' }}>+</button>
                                 </div>
                             </div>
                         </div>
