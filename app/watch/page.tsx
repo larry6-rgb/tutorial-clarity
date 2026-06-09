@@ -233,17 +233,17 @@ function WatchPageContent() {
     const spyglassModeRef = useRef(false);
     useEffect(() => { spyglassModeRef.current = spyglassMode; }, [spyglassMode]);
     const lensIframeRef = useRef<HTMLIFrameElement>(null);
-    // When spyglass activates, seek the lens iframe to match the main player's timestamp
+    // When spyglass activates, seek + play the lens iframe to match the main player's timestamp
     useEffect(() => {
         if (!spyglassMode) return;
-        const seekLens = () => {
-            lensIframeRef.current?.contentWindow?.postMessage(
-                JSON.stringify({ event: 'command', func: 'seekTo', args: [currentTimeRef.current, true] }),
-                '*'
-            );
+        const initLens = () => {
+            const win = lensIframeRef.current?.contentWindow;
+            if (!win) return;
+            win.postMessage(JSON.stringify({ event: 'command', func: 'seekTo', args: [currentTimeRef.current, true] }), '*');
+            win.postMessage(JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*');
         };
-        // YouTube iframe needs ~300ms after mount before it accepts postMessage commands
-        const t = setTimeout(seekLens, 350);
+        // YouTube iframe needs ~500ms after mount before it accepts postMessage commands
+        const t = setTimeout(initLens, 500);
         return () => clearTimeout(t);
     }, [spyglassMode]);
 
@@ -624,6 +624,8 @@ function WatchPageContent() {
     useEffect(() => {
         const handleMessage = (event: MessageEvent) => {
             if (event.origin !== 'https://www.youtube.com') return;
+            // Ignore messages from the lens iframe — only process main player events
+            if (lensIframeRef.current && event.source === lensIframeRef.current.contentWindow) return;
 
             try {
                 const data = JSON.parse(event.data);
@@ -1521,7 +1523,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                     : 'circle(0px at 0px 0px)',
                                 filter: 'contrast(1.35) saturate(1.15) brightness(1.04)',
                             }}
-                            src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=1`}
+                            src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&controls=0&mute=1`}
                             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                         />
                     )}
