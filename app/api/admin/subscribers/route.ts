@@ -26,6 +26,7 @@ export async function GET() {
       id: u.id,
       email: u.email,
       createdAt: u.createdAt,
+      vipAccess: u.vipAccess,
       plan: sub?.plan ?? 'none',
       status: sub?.status ?? '—',
       trialEndsAt: trialEnd,

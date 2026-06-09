@@ -9,6 +9,7 @@ type Subscriber = {
   id: string;
   email: string;
   createdAt: string;
+  vipAccess: boolean;
   plan: string;
   status: string;
   trialEndsAt: string;
@@ -27,6 +28,7 @@ const planColors: Record<string, string> = {
   annual: 'bg-green-900 text-green-300',
   free: 'bg-gray-700 text-gray-300',
   none: 'bg-gray-800 text-gray-500',
+  vip: 'bg-purple-900 text-purple-300',
 };
 
 const statusColors: Record<string, string> = {
@@ -40,7 +42,26 @@ export default function AdminPage() {
   const [subscribers, setSubscribers] = useState<Subscriber[] | null>(null);
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
+  const [vipLoading, setVipLoading] = useState<string | null>(null);
   const router = useRouter();
+
+  const toggleVip = async (sub: Subscriber) => {
+    setVipLoading(sub.id);
+    try {
+      const res = await fetch('/api/admin/vip', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ userId: sub.id, vipAccess: !sub.vipAccess }),
+      });
+      if (res.ok) {
+        setSubscribers(prev => prev?.map(s =>
+          s.id === sub.id ? { ...s, vipAccess: !sub.vipAccess } : s
+        ) ?? null);
+      }
+    } finally {
+      setVipLoading(null);
+    }
+  };
 
   useEffect(() => {
     fetch('/api/admin/subscribers')
@@ -65,6 +86,7 @@ export default function AdminPage() {
     trial: subscribers.filter(s => s.trialActive).length,
     paid: subscribers.filter(s => s.plan === 'monthly' || s.plan === 'annual').length,
     expired: subscribers.filter(s => s.trialExpired && s.plan !== 'monthly' && s.plan !== 'annual').length,
+    vip: subscribers.filter(s => s.vipAccess).length,
   } : null;
 
   return (
@@ -99,11 +121,12 @@ export default function AdminPage() {
 
         {/* Summary cards */}
         {counts && (
-          <div className="grid grid-cols-2 md:grid-cols-4 gap-4 mb-8">
+          <div className="grid grid-cols-2 md:grid-cols-5 gap-4 mb-8">
             <StatCard label="Total accounts" value={counts.total} color="text-white" />
             <StatCard label="Active trials" value={counts.trial} color="text-yellow-400" />
             <StatCard label="Paid subscribers" value={counts.paid} color="text-green-400" />
             <StatCard label="Expired / free" value={counts.expired} color="text-gray-400" />
+            <StatCard label="VIP access" value={counts.vip} color="text-purple-400" />
           </div>
         )}
 
@@ -127,6 +150,7 @@ export default function AdminPage() {
               <thead>
                 <tr className="bg-gray-900 text-gray-400 text-left">
                   <th className="px-4 py-3 font-medium">Email</th>
+                  <th className="px-4 py-3 font-medium">VIP</th>
                   <th className="px-4 py-3 font-medium">Plan</th>
                   <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium">Joined</th>
@@ -139,6 +163,16 @@ export default function AdminPage() {
                 {filtered.map((s) => (
                   <tr key={s.id} className="hover:bg-gray-900/60 transition-colors">
                     <td className="px-4 py-3 text-white font-medium">{s.email}</td>
+                    <td className="px-4 py-3">
+                      <button
+                        onClick={() => toggleVip(s)}
+                        disabled={vipLoading === s.id}
+                        title={s.vipAccess ? 'Revoke VIP access' : 'Grant VIP access'}
+                        className={`text-lg transition-opacity ${vipLoading === s.id ? 'opacity-40' : 'hover:opacity-80'}`}
+                      >
+                        {s.vipAccess ? '⭐' : '☆'}
+                      </button>
+                    </td>
                     <td className="px-4 py-3">
                       <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${planColors[s.plan] ?? 'bg-gray-800 text-gray-400'}`}>
                         {s.plan}

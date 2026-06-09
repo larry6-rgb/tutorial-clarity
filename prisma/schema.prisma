@@ -13,6 +13,7 @@ model User {
   clerkId       String        @unique
   email         String        @unique
   createdAt     DateTime      @default(now())
+  vipAccess     Boolean       @default(false)
   subscription  Subscription?
   usageRecords  UsageRecord[]
 }
