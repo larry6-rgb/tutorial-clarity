@@ -5,9 +5,8 @@ export type AccessResult =
   | { allowed: false; reason: 'no_account' | 'trial_expired' | 'subscription_inactive' };
 
 export type SubscriptionStatus = {
-  plan: 'trial' | 'monthly' | 'annual' | 'free' | 'vip';
+  plan: 'trial' | 'monthly' | 'annual' | 'free';
   premiumAllowed: boolean;
-  vipAccess: boolean;
   trialExpired: boolean;
   trialEndsAt: Date | null;
   sessionsUsed: number;
@@ -24,9 +23,6 @@ export async function checkPremiumAccess(clerkUserId: string): Promise<AccessRes
   });
 
   if (!user) return { allowed: false, reason: 'no_account' };
-
-  // VIP override — full access granted by admin
-  if (user.vipAccess) return { allowed: true };
 
   const sub = user.subscription;
 
@@ -61,18 +57,9 @@ export async function getSubscriptionStatus(clerkUserId: string): Promise<Subscr
 
   if (!user) {
     return {
-      plan: 'free', premiumAllowed: false, vipAccess: false, trialExpired: false, trialEndsAt: null,
+      plan: 'free', premiumAllowed: false, trialExpired: false, trialEndsAt: null,
       sessionsUsed: 0, sessionsLimit: SESSION_LIMIT,
       sessionsRemaining: SESSION_LIMIT, sessionWarning: false, sessionBlocked: false,
-    };
-  }
-
-  // VIP override — skip all subscription checks
-  if (user.vipAccess) {
-    return {
-      plan: 'vip', premiumAllowed: true, vipAccess: true, trialExpired: false, trialEndsAt: null,
-      sessionsUsed: 0, sessionsLimit: 9999,
-      sessionsRemaining: 9999, sessionWarning: false, sessionBlocked: false,
     };
   }
 
@@ -120,7 +107,6 @@ export async function getSubscriptionStatus(clerkUserId: string): Promise<Subscr
   return {
     plan,
     premiumAllowed,
-    vipAccess: false,
     trialExpired,
     trialEndsAt: trialEnd,
     sessionsUsed,
