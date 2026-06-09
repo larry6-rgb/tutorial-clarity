@@ -232,6 +232,20 @@ function WatchPageContent() {
     const [spyglassRadius, setSpyglassRadius] = useState(120); // px — lens circle radius
     const spyglassModeRef = useRef(false);
     useEffect(() => { spyglassModeRef.current = spyglassMode; }, [spyglassMode]);
+    const lensIframeRef = useRef<HTMLIFrameElement>(null);
+    // When spyglass activates, seek the lens iframe to match the main player's timestamp
+    useEffect(() => {
+        if (!spyglassMode) return;
+        const seekLens = () => {
+            lensIframeRef.current?.contentWindow?.postMessage(
+                JSON.stringify({ event: 'command', func: 'seekTo', args: [currentTimeRef.current, true] }),
+                '*'
+            );
+        };
+        // YouTube iframe needs ~300ms after mount before it accepts postMessage commands
+        const t = setTimeout(seekLens, 350);
+        return () => clearTimeout(t);
+    }, [spyglassMode]);
 
     // Derive CSS transform from base + size slider
     const zoomTransform = zoomBase ? (() => {
@@ -1491,6 +1505,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                     {/* Spyglass lens iframe — zoomed, clipped to lens circle */}
                     {spyglassMode && spyglassPos && (
                         <iframe
+                            ref={lensIframeRef}
                             className="w-full h-full"
                             style={{
                                 position: 'absolute', inset: 0,
