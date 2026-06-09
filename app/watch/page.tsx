@@ -233,19 +233,16 @@ function WatchPageContent() {
     const spyglassModeRef = useRef(false);
     useEffect(() => { spyglassModeRef.current = spyglassMode; }, [spyglassMode]);
     const lensIframeRef = useRef<HTMLIFrameElement>(null);
-    // When spyglass activates, seek + play the lens iframe to match the main player's timestamp
+    // Build lens src with start= baked in when spyglass activates — most reliable sync method
+    const [lensIframeSrc, setLensIframeSrc] = useState<string | null>(null);
     useEffect(() => {
-        if (!spyglassMode) return;
-        const initLens = () => {
-            const win = lensIframeRef.current?.contentWindow;
-            if (!win) return;
-            win.postMessage(JSON.stringify({ event: 'command', func: 'seekTo', args: [currentTimeRef.current, true] }), '*');
-            win.postMessage(JSON.stringify({ event: 'command', func: 'playVideo', args: [] }), '*');
-        };
-        // YouTube iframe needs ~500ms after mount before it accepts postMessage commands
-        const t = setTimeout(initLens, 500);
-        return () => clearTimeout(t);
-    }, [spyglassMode]);
+        if (spyglassMode) {
+            const t = Math.floor(currentTimeRef.current);
+            setLensIframeSrc(`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=0&mute=1&start=${t}`);
+        } else {
+            setLensIframeSrc(null);
+        }
+    }, [spyglassMode, videoId]);
 
     // Derive CSS transform from base + size slider
     const zoomTransform = zoomBase ? (() => {
@@ -1523,7 +1520,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                     : 'circle(0px at 0px 0px)',
                                 filter: 'contrast(1.35) saturate(1.15) brightness(1.04)',
                             }}
-                            src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&controls=0&mute=1`}
+                            src={lensIframeSrc ?? ''}
                             allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                         />
                     )}
