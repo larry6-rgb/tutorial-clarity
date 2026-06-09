@@ -15,6 +15,8 @@ export default function AppHome() {
       .then((r) => r.json())
       .then(setStatus)
       .catch(() => null);
+    // Capture affiliate referral cookie if present (fire-and-forget)
+    fetch('/api/capture-referral', { method: 'POST' }).catch(() => null);
   }, []);
 
   const extractVideoId = (url: string): string | null => {
