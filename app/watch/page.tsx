@@ -1530,7 +1530,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                     {!isPlaying && !zoomBase && !zoomMode && !spyglassMode && (
                         <div style={{ position: 'absolute', bottom: 12, right: 12, zIndex: 10, display: 'flex', gap: '8px' }}>
                             <button
-                                onClick={() => setZoomMode(true)}
+                                onClick={(e) => { e.stopPropagation(); setZoomMode(true); }}
                                 style={{
                                     backgroundColor: 'rgba(0,0,0,0.75)', color: '#facc15',
                                     border: '1px solid #facc15', borderRadius: '6px',
@@ -1541,7 +1541,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 🔍 Zoom
                             </button>
                             <button
-                                onClick={() => setSpyglassMode(true)}
+                                onClick={(e) => { e.stopPropagation(); setSpyglassMode(true); }}
                                 style={{
                                     backgroundColor: 'rgba(0,0,0,0.75)', color: '#a78bfa',
                                     border: '1px solid #a78bfa', borderRadius: '6px',
