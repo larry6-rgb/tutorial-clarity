@@ -1,0 +1,47 @@
+# Tutorial Clarity
+
+> Tutorial Clarity is a web app that enhances YouTube video learning. It helps students, professionals, and self-learners get more out of tutorial videos by adding AI-powered tools directly on top of any YouTube video.
+
+## What it does
+
+Tutorial Clarity wraps any YouTube video URL with a suite of learning tools:
+
+- **Clarify Audio** — Multi-speaker AI text-to-speech re-narration. Detects speakers via AssemblyAI, assigns distinct voices via OpenAI TTS, and plays back the video with clear, natural-sounding audio — useful when the original instructor audio is hard to follow.
+- **Sherlock Spyglass** — A magnifying lens that lets you pause the video and explore any area at up to 5x zoom, perfect for finding tiny mouse cursors or small UI elements on high-resolution screens.
+- **Zoom** — Pause, draw a rectangle over any region of the video, and that region fills the entire screen.
+- **Scroll Transcript** — Live scrolling captions that follow along as the video plays.
+- **AI Definitions** — Highlight any word or phrase in the transcript to get an instant AI-powered definition in context.
+- **AI Summary** — On-demand GPT-4o summary of the full video.
+- **Formatted Transcript** — GPT-4o cleaned and formatted transcript, downloadable as .txt.
+- **Resume Previous Video** — Auto-saves your position every 10 seconds across up to 10 videos.
+- **Saved Videos** — Save YouTube videos via a Chrome extension for quick access later.
+- **Speed & Volume controls** — Fine-grained playback speed and volume adjustment.
+
+## Who it's for
+
+- Students following coding, design, or academic tutorials
+- Professionals learning new software or workflows
+- Anyone who struggles with fast-talking or unclear instructors
+- Learners who want searchable, downloadable transcripts
+
+## Pricing
+
+- 2-week free trial, no credit card required
+- $12.99/month or $99/year
+- Free tier after trial: Zoom, Resume, Saved Videos, Shortcuts, Transcript scroll
+- Clarify Audio sessions: 20/month included, $8.99 for 20 more (stackable)
+
+## Publisher
+
+Eppler Publishing LLC
+Owner: Larry Eppler
+Website: https://tutorialclarity.com
+
+## Key pages
+
+- Homepage / app: https://tutorialclarity.com
+- Pricing: https://tutorialclarity.com/subscribe
+- About: https://tutorialclarity.com/about
+- Books: https://tutorialclarity.com/books
+- Privacy Policy: https://tutorialclarity.com/privacy
+- Terms of Service: https://tutorialclarity.com/terms
