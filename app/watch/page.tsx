@@ -239,6 +239,13 @@ function WatchPageContent() {
         if (spyglassMode) {
             const t = Math.floor(currentTimeRef.current);
             setLensIframeSrc(`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=0&mute=1&start=${t}`);
+            // autoplay=1 gets us to the right frame, then we freeze it
+            const pauseTimer = setTimeout(() => {
+                lensIframeRef.current?.contentWindow?.postMessage(
+                    JSON.stringify({ event: 'command', func: 'pauseVideo', args: [] }), '*'
+                );
+            }, 800);
+            return () => clearTimeout(pauseTimer);
         } else {
             setLensIframeSrc(null);
         }
