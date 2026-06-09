@@ -77,6 +77,42 @@ export async function POST(req: Request) {
       break;
     }
 
+    case 'invoice.payment_succeeded': {
+      // Record 30% affiliate commission for every successful payment from a referred user
+      const invoice = event.data.object as Stripe.Invoice;
+      if (!invoice.customer || invoice.amount_paid <= 0) break;
+
+      // Find user by Stripe customer ID
+      const affSub = await db.subscription.findFirst({
+        where: { stripeCustomerId: String(invoice.customer) },
+        include: { user: true },
+      });
+      if (!affSub?.user?.referredByCode) break;
+
+      const affiliate = await db.affiliate.findUnique({
+        where: { code: affSub.user.referredByCode },
+      });
+      if (!affiliate || affiliate.status !== 'active') break;
+
+      // Avoid double-recording the same invoice
+      const existing = await db.commission.findUnique({
+        where: { stripeInvoiceId: invoice.id },
+      });
+      if (existing) break;
+
+      const commissionCents = Math.round(invoice.amount_paid * 0.30);
+      await db.commission.create({
+        data: {
+          affiliateCode: affiliate.code,
+          userId: affSub.user.id,
+          stripeInvoiceId: invoice.id,
+          amountCents: commissionCents,
+          status: 'pending',
+        },
+      });
+      break;
+    }
+
     case 'customer.subscription.updated':
     case 'customer.subscription.deleted': {
       const sub = event.data.object as Stripe.Subscription;

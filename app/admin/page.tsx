@@ -10,9 +10,15 @@ type Affiliate = {
   code: string;
   name: string;
   email: string | null;
+  address: string | null;
+  phone: string | null;
+  website: string | null;
+  status: string;
   createdAt: string;
   signups: number;
   conversions: number;
+  pendingCents: number;
+  totalEarnedCents: number;
 };
 
 type Subscriber = {
@@ -51,11 +57,6 @@ export default function AdminPage() {
   const [error, setError] = useState('');
   const [search, setSearch] = useState('');
   const [affiliates, setAffiliates] = useState<Affiliate[] | null>(null);
-  const [newAffiliateName, setNewAffiliateName] = useState('');
-  const [newAffiliateCode, setNewAffiliateCode] = useState('');
-  const [newAffiliateEmail, setNewAffiliateEmail] = useState('');
-  const [affiliateError, setAffiliateError] = useState('');
-  const [affiliateSaving, setAffiliateSaving] = useState(false);
   const router = useRouter();
 
   useEffect(() => {
@@ -70,26 +71,6 @@ export default function AdminPage() {
       .then(async (r) => { if (r.ok) setAffiliates(await r.json()); })
       .catch(() => null);
   }, []);
-
-  const createAffiliate = async () => {
-    if (!newAffiliateName || !newAffiliateCode) { setAffiliateError('Name and code are required.'); return; }
-    setAffiliateSaving(true);
-    setAffiliateError('');
-    try {
-      const res = await fetch('/api/admin/affiliates', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ name: newAffiliateName, code: newAffiliateCode, email: newAffiliateEmail }),
-      });
-      if (res.status === 409) { setAffiliateError('That code is already taken.'); return; }
-      if (!res.ok) { setAffiliateError('Failed to create affiliate.'); return; }
-      const created = await res.json();
-      setAffiliates(prev => [{ ...created, signups: 0, conversions: 0 }, ...(prev ?? [])]);
-      setNewAffiliateName(''); setNewAffiliateCode(''); setNewAffiliateEmail('');
-    } finally {
-      setAffiliateSaving(false);
-    }
-  };
 
   const deleteAffiliate = async (id: string) => {
     if (!confirm('Delete this affiliate? Their referral history will remain on existing users.')) return;
@@ -222,36 +203,10 @@ export default function AdminPage() {
         {/* ── Affiliates ── */}
         <h2 className="text-2xl font-bold mt-16 mb-6">Affiliate Links</h2>
 
-        {/* Create form */}
-        <div className="bg-gray-900 border border-gray-800 rounded-xl p-6 mb-6">
-          <h3 className="text-sm font-semibold text-gray-400 uppercase tracking-wider mb-4">Create New Affiliate</h3>
-          <div className="flex flex-wrap gap-3 items-end">
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-gray-500">Name</label>
-              <input value={newAffiliateName} onChange={e => setNewAffiliateName(e.target.value)}
-                placeholder="John Smith" className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-44" />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-gray-500">Code (URL slug)</label>
-              <input value={newAffiliateCode} onChange={e => setNewAffiliateCode(e.target.value.toLowerCase().replace(/[^a-z0-9_-]/g, '-'))}
-                placeholder="johnsmith" className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-36" />
-            </div>
-            <div className="flex flex-col gap-1">
-              <label className="text-xs text-gray-500">Email (optional)</label>
-              <input value={newAffiliateEmail} onChange={e => setNewAffiliateEmail(e.target.value)}
-                placeholder="john@example.com" className="px-3 py-2 bg-gray-800 border border-gray-700 rounded-lg text-white text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 w-48" />
-            </div>
-            <button onClick={createAffiliate} disabled={affiliateSaving}
-              className="px-4 py-2 bg-blue-600 hover:bg-blue-500 disabled:opacity-50 text-white text-sm font-semibold rounded-lg transition-colors">
-              {affiliateSaving ? 'Creating...' : 'Create'}
-            </button>
-          </div>
-          {affiliateError && <p className="text-red-400 text-sm mt-3">{affiliateError}</p>}
-          {newAffiliateCode && (
-            <p className="text-gray-500 text-xs mt-3">
-              Link: <span className="text-blue-400 font-mono">https://tutorialclarity.com/?ref={newAffiliateCode}</span>
-            </p>
-          )}
+        <div className="bg-gray-900 border border-gray-800 rounded-xl p-5 mb-6 flex items-center justify-between">
+          <p className="text-sm text-gray-400">Affiliates self-enroll and connect their bank via Stripe.</p>
+          <a href="/affiliates" target="_blank" rel="noopener noreferrer"
+            className="text-xs text-blue-400 hover:underline">View signup page ↗</a>
         </div>
 
         {/* Affiliates table */}
@@ -262,24 +217,45 @@ export default function AdminPage() {
                 <tr className="bg-gray-900 text-gray-400 text-left">
                   <th className="px-4 py-3 font-medium">Name</th>
                   <th className="px-4 py-3 font-medium">Code / Link</th>
-                  <th className="px-4 py-3 font-medium">Email</th>
+                  <th className="px-4 py-3 font-medium">Status</th>
                   <th className="px-4 py-3 font-medium text-right">Signups</th>
-                  <th className="px-4 py-3 font-medium text-right">Paid</th>
-                  <th className="px-4 py-3 font-medium">Created</th>
+                  <th className="px-4 py-3 font-medium text-right">Paid subs</th>
+                  <th className="px-4 py-3 font-medium text-right">Pending $</th>
+                  <th className="px-4 py-3 font-medium text-right">Total earned</th>
+                  <th className="px-4 py-3 font-medium">Joined</th>
                   <th className="px-4 py-3 font-medium"></th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-gray-800">
                 {affiliates.map(a => (
                   <tr key={a.id} className="hover:bg-gray-900/60 transition-colors">
-                    <td className="px-4 py-3 text-white font-medium">{a.name}</td>
+                    <td className="px-4 py-3">
+                      <div className="text-white font-medium">{a.name}</div>
+                      {a.email && <div className="text-gray-500 text-xs">{a.email}</div>}
+                    </td>
                     <td className="px-4 py-3">
                       <span className="font-mono text-blue-400 text-xs">tutorialclarity.com/?ref={a.code}</span>
                     </td>
-                    <td className="px-4 py-3 text-gray-400">{a.email ?? '—'}</td>
+                    <td className="px-4 py-3">
+                      <span className={`inline-block px-2 py-0.5 rounded-full text-xs font-semibold ${
+                        a.status === 'active' ? 'bg-green-900 text-green-300' :
+                        a.status === 'pending_stripe' ? 'bg-yellow-900 text-yellow-300' :
+                        'bg-gray-700 text-gray-400'
+                      }`}>
+                        {a.status === 'pending_stripe' ? 'Stripe pending' : a.status}
+                      </span>
+                    </td>
                     <td className="px-4 py-3 text-right text-gray-300">{a.signups}</td>
                     <td className="px-4 py-3 text-right">
                       <span className={a.conversions > 0 ? 'text-green-400 font-semibold' : 'text-gray-600'}>{a.conversions}</span>
+                    </td>
+                    <td className="px-4 py-3 text-right">
+                      <span className={a.pendingCents > 0 ? 'text-amber-400 font-semibold' : 'text-gray-600'}>
+                        {a.pendingCents > 0 ? `$${(a.pendingCents / 100).toFixed(2)}` : '—'}
+                      </span>
+                    </td>
+                    <td className="px-4 py-3 text-right text-gray-400">
+                      {a.totalEarnedCents > 0 ? `$${(a.totalEarnedCents / 100).toFixed(2)}` : '—'}
                     </td>
                     <td className="px-4 py-3 text-gray-400">{fmt(a.createdAt)}</td>
                     <td className="px-4 py-3">

@@ -19,11 +19,31 @@ model User {
 }
 
 model Affiliate {
-  id        String   @id @default(cuid())
-  code      String   @unique
-  name      String
-  email     String?
-  createdAt DateTime @default(now())
+  id              String       @id @default(cuid())
+  code            String       @unique
+  name            String
+  email           String?
+  address         String?
+  phone           String?
+  website         String?
+  stripeAccountId String?      // Stripe Connect Express account ID
+  status          String       @default("pending_stripe") // pending_stripe | active | suspended
+  createdAt       DateTime     @default(now())
+  commissions     Commission[]
+}
+
+model Commission {
+  id               String    @id @default(cuid())
+  affiliateCode    String
+  affiliate        Affiliate @relation(fields: [affiliateCode], references: [code])
+  userId           String
+  stripeInvoiceId  String    @unique
+  amountCents      Int       // 30% of invoice amount in cents
+  status           String    @default("pending") // pending | paid
+  createdAt        DateTime  @default(now())
+  paidAt           DateTime?
+
+  @@index([affiliateCode, status])
 }
 
 model Subscription {

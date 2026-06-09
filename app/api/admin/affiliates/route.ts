@@ -36,10 +36,25 @@ export async function GET() {
     }
   });
 
+  // Sum pending and total commissions per affiliate
+  const commissions = await db.commission.groupBy({
+    by: ['affiliateCode', 'status'],
+    _sum: { amountCents: true },
+  });
+
+  const pendingMap: Record<string, number> = {};
+  const totalEarnedMap: Record<string, number> = {};
+  commissions.forEach(c => {
+    if (c.status === 'pending') pendingMap[c.affiliateCode] = (c._sum.amountCents ?? 0);
+    totalEarnedMap[c.affiliateCode] = (totalEarnedMap[c.affiliateCode] ?? 0) + (c._sum.amountCents ?? 0);
+  });
+
   const rows = affiliates.map(a => ({
     ...a,
     signups: signupMap[a.code] ?? 0,
     conversions: paidMap[a.code] ?? 0,
+    pendingCents: pendingMap[a.code] ?? 0,
+    totalEarnedCents: totalEarnedMap[a.code] ?? 0,
   }));
 
   return NextResponse.json(rows);
