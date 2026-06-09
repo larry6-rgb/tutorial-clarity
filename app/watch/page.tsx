@@ -1503,7 +1503,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                     />
 
                     {/* Spyglass lens iframe — zoomed, clipped to lens circle */}
-                    {spyglassMode && spyglassPos && (
+                    {spyglassMode && (
                         <iframe
                             ref={lensIframeRef}
                             className="w-full h-full"
@@ -1511,13 +1511,14 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 position: 'absolute', inset: 0,
                                 pointerEvents: 'none',
                                 transformOrigin: '0 0',
-                                transform: (() => {
-                                    // Zoom outward FROM the cursor — cursor stays fixed, surroundings expand
+                                transform: spyglassPos ? (() => {
                                     const tx = spyglassPos.x * (1 - spyglassZoom);
                                     const ty = spyglassPos.y * (1 - spyglassZoom);
                                     return `translate(${tx}px, ${ty}px) scale(${spyglassZoom})`;
-                                })(),
-                                clipPath: `circle(${spyglassRadius}px at ${spyglassPos.x}px ${spyglassPos.y}px)`,
+                                })() : 'none',
+                                clipPath: spyglassPos
+                                    ? `circle(${spyglassRadius}px at ${spyglassPos.x}px ${spyglassPos.y}px)`
+                                    : 'circle(0px at 0px 0px)',
                                 filter: 'contrast(1.35) saturate(1.15) brightness(1.04)',
                             }}
                             src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=1`}
@@ -2837,7 +2838,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             <li>Click the purple <strong>🕵️ Spyglass</strong> button that appears at the bottom-right of the video.</li>
                                             <li>Move your mouse slowly over the video — a <strong>golden circular lens</strong> follows your cursor, magnifying everything underneath it.</li>
                                             <li>Everything outside the lens goes dark so you can focus on just the area inside.</li>
-                                            <li>Use the <strong>zoom slider</strong> at the bottom (1x – 5x) to increase magnification if needed.</li>
+                                            <li>Use the <strong>size slider and zoom controls</strong> at the top of the screen to adjust the lens.</li>
                                             <li>When you've found what you were looking for, press <strong>Spacebar</strong> to exit and resume play.</li>
                                         </ol>
                                         <p style={{ margin: 0, color: '#9ca3af', fontSize: '12px' }}>
