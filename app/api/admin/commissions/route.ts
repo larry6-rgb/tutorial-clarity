@@ -13,7 +13,7 @@ export async function GET() {
 
   const commissions = await db.commission.findMany({
     orderBy: { createdAt: 'desc' },
-    include: { affiliate: { select: { name: true, paypalEmail: true } } },
+    include: { affiliate: { select: { name: true, email: true } } },
   });
 
   return NextResponse.json(commissions);
