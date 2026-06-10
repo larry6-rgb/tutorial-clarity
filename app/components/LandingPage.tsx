@@ -153,6 +153,10 @@ export default function LandingPage() {
             </Link>
           </div>
         </div>
+
+        <p className="text-center text-gray-400 text-sm mt-6">
+          🎁 All future features included — current subscribers never pay more.
+        </p>
       </section>
 
       {/* Footer */}
