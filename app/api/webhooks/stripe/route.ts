@@ -26,6 +26,16 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Invalid signature' }, { status: 400 });
   }
 
+  // Acknowledge immediately — Stripe times out at 10s and retries if we don't respond fast
+  const response = NextResponse.json({ received: true });
+
+  // Process asynchronously after responding
+  processEvent(event).catch(err => console.error('[webhook] processing error:', err));
+
+  return response;
+}
+
+async function processEvent(event: Stripe.Event) {
   const session = event.data.object as any;
 
   switch (event.type) {
@@ -132,6 +142,4 @@ export async function POST(req: Request) {
       break;
     }
   }
-
-  return NextResponse.json({ received: true });
 }
