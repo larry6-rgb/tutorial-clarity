@@ -2642,7 +2642,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                     >
                                                         <span style={{ fontWeight: 'bold', color: '#a78bfa' }}>{expandedLibraries.has(lib.id) ? '▼' : '▶'} {lib.name} <span style={{ color: '#6b7280', fontWeight: 'normal' }}>({lib.videos.length})</span></span>
                                                         <button
-                                                            onClick={e => { e.stopPropagation(); if (confirm(`Delete library "${lib.name}"?`)) deleteLibrary(lib.id); }}
+                                                            onClick={e => { e.stopPropagation(); deleteLibrary(lib.id); }}
                                                             style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}
                                                             title="Delete library"
                                                         >✕</button>
