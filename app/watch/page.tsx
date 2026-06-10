@@ -656,7 +656,8 @@ function WatchPageContent() {
     };
 
     const createLibrary = async () => {
-        if (!newLibraryName.trim()) return;
+        if (!newLibraryName.trim()) { setLibraryStatus('⚠ Enter a library name first.'); return; }
+        setLibraryStatus('Creating...');
         try {
             const res = await fetch('/api/libraries', {
                 method: 'POST',
