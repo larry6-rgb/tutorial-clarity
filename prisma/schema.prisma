@@ -81,3 +81,27 @@ model SavedVideo {
   dateSaved    DateTime @default(now())
   isPersistent Boolean  @default(false)
 }
+
+model Library {
+  id        String         @id @default(cuid())
+  clerkId   String
+  name      String
+  createdAt DateTime       @default(now())
+  videos    LibraryVideo[]
+
+  @@index([clerkId])
+}
+
+model LibraryVideo {
+  id         String   @id @default(cuid())
+  libraryId  String
+  library    Library  @relation(fields: [libraryId], references: [id], onDelete: Cascade)
+  videoId    String
+  title      String
+  url        String
+  thumbnail  String?
+  addedAt    DateTime @default(now())
+
+  @@unique([libraryId, videoId])
+  @@index([libraryId])
+}

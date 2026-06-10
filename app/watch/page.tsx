@@ -58,6 +58,15 @@ function WatchPageContent() {
     const savedVideosLoaded = useRef(false); // prevents sync wiping data before initial load
     const [newVideoUrl, setNewVideoUrl] = useState('');
 
+    // ── LIBRARIES ──
+    interface LibraryVideo { id: string; libraryId: string; videoId: string; title: string; url: string; thumbnail: string | null; addedAt: string; }
+    interface Library { id: string; name: string; createdAt: string; videos: LibraryVideo[]; }
+    const [libraries, setLibraries] = useState<Library[]>([]);
+    const [librariesLoaded, setLibrariesLoaded] = useState(false);
+    const [newLibraryName, setNewLibraryName] = useState('');
+    const [libraryStatus, setLibraryStatus] = useState('');
+    const [expandedLibraries, setExpandedLibraries] = useState<Set<string>>(new Set());
+
     // ── RESUME PREVIOUS VIDEO ──
     const RESUME_KEY = 'tc_resume_sessions';
     interface ResumeSession {
@@ -608,6 +617,85 @@ function WatchPageContent() {
             }
         });
     }, [savedVideos]);
+
+    // Load libraries when the section is first opened
+    const loadLibraries = async () => {
+        if (librariesLoaded) return;
+        try {
+            const res = await fetch('/api/libraries');
+            if (res.ok) {
+                const data = await res.json();
+                setLibraries(data.libraries || []);
+                setLibrariesLoaded(true);
+            }
+        } catch { /* ignore */ }
+    };
+
+    const saveCurrentVideoToLibrary = async (libraryId: string) => {
+        if (!videoId) return;
+        const title = document.title.replace(' - YouTube', '').trim() || videoId;
+        const url = `https://www.youtube.com/watch?v=${videoId}`;
+        const thumbnail = `https://img.youtube.com/vi/${videoId}/default.jpg`;
+        try {
+            const res = await fetch('/api/libraries', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'add_video', libraryId, videoId, title, url, thumbnail }),
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setLibraries(prev => prev.map(lib =>
+                    lib.id === libraryId
+                        ? { ...lib, videos: [data.video, ...lib.videos.filter((v: LibraryVideo) => v.videoId !== videoId)] }
+                        : lib
+                ));
+                setLibraryStatus('✓ Saved!');
+                setTimeout(() => setLibraryStatus(''), 2000);
+            }
+        } catch { setLibraryStatus('Error saving'); }
+    };
+
+    const createLibrary = async () => {
+        if (!newLibraryName.trim()) return;
+        try {
+            const res = await fetch('/api/libraries', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'create', name: newLibraryName.trim() }),
+            });
+            if (res.ok) {
+                const data = await res.json();
+                setLibraries(prev => [...prev, data.library]);
+                setNewLibraryName('');
+            }
+        } catch { /* ignore */ }
+    };
+
+    const deleteLibrary = async (libraryId: string) => {
+        try {
+            await fetch('/api/libraries', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'delete', libraryId }),
+            });
+            setLibraries(prev => prev.filter(l => l.id !== libraryId));
+        } catch { /* ignore */ }
+    };
+
+    const removeFromLibrary = async (libraryId: string, videoId: string) => {
+        try {
+            await fetch('/api/libraries', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({ action: 'remove_video', libraryId, videoId }),
+            });
+            setLibraries(prev => prev.map(lib =>
+                lib.id === libraryId
+                    ? { ...lib, videos: lib.videos.filter((v: LibraryVideo) => v.videoId !== videoId) }
+                    : lib
+            ));
+        } catch { /* ignore */ }
+    };
 
     useEffect(() => {
         const interval = setInterval(() => {
@@ -2486,7 +2574,120 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
-                            {/* 5. SCROLL */}
+                            {/* 5. VIDEO LIBRARIES */}
+                            <div style={{ borderBottom: '1px solid #374151' }}>
+                                <h3
+                                    onClick={() => { toggleSection('libraries'); loadLibraries(); }}
+                                    style={{ fontSize: '16px', fontWeight: 'bold', padding: '12px', cursor: 'pointer', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}
+                                >
+                                    <span>5. VIDEO LIBRARIES 📚</span>
+                                    <span>{expandedSections.has('libraries') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('libraries') && (
+                                    <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
+
+                                        <div style={{ backgroundColor: 'rgba(124,58,237,0.12)', border: '1px solid #7c3aed', borderRadius: '8px', padding: '10px 12px', marginBottom: '14px' }}>
+                                            <div style={{ fontWeight: 'bold', color: '#a78bfa', marginBottom: '4px', fontSize: '13px' }}>📚 Build Topic Libraries</div>
+                                            <p style={{ margin: 0, color: '#d1d5db', lineHeight: '1.6' }}>
+                                                Organize videos by subject into personal libraries — perfect for students, researchers, or anyone building a learning collection. Save the current video to any library with one click.
+                                            </p>
+                                        </div>
+
+                                        {/* Save current video */}
+                                        {videoId && libraries.length > 0 && (
+                                            <div style={{ marginBottom: '14px' }}>
+                                                <div style={{ color: '#9ca3af', marginBottom: '6px' }}>Save this video to a library:</div>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px' }}>
+                                                    {libraries.map(lib => (
+                                                        <button
+                                                            key={lib.id}
+                                                            onClick={() => saveCurrentVideoToLibrary(lib.id)}
+                                                            style={{ padding: '4px 10px', backgroundColor: '#7c3aed', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px' }}
+                                                        >
+                                                            + {lib.name}
+                                                        </button>
+                                                    ))}
+                                                </div>
+                                                {libraryStatus && <div style={{ color: '#4ade80', marginTop: '6px' }}>{libraryStatus}</div>}
+                                            </div>
+                                        )}
+
+                                        {/* Create new library */}
+                                        <div style={{ display: 'flex', gap: '6px', marginBottom: '16px' }}>
+                                            <input
+                                                type="text"
+                                                value={newLibraryName}
+                                                onChange={e => setNewLibraryName(e.target.value)}
+                                                onKeyDown={e => e.key === 'Enter' && createLibrary()}
+                                                placeholder="New library name (e.g. Machine Learning)"
+                                                style={{ flex: 1, padding: '6px', backgroundColor: '#1f2937', border: '1px solid #374151', borderRadius: '5px', color: 'white', fontSize: '11px' }}
+                                            />
+                                            <button
+                                                onClick={createLibrary}
+                                                style={{ padding: '6px 12px', backgroundColor: '#7c3aed', color: 'white', border: 'none', borderRadius: '5px', cursor: 'pointer', fontSize: '11px', fontWeight: 'bold' }}
+                                            >
+                                                Create
+                                            </button>
+                                        </div>
+
+                                        {/* Library list */}
+                                        {libraries.length === 0 ? (
+                                            <p style={{ textAlign: 'center', color: '#6b7280', padding: '12px' }}>No libraries yet. Create one above!</p>
+                                        ) : (
+                                            libraries.map(lib => (
+                                                <div key={lib.id} style={{ backgroundColor: '#1f2937', borderRadius: '6px', border: '1px solid #374151', marginBottom: '10px' }}>
+                                                    <div
+                                                        style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '8px 10px', cursor: 'pointer' }}
+                                                        onClick={() => setExpandedLibraries(prev => { const s = new Set(prev); s.has(lib.id) ? s.delete(lib.id) : s.add(lib.id); return s; })}
+                                                    >
+                                                        <span style={{ fontWeight: 'bold', color: '#a78bfa' }}>{expandedLibraries.has(lib.id) ? '▼' : '▶'} {lib.name} <span style={{ color: '#6b7280', fontWeight: 'normal' }}>({lib.videos.length})</span></span>
+                                                        <button
+                                                            onClick={e => { e.stopPropagation(); if (confirm(`Delete library "${lib.name}"?`)) deleteLibrary(lib.id); }}
+                                                            style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '14px', padding: '0 4px' }}
+                                                            title="Delete library"
+                                                        >✕</button>
+                                                    </div>
+                                                    {expandedLibraries.has(lib.id) && (
+                                                        <div style={{ padding: '0 10px 10px', maxHeight: '260px', overflowY: 'auto' }}>
+                                                            {lib.videos.length === 0 ? (
+                                                                <p style={{ color: '#6b7280', fontSize: '11px', margin: '4px 0' }}>No videos yet — save the current video using the buttons above.</p>
+                                                            ) : (
+                                                                lib.videos.map((v: LibraryVideo) => (
+                                                                    <div key={v.id} style={{ display: 'flex', gap: '8px', alignItems: 'center', padding: '6px 0', borderTop: '1px solid #374151' }}>
+                                                                        {v.thumbnail && (
+                                                                            <img
+                                                                                src={v.thumbnail}
+                                                                                alt=""
+                                                                                style={{ width: '60px', height: '45px', objectFit: 'cover', borderRadius: '3px', cursor: 'pointer', flexShrink: 0 }}
+                                                                                onClick={() => handleLoadVideo(v.videoId)}
+                                                                            />
+                                                                        )}
+                                                                        <div style={{ flex: 1, minWidth: 0 }}>
+                                                                            <div
+                                                                                style={{ color: '#e5e7eb', fontSize: '11px', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', cursor: 'pointer' }}
+                                                                                onClick={() => handleLoadVideo(v.videoId)}
+                                                                                title={v.title}
+                                                                            >{v.title}</div>
+                                                                            <div style={{ color: '#6b7280', fontSize: '10px' }}>{new Date(v.addedAt).toLocaleDateString()}</div>
+                                                                        </div>
+                                                                        <button
+                                                                            onClick={() => removeFromLibrary(lib.id, v.videoId)}
+                                                                            style={{ background: 'none', border: 'none', color: '#6b7280', cursor: 'pointer', fontSize: '13px', flexShrink: 0 }}
+                                                                            title="Remove from library"
+                                                                        >✕</button>
+                                                                    </div>
+                                                                ))
+                                                            )}
+                                                        </div>
+                                                    )}
+                                                </div>
+                                            ))
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 7. SCROLL */}
                             <div style={{ borderBottom: '1px solid #374151' }}>
                                 <h3
                                     onClick={() => toggleSection('scroll')}
@@ -2500,7 +2701,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         alignItems: 'center'
                                     }}
                                 >
-                                    <span>5. SCROLL</span>
+                                    <span>6. SCROLL</span>
                                     <span>{expandedSections.has('scroll') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('scroll') && (
@@ -2548,7 +2749,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
-                            {/* 6. DEFINITIONS */}
+                            {/* 7. DEFINITIONS */}
                             <div>
                                 <h3
                                     onClick={() => toggleSection('definitions')}
@@ -2562,7 +2763,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         alignItems: 'center'
                                     }}
                                 >
-                                    <span>6. DEFINITIONS</span>
+                                    <span>7. DEFINITIONS</span>
                                     <span>{expandedSections.has('definitions') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('definitions') && (
@@ -2659,7 +2860,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
-                            {/* 7. CLARIFY AUDIO */}
+                            {/* 8. CLARIFY AUDIO */}
                             <div style={{ borderTop: '1px solid #374151' }}>
                                 <h3
                                     onClick={() => toggleSection('clarify')}
@@ -2673,7 +2874,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         alignItems: 'center'
                                     }}
                                 >
-                                    <span>7. CLARIFY AUDIO 🔊</span>
+                                    <span>8. CLARIFY AUDIO 🔊</span>
                                     <span>{expandedSections.has('clarify') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('clarify') && (
@@ -2786,7 +2987,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
-                            {/* 8. ZOOM */}
+                            {/* 9. ZOOM */}
                             <div style={{ borderBottom: '1px solid #374151' }}>
                                 <h3
                                     onClick={() => toggleSection('zoom')}
@@ -2797,7 +2998,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         justifyContent: 'space-between', alignItems: 'center'
                                     }}
                                 >
-                                    <span>8. ZOOM 🔍</span>
+                                    <span>9. ZOOM 🔍</span>
                                     <span>{expandedSections.has('zoom') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('zoom') && (
@@ -2820,7 +3021,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
-                            {/* 9. SHERLOCK SPYGLASS */}
+                            {/* 10. SHERLOCK SPYGLASS */}
                             <div style={{ borderBottom: '1px solid #374151' }}>
                                 <h3
                                     onClick={() => toggleSection('spyglass')}
@@ -2831,7 +3032,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         justifyContent: 'space-between', alignItems: 'center'
                                     }}
                                 >
-                                    <span>9. SHERLOCK SPYGLASS 🕵️</span>
+                                    <span>10. SHERLOCK SPYGLASS 🕵️</span>
                                     <span>{expandedSections.has('spyglass') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('spyglass') && (
@@ -2854,7 +3055,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
-                            {/* 10. RESUME PREVIOUS VIDEO */}
+                            {/* 11. RESUME PREVIOUS VIDEO */}
                             <div style={{ borderBottom: '1px solid #374151' }}>
                                 <h3
                                     onClick={() => toggleSection('resume')}
@@ -2865,7 +3066,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         justifyContent: 'space-between', alignItems: 'center'
                                     }}
                                 >
-                                    <span>10. RESUME PREVIOUS VIDEO ▶</span>
+                                    <span>11. RESUME PREVIOUS VIDEO ▶</span>
                                     <span>{expandedSections.has('resume') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('resume') && (
@@ -2950,7 +3151,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
-                            {/* 11. SUMMARY */}
+                            {/* 12. SUMMARY */}
                             <div>
                                 <h3
                                     onClick={() => toggleSection('summary')}
@@ -2960,7 +3161,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         justifyContent: 'space-between', alignItems: 'center',
                                     }}
                                 >
-                                    <span>11. SUMMARY</span>
+                                    <span>12. SUMMARY</span>
                                     <span>{expandedSections.has('summary') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('summary') && (
@@ -3022,7 +3223,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
-                            {/* 12. TRANSCRIPT */}
+                            {/* 13. TRANSCRIPT */}
                             <div style={{ borderBottom: '1px solid #374151' }}>
                                 <h3
                                     onClick={() => toggleSection('transcriptdoc')}
@@ -3032,7 +3233,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         justifyContent: 'space-between', alignItems: 'center',
                                     }}
                                 >
-                                    <span>12. TRANSCRIPT</span>
+                                    <span>13. TRANSCRIPT</span>
                                     <span>{expandedSections.has('transcriptdoc') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('transcriptdoc') && (
@@ -3118,7 +3319,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
-                            {/* 13. KEYBOARD SHORTCUTS */}
+                            {/* 14. KEYBOARD SHORTCUTS */}
                             <div style={{ borderBottom: '1px solid #374151' }}>
                                 <h3
                                     onClick={() => toggleSection('shortcuts')}
@@ -3128,7 +3329,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         justifyContent: 'space-between', alignItems: 'center',
                                     }}
                                 >
-                                    <span>13. KEYBOARD SHORTCUTS</span>
+                                    <span>14. KEYBOARD SHORTCUTS</span>
                                     <span>{expandedSections.has('shortcuts') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('shortcuts') && (
@@ -3171,7 +3372,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
-                            {/* 14. TUTORIAL */}
+                            {/* 15. TUTORIAL */}
                             <div style={{ borderBottom: '1px solid #374151' }}>
                                 <h3
                                     onClick={() => toggleSection('tutorial')}
@@ -3181,7 +3382,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         justifyContent: 'space-between', alignItems: 'center',
                                     }}
                                 >
-                                    <span>14. TUTORIAL</span>
+                                    <span>15. TUTORIAL</span>
                                     <span>{expandedSections.has('tutorial') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('tutorial') && (
