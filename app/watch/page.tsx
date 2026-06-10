@@ -663,12 +663,19 @@ function WatchPageContent() {
                 headers: { 'Content-Type': 'application/json' },
                 body: JSON.stringify({ action: 'create', name: newLibraryName.trim() }),
             });
+            if (res.status === 401) {
+                setLibraryStatus('⚠ Please sign in to use libraries.');
+                return;
+            }
             if (res.ok) {
                 const data = await res.json();
                 setLibraries(prev => [...prev, data.library]);
                 setNewLibraryName('');
+                setLibraryStatus('');
+            } else {
+                setLibraryStatus('Error creating library.');
             }
-        } catch { /* ignore */ }
+        } catch (e) { setLibraryStatus('Network error.'); }
     };
 
     const deleteLibrary = async (libraryId: string) => {
