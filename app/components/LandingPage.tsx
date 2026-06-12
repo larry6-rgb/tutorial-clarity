@@ -1,14 +1,56 @@
 'use client';
 
 import Link from 'next/link';
+import { useState } from 'react';
 
 export default function LandingPage() {
+  const [email, setEmail] = useState('');
+  const [status, setStatus] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
+
+  async function handleNotify(e: React.FormEvent) {
+    e.preventDefault();
+    setStatus('sending');
+    try {
+      const res = await fetch('/api/email-interest', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email }),
+      });
+      setStatus(res.ok ? 'done' : 'error');
+    } catch {
+      setStatus('error');
+    }
+  }
+
   return (
     <div className="min-h-screen bg-gray-950 text-white">
 
       {/* Under construction banner */}
-      <div className="w-full bg-amber-500 text-gray-950 text-center text-sm font-semibold py-2 px-4">
-        🚧 Tutorial Clarity is currently under construction and will be opening soon. Stay tuned!
+      <div className="w-full bg-amber-500 text-gray-950 text-center text-sm font-semibold py-3 px-4">
+        🚧 Tutorial Clarity is currently under construction and will be opening soon.
+        {status === 'done' ? (
+          <span className="ml-2">✅ You&apos;re on the list — we&apos;ll notify you at launch!</span>
+        ) : (
+          <form onSubmit={handleNotify} className="inline-flex items-center gap-2 ml-3">
+            <span className="font-normal">Want to be notified when we launch?</span>
+            <input
+              type="email"
+              required
+              placeholder="your@email.com"
+              value={email}
+              onChange={e => setEmail(e.target.value)}
+              className="rounded px-2 py-0.5 text-gray-950 bg-white border border-amber-700 text-sm w-48 font-normal"
+            />
+            <button
+              type="submit"
+              disabled={status === 'sending'}
+              className="bg-gray-950 text-amber-400 rounded px-3 py-0.5 text-sm hover:bg-gray-800 transition-colors disabled:opacity-50"
+            >
+              {status === 'sending' ? 'Saving…' : 'Notify Me'}
+            </button>
+            {status === 'error' && <span className="text-red-800 font-normal">Something went wrong, try again.</span>}
+          </form>
+        )}
       </div>
 
       {/* Nav */}

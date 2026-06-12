@@ -82,6 +82,12 @@ model SavedVideo {
   isPersistent Boolean  @default(false)
 }
 
+model EmailInterest {
+  id        String   @id @default(cuid())
+  email     String   @unique
+  createdAt DateTime @default(now())
+}
+
 model Library {
   id        String         @id @default(cuid())
   clerkId   String
