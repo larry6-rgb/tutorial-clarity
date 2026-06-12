@@ -6,6 +6,11 @@ export default function LandingPage() {
   return (
     <div className="min-h-screen bg-gray-950 text-white">
 
+      {/* Under construction banner */}
+      <div className="w-full bg-amber-500 text-gray-950 text-center text-sm font-semibold py-2 px-4">
+        🚧 Tutorial Clarity is currently under construction and will be opening soon. Stay tuned!
+      </div>
+
       {/* Nav */}
       <nav className="flex items-center justify-between px-8 py-5 border-b border-gray-800">
         <span
