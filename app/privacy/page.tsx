@@ -105,7 +105,22 @@ export default function PrivacyPage() {
           </div>
 
           <div>
-            <h2 className="text-xl font-semibold text-white mb-3">9. Changes to this policy</h2>
+            <h2 className="text-xl font-semibold text-white mb-3">9. SubTamer Chrome Extension</h2>
+            <p className="mb-3">
+              SubTamer is a Chrome extension also operated by Eppler Publishing LLC that helps you organize
+              your YouTube subscriptions into a visual canvas. The following applies specifically to the extension:
+            </p>
+            <ul className="list-disc list-inside space-y-2">
+              <li><strong className="text-white">Subscription data</strong> — SubTamer reads your YouTube subscription list directly from the YouTube page you have open. This data is stored locally in your browser using Chrome&apos;s built-in storage and is never transmitted to our servers.</li>
+              <li><strong className="text-white">Canvas layout</strong> — the frames, groupings, and organization you create are stored locally in your browser. We do not have access to your layout.</li>
+              <li><strong className="text-white">License key</strong> — if you enter a license key to unlock premium features, that key is sent to our server solely to verify its validity. No other personal data is transmitted.</li>
+              <li><strong className="text-white">No tracking</strong> — SubTamer does not track your browsing activity, collect analytics, or share any data with third parties.</li>
+              <li><strong className="text-white">Permissions</strong> — SubTamer requests access to YouTube pages only in order to read your subscription list. It does not access any other websites.</li>
+            </ul>
+          </div>
+
+          <div>
+            <h2 className="text-xl font-semibold text-white mb-3">10. Changes to this policy</h2>
             <p>
               We may update this policy from time to time. We will notify you of significant changes by email
               or by posting a notice on the site. Continued use of Tutorial Clarity after changes take effect
