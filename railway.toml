@@ -1,2 +1,2 @@
 [deploy]
-preDeployCommand = "npx prisma migrate deploy"
+preDeployCommand = "npx prisma migrate resolve --applied 20260606000000_add_saved_video && npx prisma migrate resolve --applied 20260609000001_add_affiliates && npx prisma migrate resolve --applied 20260609000002_expand_affiliates && npx prisma migrate resolve --applied 20260612000001_add_email_interest && npx prisma migrate deploy"
