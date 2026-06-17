@@ -1,3 +1,2 @@
 [deploy]
 preDeployCommand = "npx prisma migrate deploy"
-startCommand = "echo PORT=$PORT && npx next start -p ${PORT:-3000}"
