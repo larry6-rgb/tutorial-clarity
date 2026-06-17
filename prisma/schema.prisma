@@ -88,6 +88,17 @@ model EmailInterest {
   createdAt DateTime @default(now())
 }
 
+model SubTamerLicense {
+  id                   String    @id @default(cuid())
+  email                String    @unique
+  licenseKey           String    @unique
+  stripeCustomerId     String?   @unique
+  stripeSubscriptionId String?   @unique
+  status               String    @default("active") // active | canceled
+  createdAt            DateTime  @default(now())
+  updatedAt            DateTime  @updatedAt
+}
+
 model Library {
   id        String         @id @default(cuid())
   clerkId   String

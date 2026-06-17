@@ -1,6 +1,10 @@
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
 import { prisma as db } from '@/lib/db';
+import { Resend } from 'resend';
+import crypto from 'crypto';
+
+const resend = new Resend(process.env.RESEND_API_KEY);
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2026-05-27.dahlia',
@@ -40,6 +44,55 @@ async function processEvent(event: Stripe.Event) {
 
   switch (event.type) {
     case 'checkout.session.completed': {
+      // ── SubTamer Premium purchase ──────────────────────────────────────────
+      if (session.metadata?.subtamer === 'true') {
+        const email = session.metadata?.email;
+        if (!email) break;
+
+        const licenseKey = 'ST-' + crypto.randomBytes(12).toString('hex').toUpperCase();
+
+        await db.subTamerLicense.upsert({
+          where: { email },
+          update: {
+            licenseKey,
+            stripeCustomerId: session.customer,
+            stripeSubscriptionId: session.subscription,
+            status: 'active',
+          },
+          create: {
+            email,
+            licenseKey,
+            stripeCustomerId: session.customer,
+            stripeSubscriptionId: session.subscription,
+            status: 'active',
+          },
+        });
+
+        await resend.emails.send({
+          from: 'SubTamer <noreply@tutorialclarity.com>',
+          to: email,
+          subject: 'Your SubTamer Premium License Key',
+          html: `
+            <div style="font-family:sans-serif;max-width:500px;margin:0 auto;padding:2rem;background:#1a1a1a;color:#fff;border-radius:8px">
+              <h1 style="color:#ffd700;margin-bottom:0.5rem">Welcome to SubTamer Premium!</h1>
+              <p>Here is your license key:</p>
+              <div style="background:#2a2a2a;padding:1rem;border-radius:4px;font-family:monospace;font-size:1.2rem;letter-spacing:2px;color:#ffd700;text-align:center;margin:1rem 0">
+                ${licenseKey}
+              </div>
+              <p>To activate:</p>
+              <ol style="color:#ccc">
+                <li>Open YouTube and click the SubTamer icon</li>
+                <li>Click <strong style="color:#ffd700">★ Upgrade</strong></li>
+                <li>Paste your key and click <strong>Activate</strong></li>
+              </ol>
+              <p style="color:#888;font-size:0.85rem">Keep this email — you'll need the key if you reinstall the extension.</p>
+            </div>
+          `,
+        });
+        break;
+      }
+
+      // ── Tutorial Clarity purchase ──────────────────────────────────────────
       const clerkUserId = session.metadata?.clerkUserId;
       if (!clerkUserId) break;
 
@@ -126,6 +179,17 @@ async function processEvent(event: Stripe.Event) {
     case 'customer.subscription.updated':
     case 'customer.subscription.deleted': {
       const sub = event.data.object as Stripe.Subscription;
+
+      // SubTamer cancellation
+      if (sub.metadata?.subtamer === 'true') {
+        await db.subTamerLicense.updateMany({
+          where: { stripeSubscriptionId: sub.id },
+          data: { status: sub.status === 'active' ? 'active' : 'canceled' },
+        });
+        break;
+      }
+
+      // Tutorial Clarity cancellation
       const clerkUserId = sub.metadata?.clerkUserId;
       if (!clerkUserId) break;
 
