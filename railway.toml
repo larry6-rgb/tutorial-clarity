@@ -1,5 +1,0 @@
-[deploy]
-preDeployCommand = "npx prisma migrate deploy"
-startCommand = "next start"
-healthcheckPath = "/"
-healthcheckTimeout = 300
