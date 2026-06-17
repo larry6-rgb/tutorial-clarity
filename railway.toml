@@ -1,7 +1,4 @@
 [deploy]
-preDeployCommand = "npx prisma migrate deploy"
-startCommand = "echo '=== STARTING ===' && ls .next/standalone/ && node .next/standalone/server.js"
-healthcheckPath = "/"
-healthcheckTimeout = 120
+startCommand = "node .next/standalone/server.js"
 restartPolicyType = "ON_FAILURE"
-restartPolicyMaxRetries = 3
+restartPolicyMaxRetries = 5
