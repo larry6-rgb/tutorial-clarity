@@ -1,0 +1,2 @@
+[deploy]
+startCommand = "node -e \"const h=require('http');h.createServer((q,r)=>r.end('Railway OK - port '+process.env.PORT)).listen(process.env.PORT||3000,()=>console.log('listening on',process.env.PORT||3000))\""
