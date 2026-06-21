@@ -23,6 +23,8 @@ export async function POST(req: Request) {
       success_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard?success=true`,
       cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/dashboard?canceled=true`,
       metadata: { clerkUserId: userId },
+      // automatic_tax disabled until TX Sales and Use Tax permit is active
+      billing_address_collection: 'required',
     };
 
     if (!isOneTime) {
