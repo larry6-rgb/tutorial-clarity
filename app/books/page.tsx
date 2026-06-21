@@ -7,8 +7,7 @@ const books = [
     id: 1,
     title: 'Conversational Spices',
     coverPlaceholder: false,
-    coverPdf: '/images/conversational-spices-cover.pdf',
-    // coverImage: '/images/conversational-spices-cover.jpg', // swap in when JPG is ready
+    coverImage: '/images/conversational-spices-cover.jpg',
     sections: [
       {
         heading: 'Storytelling and Narrative Depth',
@@ -140,13 +139,12 @@ function BookCard({ book }: { book: typeof books[0] }) {
 
         {/* Front — cover */}
         <div className="flip-card-front bg-gray-800 border border-gray-700 overflow-hidden">
-          {book.coverPdf ? (
+          {book.coverImage ? (
             <div className="relative w-full h-full">
-              <embed
-                src={`${book.coverPdf}#toolbar=0&navpanes=0&scrollbar=0&page=1&view=FitH`}
-                type="application/pdf"
-                className="w-full h-full"
-                style={{ border: 'none' }}
+              <img
+                src={book.coverImage}
+                alt={`${book.title} cover`}
+                className="w-full h-full object-cover"
               />
               <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-center py-1.5">
                 <p className="text-gray-300 text-xs">Hover to read about this book</p>
