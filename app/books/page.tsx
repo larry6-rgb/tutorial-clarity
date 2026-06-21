@@ -146,6 +146,17 @@ function BookCard({ book }: { book: typeof books[0] }) {
                 alt={`${book.title} cover`}
                 className="w-full h-full object-cover"
               />
+              {!book.amazonUrl && (
+                <div
+                  className="absolute top-3 right-3 bg-yellow-400 text-black rounded-md shadow-lg px-2 py-1.5 flex items-center gap-1.5"
+                  style={{ transform: 'rotate(4deg)', border: '2px dashed #000' }}
+                >
+                  <span className="text-xl leading-none">👷</span>
+                  <span className="text-[10px] font-bold leading-tight uppercase">
+                    Under<br />Construction<br />Check back soon
+                  </span>
+                </div>
+              )}
               <div className="absolute bottom-0 left-0 right-0 bg-black/60 text-center py-1.5">
                 <p className="text-gray-300 text-xs">Hover to read about this book</p>
               </div>
