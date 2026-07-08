@@ -17,7 +17,7 @@ export async function POST(req: Request) {
   try {
     await resend.emails.send({
       from: 'Tutorial Clarity <noreply@tutorialclarity.com>',
-      to: 'eppler6@proton.me',
+      to: ['eppler6@proton.me', 'jason.russell.pmp@gmail.com'],
       subject: 'Reminder: Texas Sales & Use Tax Filing Due',
       html: `
         <p>This is your recurring reminder to file and remit Texas Sales and Use Tax for <strong>Eppler Publishing LLC</strong> (taxpayer #32101730508).</p>
