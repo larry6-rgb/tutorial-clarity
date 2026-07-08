@@ -408,6 +408,34 @@ function WatchPageContent() {
         ? channelVideos.filter(v => v.title.toLowerCase().includes(videoSearchQuery.toLowerCase()))
         : channelVideos;
 
+    // ── CHAPTERS ──
+    const [chapters, setChapters] = useState<{ time: number; title: string }[]>([]);
+    const [chaptersStatus, setChaptersStatus] = useState<'idle' | 'loading' | 'ready' | 'empty' | 'error'>('idle');
+    const chaptersSectionOpen = expandedSections.has('chapters');
+
+    useEffect(() => {
+        if (!videoId || !chaptersSectionOpen || chaptersStatus !== 'idle') return;
+        setChaptersStatus('loading');
+        fetch(`/api/video-chapters?videoId=${videoId}`)
+            .then(res => res.json())
+            .then(data => {
+                if (data.error) { setChaptersStatus('error'); return; }
+                setChapters(data.chapters || []);
+                setChaptersStatus(data.chapters?.length ? 'ready' : 'empty');
+            })
+            .catch(() => setChaptersStatus('error'));
+    }, [videoId, chaptersSectionOpen, chaptersStatus]);
+
+    // Reset when the video changes so chapters re-fetch for the new video
+    useEffect(() => {
+        setChapters([]);
+        setChaptersStatus('idle');
+    }, [videoId]);
+
+    const activeChapterIndex = chapters.length
+        ? chapters.reduce((activeIdx, ch, idx) => (currentTime >= ch.time ? idx : activeIdx), 0)
+        : -1;
+
     const [qaHistory, setQaHistory] = useState<{ question: string; answer: string }[]>([]);
     const [qaQuestion, setQaQuestion] = useState('');
     const [qaLoading, setQaLoading] = useState(false);
@@ -3859,6 +3887,63 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                         >
                                                             ✕
                                                         </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 19. CHAPTERS */}
+                            <div style={{ borderBottom: '1px solid #374151' }}>
+                                <h3
+                                    onClick={() => toggleSection('chapters')}
+                                    style={{
+                                        fontSize: '16px', fontWeight: 'bold', padding: '12px',
+                                        cursor: 'pointer', display: 'flex',
+                                        justifyContent: 'space-between', alignItems: 'center',
+                                    }}
+                                >
+                                    <span>19. CHAPTERS</span>
+                                    <span>{expandedSections.has('chapters') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('chapters') && (
+                                    <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
+                                        {chaptersStatus === 'loading' && (
+                                            <p style={{ color: '#9ca3af' }}>Loading chapters...</p>
+                                        )}
+                                        {chaptersStatus === 'error' && (
+                                            <p style={{ color: '#f87171' }}>Could not load chapters for this video.</p>
+                                        )}
+                                        {chaptersStatus === 'empty' && (
+                                            <p style={{ color: '#9ca3af', lineHeight: '1.6' }}>
+                                                This video's creator didn't include a chapter list in the description.
+                                            </p>
+                                        )}
+                                        {chaptersStatus === 'ready' && (
+                                            <div style={{ maxHeight: '320px', overflowY: 'auto' }}>
+                                                {chapters.map((ch, idx) => (
+                                                    <div
+                                                        key={idx}
+                                                        onClick={() => handleJumpToBookmark(ch.time)}
+                                                        style={{
+                                                            display: 'flex', alignItems: 'center', gap: '8px',
+                                                            padding: '7px 6px', cursor: 'pointer', borderRadius: '4px',
+                                                            backgroundColor: idx === activeChapterIndex ? '#1e3a5f' : 'transparent',
+                                                            borderLeft: idx === activeChapterIndex ? '3px solid #facc15' : '3px solid transparent',
+                                                        }}
+                                                    >
+                                                        <span style={{ color: '#facc15', fontSize: '11px', flexShrink: 0 }}>
+                                                            {Math.floor(ch.time / 60)}:{String(Math.floor(ch.time % 60)).padStart(2, '0')}
+                                                        </span>
+                                                        <span style={{
+                                                            color: idx === activeChapterIndex ? '#fff' : '#d1d5db',
+                                                            fontWeight: idx === activeChapterIndex ? 'bold' : 'normal',
+                                                            overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap',
+                                                        }}>
+                                                            {ch.title}
+                                                        </span>
                                                     </div>
                                                 ))}
                                             </div>
