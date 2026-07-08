@@ -1,42 +1,29 @@
+import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
-import { prisma as db } from '@/lib/db';
+import { checkPremiumAccess } from '@/lib/subscription';
 
-// CORS — called cross-origin from the extension's content script running on
-// youtube.com, same pattern as /api/save-video.
-const CORS_HEADERS = {
-  'Access-Control-Allow-Origin': '*',
-  'Access-Control-Allow-Methods': 'GET, OPTIONS',
-  'Access-Control-Allow-Headers': 'Content-Type',
-};
-
-export async function OPTIONS() {
-  return new NextResponse(null, { status: 204, headers: CORS_HEADERS });
-}
-
-// Ported from SubTamer's backend (C:\Dev\SubTamer\backend\server.js /api/videos)
-// wholesale, gated by a TC activation key instead of a SubTamer license key.
-// Fetches every video in a channel's uploads playlist via the YouTube Data API.
+// Plain, same-origin channel video search — no extension required. Given a
+// channel handle/ID, fetches every video in its uploads playlist via the
+// YouTube Data API (public, API-key only) so users can search a channel with
+// thousands of videos instantly. Gated to paid TC plans via the same
+// checkPremiumAccess() helper other premium features use.
 export async function GET(req: Request) {
-  const { searchParams } = new URL(req.url);
-  const channelId = searchParams.get('channelId');
-  const activationKey = searchParams.get('activationKey');
-  const sort = searchParams.get('sort') || 'alpha';
-
-  if (!channelId || !activationKey) {
-    return NextResponse.json({ error: 'channelId and activationKey are required.' }, { status: 400, headers: CORS_HEADERS });
+  const { userId } = await auth();
+  if (!userId) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
 
-  const activation = await db.tCExtensionActivation.findUnique({
-    where: { activationKey },
-    include: { user: { include: { subscription: true } } },
-  });
-  const valid = Boolean(
-    activation?.active &&
-    activation.user?.subscription?.status === 'active' &&
-    ['monthly', 'annual', 'bundle'].includes(activation.user.subscription.plan)
-  );
-  if (!valid) {
-    return NextResponse.json({ error: 'Invalid or inactive activation key.' }, { status: 403, headers: CORS_HEADERS });
+  const access = await checkPremiumAccess(userId);
+  if (!access.allowed) {
+    return NextResponse.json({ error: 'subscription_required', reason: access.reason }, { status: 403 });
+  }
+
+  const { searchParams } = new URL(req.url);
+  const channelId = searchParams.get('channelId');
+  const sort = searchParams.get('sort') || 'alpha';
+
+  if (!channelId) {
+    return NextResponse.json({ error: 'channelId is required.' }, { status: 400 });
   }
 
   try {
@@ -52,7 +39,7 @@ export async function GET(req: Request) {
 
     const uploadsPlaylistId = channelData.items?.[0]?.contentDetails?.relatedPlaylists?.uploads;
     if (!uploadsPlaylistId) {
-      return NextResponse.json({ error: 'Channel not found or has no public videos.' }, { status: 404, headers: CORS_HEADERS });
+      return NextResponse.json({ error: 'Channel not found or has no public videos.' }, { status: 404 });
     }
 
     const videos: { id: string; title: string; date: string; thumbnail: string }[] = [];
@@ -84,9 +71,9 @@ export async function GET(req: Request) {
       videos.sort((a, b) => new Date(a.date).getTime() - new Date(b.date).getTime());
     }
 
-    return NextResponse.json({ videos, total: videos.length }, { headers: CORS_HEADERS });
+    return NextResponse.json({ videos, total: videos.length });
   } catch (err: any) {
-    console.error('[tc-extension/videos]', err.message);
-    return NextResponse.json({ error: err.message }, { status: 500, headers: CORS_HEADERS });
+    console.error('[channel-videos]', err.message);
+    return NextResponse.json({ error: err.message }, { status: 500 });
   }
 }

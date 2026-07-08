@@ -137,15 +137,6 @@ async function processEvent(event: Stripe.Event) {
             currentPeriodEnd: new Date((bundleSub as any).current_period_end * 1000),
           },
         });
-
-        // Provision (or reactivate) this user's TC extension activation key
-        // for the video-indexing feature — gated to paid TC plans only.
-        const activationKey = 'TCX-' + crypto.randomBytes(12).toString('hex').toUpperCase();
-        await db.tCExtensionActivation.upsert({
-          where: { userId: user.id },
-          update: { active: true },
-          create: { userId: user.id, activationKey, active: true },
-        });
         break;
       }
 
@@ -177,15 +168,6 @@ async function processEvent(event: Stripe.Event) {
             : null,
           currentPeriodEnd: new Date((subscription as any).current_period_end * 1000),
         },
-      });
-
-      // Provision the extension activation key for regular paid plans too —
-      // video indexing is a perk of any paid TC plan, not just the bundle.
-      const activationKey = 'TCX-' + crypto.randomBytes(12).toString('hex').toUpperCase();
-      await db.tCExtensionActivation.upsert({
-        where: { userId: user.id },
-        update: { active: true },
-        create: { userId: user.id, activationKey, active: true },
       });
       break;
     }

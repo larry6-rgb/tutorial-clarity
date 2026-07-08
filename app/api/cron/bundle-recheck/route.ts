@@ -13,8 +13,9 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 //
 // Re-verifies every bundle subscriber's stored SubTamer key. If it's lapsed,
 // reverts the TC subscription to full price for the NEXT billing cycle only
-// (proration_behavior: 'none' — no retroactive charge), revokes the TC
-// extension's video-indexing activation, and emails an explanation.
+// (proration_behavior: 'none' — no retroactive charge) and emails an
+// explanation. Video indexing is unaffected — it's a perk of any paid TC
+// plan, not just the bundle, so it stays available at the full price too.
 export async function POST(req: Request) {
   const authHeader = req.headers.get('authorization');
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
@@ -55,11 +56,6 @@ export async function POST(req: Request) {
         data: { plan: 'monthly' },
       });
 
-      await db.tCExtensionActivation.updateMany({
-        where: { userId: sub.userId },
-        data: { active: false },
-      });
-
       if (sub.user?.email) {
         await resend.emails.send({
           from: 'Tutorial Clarity <noreply@tutorialclarity.com>',
@@ -67,8 +63,7 @@ export async function POST(req: Request) {
           subject: 'Your Tutorial Clarity price has changed',
           html: `
             <p>Your SubTamer subscription is no longer active, so your Tutorial Clarity subscription has returned to <strong>$12.99/mo</strong> starting your next billing cycle.</p>
-            <p>Video indexing inside Tutorial Clarity's extension has also been paused.</p>
-            <p>To restore the $8/mo bundle rate and video indexing, resubscribe to SubTamer and re-enter your key on your Tutorial Clarity subscribe page.</p>
+            <p>To restore the $8/mo bundle rate, resubscribe to SubTamer and re-enter your key on your Tutorial Clarity subscribe page.</p>
           `,
         });
       }

@@ -17,12 +17,6 @@
       "js": ["content.js"],
       "css": ["content.css"],
       "run_at": "document_end"
-    },
-    {
-      "matches": ["https://www.youtube.com/*"],
-      "js": ["index-overlay.js"],
-      "css": ["index-overlay.css"],
-      "run_at": "document_idle"
     }
   ],
   "background": {

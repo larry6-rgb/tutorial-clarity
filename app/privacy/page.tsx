@@ -42,6 +42,7 @@ export default function PrivacyPage() {
               <li><strong className="text-white">Payment information</strong> — billing details are collected and stored by Stripe. We never see or store your full card number.</li>
               <li><strong className="text-white">Usage data</strong> — we record how many Clarify Audio sessions you have used each billing period so we can enforce your plan limits.</li>
               <li><strong className="text-white">YouTube data</strong> — when you use Tutorial Clarity on a YouTube video, we process the video's audio or transcript in order to provide our AI features. We do not store your YouTube watch history.</li>
+              <li><strong className="text-white">Video indexing (Premium)</strong> — when you index a channel to search its videos, we fetch that channel's public video list from YouTube's Data API on your behalf. This uses only public channel data — no YouTube account or login is involved.</li>
             </ul>
           </div>
 
@@ -120,7 +121,19 @@ export default function PrivacyPage() {
           </div>
 
           <div>
-            <h2 className="text-xl font-semibold text-white mb-3">10. Changes to this policy</h2>
+            <h2 className="text-xl font-semibold text-white mb-3">10. Tutorial Clarity Chrome Extension</h2>
+            <p className="mb-3">
+              Tutorial Clarity also offers a companion Chrome extension. The following applies specifically to the extension:
+            </p>
+            <ul className="list-disc list-inside space-y-2">
+              <li><strong className="text-white">Saving videos</strong> — double-tapping Alt on a YouTube video sends that video&apos;s ID and title to our server so it appears in your Saved Videos list. No account or personal data is attached to this request.</li>
+              <li><strong className="text-white">No tracking</strong> — the extension does not track your browsing activity, collect analytics, or share data with third parties.</li>
+              <li><strong className="text-white">Permissions</strong> — the extension requests access to YouTube pages only, in order to detect the video being watched. It does not access any other websites.</li>
+            </ul>
+          </div>
+
+          <div>
+            <h2 className="text-xl font-semibold text-white mb-3">11. Changes to this policy</h2>
             <p>
               We may update this policy from time to time. We will notify you of significant changes by email
               or by posting a notice on the site. Continued use of Tutorial Clarity after changes take effect

@@ -9,14 +9,13 @@ datasource db {
 }
 
 model User {
-  id                     String                  @id @default(cuid())
-  clerkId                String                  @unique
-  email                  String                  @unique
-  createdAt              DateTime                @default(now())
-  referredByCode         String?
-  subscription           Subscription?
-  usageRecords           UsageRecord[]
-  tcExtensionActivation  TCExtensionActivation?
+  id              String        @id @default(cuid())
+  clerkId         String        @unique
+  email           String        @unique
+  createdAt       DateTime      @default(now())
+  referredByCode  String?
+  subscription    Subscription?
+  usageRecords    UsageRecord[]
 }
 
 model Affiliate {
@@ -99,20 +98,6 @@ model SubTamerLicense {
   status               String    @default("active") // active | canceled
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
-}
-
-// Gates the video-indexing feature ported into TC's own Chrome extension.
-// Only ever issued to users with an active paid Subscription (see
-// app/api/webhooks/stripe/route.ts and app/api/tc-extension/activate/route.ts) —
-// a real SubTamer license key is never accepted here, keeping this firewalled
-// off from ordinary $4.99 SubTamer subscribers.
-model TCExtensionActivation {
-  id            String   @id @default(cuid())
-  userId        String   @unique
-  user          User     @relation(fields: [userId], references: [id])
-  activationKey String   @unique
-  active        Boolean  @default(true)
-  createdAt     DateTime @default(now())
 }
 
 model Library {

@@ -312,29 +312,55 @@ function WatchPageContent() {
     const [isDraggingPopup, setIsDraggingPopup] = useState(false);
     const popupDragStart = useRef<{ mouseX: number; mouseY: number; popupX: number; popupY: number } | null>(null);
     const [userTier] = useState<'free' | 'premium'>('free');
-    const [tcActivationKey, setTcActivationKey] = useState<string | null>(null);
-    const [tcActivationStatus, setTcActivationStatus] = useState<'idle' | 'loading' | 'ready' | 'not_premium' | 'error'>('idle');
+    const [channelInput, setChannelInput] = useState('');
+    const [channelIndexStatus, setChannelIndexStatus] = useState<'idle' | 'loading' | 'ready' | 'not_premium' | 'error'>('idle');
+    const [channelIndexError, setChannelIndexError] = useState<string | null>(null);
+    const [channelVideos, setChannelVideos] = useState<{ id: string; title: string; date: string; thumbnail: string }[]>([]);
+    const [videoSearchQuery, setVideoSearchQuery] = useState('');
+    const [videoSort, setVideoSort] = useState<'alpha' | 'newest' | 'oldest'>('alpha');
 
-    const loadTcActivationKey = async () => {
-        if (tcActivationStatus === 'loading' || tcActivationStatus === 'ready') return;
-        setTcActivationStatus('loading');
+    // Accepts a bare @handle/channel ID, or a full youtube.com URL containing one
+    const parseChannelInput = (input: string): string | null => {
+        const trimmed = input.trim();
+        const handleMatch = trimmed.match(/@([\w.-]+)/);
+        if (handleMatch) return `@${handleMatch[1]}`;
+        const channelMatch = trimmed.match(/\/channel\/([\w-]+)/);
+        if (channelMatch) return channelMatch[1];
+        if (trimmed.startsWith('UC')) return trimmed;
+        return null;
+    };
+
+    const handleIndexChannel = async (sort: 'alpha' | 'newest' | 'oldest' = videoSort) => {
+        const channelId = parseChannelInput(channelInput);
+        if (!channelId) {
+            setChannelIndexStatus('error');
+            setChannelIndexError('Enter a channel handle (e.g. @mkbhd) or paste a channel URL.');
+            return;
+        }
+        setChannelIndexStatus('loading');
         try {
-            const res = await fetch('/api/tc-extension/activate');
-            if (res.status === 403 || res.status === 404) {
-                setTcActivationStatus('not_premium');
+            const res = await fetch(`/api/channel-videos?channelId=${encodeURIComponent(channelId)}&sort=${sort}`);
+            if (res.status === 401 || res.status === 403) {
+                setChannelIndexStatus('not_premium');
                 return;
             }
             const data = await res.json();
-            if (data.activationKey) {
-                setTcActivationKey(data.activationKey);
-                setTcActivationStatus('ready');
-            } else {
-                setTcActivationStatus('error');
+            if (data.error) {
+                setChannelIndexStatus('error');
+                setChannelIndexError(data.error);
+                return;
             }
+            setChannelVideos(data.videos || []);
+            setChannelIndexStatus('ready');
         } catch {
-            setTcActivationStatus('error');
+            setChannelIndexStatus('error');
+            setChannelIndexError('Network error — please try again.');
         }
     };
+
+    const filteredChannelVideos = videoSearchQuery
+        ? channelVideos.filter(v => v.title.toLowerCase().includes(videoSearchQuery.toLowerCase()))
+        : channelVideos;
 
     // ── YouTube iframe mute status (for robust muting during AI audio) ──
     // 'unmuted' = YT audio is playing normally
@@ -3455,7 +3481,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                             {/* 16. VIDEO INDEXING */}
                             <div style={{ borderBottom: '1px solid #374151' }}>
                                 <h3
-                                    onClick={() => { toggleSection('video-indexing'); loadTcActivationKey(); }}
+                                    onClick={() => toggleSection('video-indexing')}
                                     style={{
                                         fontSize: '16px', fontWeight: 'bold', padding: '12px',
                                         cursor: 'pointer', display: 'flex',
@@ -3467,43 +3493,100 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 </h3>
                                 {expandedSections.has('video-indexing') && (
                                     <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
-                                        {tcActivationStatus === 'ready' && tcActivationKey ? (
+                                        <p style={{ color: '#d1d5db', lineHeight: '1.6', marginBottom: '10px' }}>
+                                            Can't find that one video on a channel with thousands of uploads? Enter a channel below to index and search it instantly.
+                                        </p>
+                                        <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+                                            <input
+                                                type="text"
+                                                value={channelInput}
+                                                onChange={(e) => setChannelInput(e.target.value)}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') handleIndexChannel(); }}
+                                                placeholder="@channelhandle or channel URL"
+                                                style={{
+                                                    flex: 1, backgroundColor: '#1f2937', border: '1px solid #374151',
+                                                    borderRadius: '4px', padding: '6px 10px', color: '#fff', fontSize: '12px',
+                                                }}
+                                            />
+                                            <button
+                                                onClick={() => handleIndexChannel()}
+                                                disabled={channelIndexStatus === 'loading'}
+                                                style={{
+                                                    backgroundColor: '#facc15', color: '#111827', border: 'none',
+                                                    borderRadius: '4px', padding: '6px 14px', fontSize: '12px',
+                                                    fontWeight: 'bold', cursor: 'pointer', whiteSpace: 'nowrap',
+                                                }}
+                                            >
+                                                {channelIndexStatus === 'loading' ? 'Indexing...' : 'Index Channel'}
+                                            </button>
+                                        </div>
+
+                                        {channelIndexStatus === 'not_premium' && (
+                                            <p style={{ color: '#9ca3af', lineHeight: '1.6' }}>
+                                                Video indexing is included with any paid Tutorial Clarity plan. <a href="/subscribe" style={{ color: '#facc15' }}>Upgrade to unlock it →</a>
+                                            </p>
+                                        )}
+                                        {channelIndexStatus === 'error' && (
+                                            <p style={{ color: '#f87171', lineHeight: '1.6' }}>{channelIndexError}</p>
+                                        )}
+
+                                        {channelIndexStatus === 'ready' && (
                                             <>
-                                                <p style={{ color: '#d1d5db', lineHeight: '1.6', marginBottom: '10px' }}>
-                                                    Search every video on any channel you follow — right inside the Tutorial Clarity browser extension. Install the extension, go to any YouTube page, click the Tutorial Clarity icon, and paste this key once to activate:
-                                                </p>
-                                                <div style={{
-                                                    display: 'flex', alignItems: 'center', gap: '8px',
-                                                    backgroundColor: '#1f2937', border: '1px solid #374151',
-                                                    borderRadius: '6px', padding: '8px 12px', marginBottom: '10px',
-                                                }}>
-                                                    <code style={{ color: '#facc15', flex: 1, wordBreak: 'break-all', fontSize: '12px' }}>
-                                                        {tcActivationKey}
-                                                    </code>
-                                                    <button
-                                                        onClick={() => navigator.clipboard.writeText(tcActivationKey)}
+                                                <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', alignItems: 'center' }}>
+                                                    <input
+                                                        type="text"
+                                                        value={videoSearchQuery}
+                                                        onChange={(e) => setVideoSearchQuery(e.target.value)}
+                                                        placeholder="Search videos by title..."
                                                         style={{
-                                                            backgroundColor: '#374151', color: '#d1d5db', border: 'none',
-                                                            borderRadius: '4px', padding: '4px 10px', fontSize: '11px', cursor: 'pointer',
+                                                            flex: 1, backgroundColor: '#1f2937', border: '1px solid #374151',
+                                                            borderRadius: '4px', padding: '6px 10px', color: '#fff', fontSize: '12px',
                                                         }}
-                                                    >
-                                                        Copy
-                                                    </button>
+                                                    />
+                                                    {(['alpha', 'newest', 'oldest'] as const).map(s => (
+                                                        <button
+                                                            key={s}
+                                                            onClick={() => { setVideoSort(s); handleIndexChannel(s); }}
+                                                            style={{
+                                                                backgroundColor: videoSort === s ? '#facc15' : '#374151',
+                                                                color: videoSort === s ? '#111827' : '#d1d5db',
+                                                                border: 'none', borderRadius: '4px', padding: '5px 8px',
+                                                                fontSize: '11px', cursor: 'pointer', fontWeight: videoSort === s ? 'bold' : 'normal',
+                                                            }}
+                                                        >
+                                                            {s === 'alpha' ? 'A–Z' : s === 'newest' ? 'Newest' : 'Oldest'}
+                                                        </button>
+                                                    ))}
                                                 </div>
-                                                <p style={{ color: '#9ca3af', lineHeight: '1.6' }}>
-                                                    Don't have the extension yet? Load it unpacked from your Tutorial Clarity install folder's <code>extension</code> subfolder via <code>chrome://extensions</code> (Developer mode → Load unpacked).
+                                                <p style={{ color: '#6b7280', marginBottom: '6px' }}>
+                                                    {videoSearchQuery
+                                                        ? `${filteredChannelVideos.length} of ${channelVideos.length} videos`
+                                                        : `${channelVideos.length} videos`}
                                                 </p>
+                                                <div style={{ maxHeight: '320px', overflowY: 'auto' }}>
+                                                    {filteredChannelVideos.map(v => (
+                                                        <a
+                                                            key={v.id}
+                                                            href={`https://www.youtube.com/watch?v=${v.id}`}
+                                                            target="_blank"
+                                                            rel="noopener noreferrer"
+                                                            style={{
+                                                                display: 'flex', gap: '8px', alignItems: 'center',
+                                                                padding: '6px 4px', textDecoration: 'none',
+                                                                borderBottom: '1px solid #1f2937',
+                                                            }}
+                                                        >
+                                                            {v.thumbnail && (
+                                                                <img src={v.thumbnail} alt="" style={{ width: '56px', height: '36px', objectFit: 'cover', borderRadius: '3px', flexShrink: 0 }} />
+                                                            )}
+                                                            <div style={{ minWidth: 0 }}>
+                                                                <div style={{ color: '#e5e7eb', fontSize: '12px', whiteSpace: 'nowrap', overflow: 'hidden', textOverflow: 'ellipsis' }}>{v.title}</div>
+                                                                <div style={{ color: '#6b7280', fontSize: '11px' }}>{new Date(v.date).toLocaleDateString()}</div>
+                                                            </div>
+                                                        </a>
+                                                    ))}
+                                                </div>
                                             </>
-                                        ) : tcActivationStatus === 'not_premium' ? (
-                                            <p style={{ color: '#9ca3af', lineHeight: '1.6' }}>
-                                                Video indexing — search every video on any channel you follow — is included with any paid Tutorial Clarity plan. <a href="/subscribe" style={{ color: '#facc15' }}>Upgrade to unlock it →</a>
-                                            </p>
-                                        ) : tcActivationStatus === 'loading' ? (
-                                            <p style={{ color: '#9ca3af' }}>Loading...</p>
-                                        ) : (
-                                            <p style={{ color: '#9ca3af', lineHeight: '1.6' }}>
-                                                Video indexing — search every video on any channel you follow, right inside the browser. Included with any paid Tutorial Clarity plan.
-                                            </p>
                                         )}
                                     </div>
                                 )}
