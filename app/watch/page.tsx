@@ -3054,11 +3054,15 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         alignItems: 'center'
                                     }}
                                 >
-                                    <span>8. CLARIFY AUDIO 🔊</span>
+                                    <span>8. CLARIFY AUDIO & TRANSLATION 🔊🌐</span>
                                     <span>{expandedSections.has('clarify') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('clarify') && (
                                     <div style={{ padding: '0', backgroundColor: '#111827' }}>
+
+                                        <p style={{ margin: '10px 8px', fontSize: '11px', color: '#9ca3af', lineHeight: '1.6' }}>
+                                            Clearer speech, and translation into 12 languages (subtitles or full AI voice) — pick your language in Processing Options below.
+                                        </p>
 
                                         {/* ─── STEP 1: DETECT SPEAKERS ─── */}
                                         <div style={{ margin: '10px 8px' }}>
