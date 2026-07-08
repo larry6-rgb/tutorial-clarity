@@ -67,6 +67,52 @@ function WatchPageContent() {
     const [libraryStatus, setLibraryStatus] = useState('');
     const [expandedLibraries, setExpandedLibraries] = useState<Set<string>>(new Set());
 
+    // ── BOOKMARKS ──
+    const BOOKMARKS_KEY = 'tc_bookmarks';
+    interface Bookmark {
+        id: string;
+        videoId: string;
+        time: number;
+        label: string;
+        createdAt: number;
+    }
+    const [bookmarks, setBookmarks] = useState<Bookmark[]>(() => {
+        try {
+            const saved = localStorage.getItem(BOOKMARKS_KEY);
+            return saved ? JSON.parse(saved) : [];
+        } catch { return []; }
+    });
+    const [bookmarkLabel, setBookmarkLabel] = useState('');
+
+    const saveBookmarks = (updated: Bookmark[]) => {
+        setBookmarks(updated);
+        try { localStorage.setItem(BOOKMARKS_KEY, JSON.stringify(updated)); } catch {}
+    };
+
+    const handleAddBookmark = () => {
+        if (!videoId) return;
+        const time = currentTimeRef.current;
+        const label = bookmarkLabel.trim() || `${Math.floor(time / 60)}:${String(Math.floor(time % 60)).padStart(2, '0')}`;
+        const bookmark: Bookmark = { id: `bm_${Date.now()}`, videoId, time, label, createdAt: Date.now() };
+        saveBookmarks([...bookmarks, bookmark].sort((a, b) => a.time - b.time));
+        setBookmarkLabel('');
+    };
+
+    const handleDeleteBookmark = (id: string) => {
+        saveBookmarks(bookmarks.filter(b => b.id !== id));
+    };
+
+    const handleJumpToBookmark = (time: number) => {
+        if (iframeRef.current?.contentWindow) {
+            iframeRef.current.contentWindow.postMessage(
+                JSON.stringify({ event: 'command', func: 'seekTo', args: [time, true] }),
+                '*'
+            );
+        }
+    };
+
+    const videoBookmarks = bookmarks.filter(b => b.videoId === videoId);
+
     // ── RESUME PREVIOUS VIDEO ──
     const RESUME_KEY = 'tc_resume_sessions';
     interface ResumeSession {
@@ -3704,6 +3750,119 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                 {qaLoading ? 'Thinking...' : 'Ask'}
                                             </button>
                                         </div>
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 18. BOOKMARKS */}
+                            <div style={{ borderBottom: '1px solid #374151' }}>
+                                <h3
+                                    onClick={() => toggleSection('bookmarks')}
+                                    style={{
+                                        fontSize: '16px', fontWeight: 'bold', padding: '12px',
+                                        cursor: 'pointer', display: 'flex',
+                                        justifyContent: 'space-between', alignItems: 'center',
+                                    }}
+                                >
+                                    <span>18. BOOKMARKS</span>
+                                    <span>{expandedSections.has('bookmarks') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('bookmarks') && (
+                                    <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
+                                        <p style={{ color: '#d1d5db', lineHeight: '1.6', marginBottom: '10px' }}>
+                                            Mark moments in this video to jump back to later. Saved on this device.
+                                        </p>
+
+                                        {duration > 0 && (
+                                            <div
+                                                style={{
+                                                    position: 'relative', height: '10px', backgroundColor: '#1f2937',
+                                                    borderRadius: '5px', marginBottom: '12px', cursor: 'pointer',
+                                                }}
+                                                title="Video timeline"
+                                            >
+                                                <div style={{
+                                                    position: 'absolute', top: 0, left: 0, height: '100%',
+                                                    width: `${Math.min(100, (currentTime / duration) * 100)}%`,
+                                                    backgroundColor: '#374151', borderRadius: '5px',
+                                                }} />
+                                                {videoBookmarks.map(b => (
+                                                    <div
+                                                        key={b.id}
+                                                        onClick={() => handleJumpToBookmark(b.time)}
+                                                        title={b.label}
+                                                        style={{
+                                                            position: 'absolute', top: '-3px',
+                                                            left: `${Math.min(100, (b.time / duration) * 100)}%`,
+                                                            width: '4px', height: '16px', backgroundColor: '#facc15',
+                                                            borderRadius: '2px', cursor: 'pointer', transform: 'translateX(-2px)',
+                                                        }}
+                                                    />
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
+                                            <input
+                                                type="text"
+                                                value={bookmarkLabel}
+                                                onChange={(e) => setBookmarkLabel(e.target.value)}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') handleAddBookmark(); }}
+                                                placeholder="Label (optional)"
+                                                style={{
+                                                    flex: 1, backgroundColor: '#1f2937', border: '1px solid #374151',
+                                                    borderRadius: '4px', padding: '6px 10px', color: '#fff', fontSize: '12px',
+                                                }}
+                                            />
+                                            <button
+                                                onClick={handleAddBookmark}
+                                                style={{
+                                                    backgroundColor: '#facc15', color: '#111827', border: 'none',
+                                                    borderRadius: '4px', padding: '6px 14px', fontSize: '12px',
+                                                    fontWeight: 'bold', cursor: 'pointer', whiteSpace: 'nowrap',
+                                                }}
+                                            >
+                                                + Add at {Math.floor(currentTime / 60)}:{String(Math.floor(currentTime % 60)).padStart(2, '0')}
+                                            </button>
+                                        </div>
+
+                                        {videoBookmarks.length === 0 ? (
+                                            <p style={{ color: '#6b7280' }}>No bookmarks yet for this video.</p>
+                                        ) : (
+                                            <div style={{ maxHeight: '240px', overflowY: 'auto' }}>
+                                                {videoBookmarks.map(b => (
+                                                    <div
+                                                        key={b.id}
+                                                        style={{
+                                                            display: 'flex', alignItems: 'center', gap: '8px',
+                                                            padding: '6px 4px', borderBottom: '1px solid #1f2937',
+                                                        }}
+                                                    >
+                                                        <span
+                                                            onClick={() => handleJumpToBookmark(b.time)}
+                                                            style={{ color: '#facc15', fontSize: '11px', cursor: 'pointer', flexShrink: 0 }}
+                                                        >
+                                                            {Math.floor(b.time / 60)}:{String(Math.floor(b.time % 60)).padStart(2, '0')}
+                                                        </span>
+                                                        <span
+                                                            onClick={() => handleJumpToBookmark(b.time)}
+                                                            style={{ color: '#e5e7eb', flex: 1, cursor: 'pointer', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap' }}
+                                                        >
+                                                            {b.label}
+                                                        </span>
+                                                        <button
+                                                            onClick={() => handleDeleteBookmark(b.id)}
+                                                            style={{
+                                                                background: 'transparent', border: 'none', color: '#6b7280',
+                                                                cursor: 'pointer', fontSize: '12px', padding: '2px 6px',
+                                                            }}
+                                                        >
+                                                            ✕
+                                                        </button>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
                                     </div>
                                 )}
                             </div>
