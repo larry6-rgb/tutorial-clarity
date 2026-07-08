@@ -362,6 +362,55 @@ function WatchPageContent() {
         ? channelVideos.filter(v => v.title.toLowerCase().includes(videoSearchQuery.toLowerCase()))
         : channelVideos;
 
+    const [qaHistory, setQaHistory] = useState<{ question: string; answer: string }[]>([]);
+    const [qaQuestion, setQaQuestion] = useState('');
+    const [qaLoading, setQaLoading] = useState(false);
+    const [qaError, setQaError] = useState<string | null>(null);
+    const [qaNotPremium, setQaNotPremium] = useState(false);
+
+    const handleAskVideo = async () => {
+        const question = qaQuestion.trim();
+        if (!question || qaLoading || !videoId) return;
+        setQaLoading(true);
+        setQaError(null);
+        setQaNotPremium(false);
+
+        // Fire-and-forget session usage annotation, same pattern ClarifyAudioPanel uses
+        fetch('/api/sessions', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ feature: 'ai_qa', videoId }),
+        }).catch(() => {});
+
+        try {
+            const res = await fetch('/api/ask-video', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    videoId,
+                    title: document.title,
+                    question,
+                    history: qaHistory.slice(-4),
+                }),
+            });
+            if (res.status === 401 || res.status === 403) {
+                setQaNotPremium(true);
+                return;
+            }
+            const data = await res.json();
+            if (data.error) {
+                setQaError(data.error);
+                return;
+            }
+            setQaHistory(prev => [...prev, { question, answer: data.answer }]);
+            setQaQuestion('');
+        } catch {
+            setQaError('Network error — please try again.');
+        } finally {
+            setQaLoading(false);
+        }
+    };
+
     // ── YouTube iframe mute status (for robust muting during AI audio) ──
     // 'unmuted' = YT audio is playing normally
     // 'muting' = Mute command sent, waiting for verification
@@ -3588,6 +3637,73 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                 </div>
                                             </>
                                         )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 17. AI Q&A ASSISTANT */}
+                            <div style={{ borderBottom: '1px solid #374151' }}>
+                                <h3
+                                    onClick={() => toggleSection('qa')}
+                                    style={{
+                                        fontSize: '16px', fontWeight: 'bold', padding: '12px',
+                                        cursor: 'pointer', display: 'flex',
+                                        justifyContent: 'space-between', alignItems: 'center',
+                                    }}
+                                >
+                                    <span>17. AI Q&A ASSISTANT</span>
+                                    <span>{expandedSections.has('qa') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('qa') && (
+                                    <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
+                                        <p style={{ color: '#d1d5db', lineHeight: '1.6', marginBottom: '10px' }}>
+                                            Ask a question about this video and get an answer grounded in what's actually said in it.
+                                        </p>
+
+                                        {qaNotPremium && (
+                                            <p style={{ color: '#9ca3af', lineHeight: '1.6', marginBottom: '10px' }}>
+                                                AI Q&A is included with any paid Tutorial Clarity plan. <a href="/subscribe" style={{ color: '#facc15' }}>Upgrade to unlock it →</a>
+                                            </p>
+                                        )}
+                                        {qaError && (
+                                            <p style={{ color: '#f87171', lineHeight: '1.6', marginBottom: '10px' }}>{qaError}</p>
+                                        )}
+
+                                        {qaHistory.length > 0 && (
+                                            <div style={{ maxHeight: '320px', overflowY: 'auto', marginBottom: '10px' }}>
+                                                {qaHistory.map((pair, i) => (
+                                                    <div key={i} style={{ marginBottom: '12px' }}>
+                                                        <div style={{ color: '#facc15', fontWeight: 'bold', marginBottom: '4px' }}>Q: {pair.question}</div>
+                                                        <div style={{ color: '#d1d5db', lineHeight: '1.6' }}>{pair.answer}</div>
+                                                    </div>
+                                                ))}
+                                            </div>
+                                        )}
+
+                                        <div style={{ display: 'flex', gap: '6px' }}>
+                                            <input
+                                                type="text"
+                                                value={qaQuestion}
+                                                onChange={(e) => setQaQuestion(e.target.value)}
+                                                onKeyDown={(e) => { if (e.key === 'Enter') handleAskVideo(); }}
+                                                placeholder="Ask a question about this video..."
+                                                style={{
+                                                    flex: 1, backgroundColor: '#1f2937', border: '1px solid #374151',
+                                                    borderRadius: '4px', padding: '6px 10px', color: '#fff', fontSize: '12px',
+                                                }}
+                                            />
+                                            <button
+                                                onClick={handleAskVideo}
+                                                disabled={qaLoading}
+                                                style={{
+                                                    backgroundColor: '#facc15', color: '#111827', border: 'none',
+                                                    borderRadius: '4px', padding: '6px 14px', fontSize: '12px',
+                                                    fontWeight: 'bold', cursor: 'pointer', whiteSpace: 'nowrap',
+                                                }}
+                                            >
+                                                {qaLoading ? 'Thinking...' : 'Ask'}
+                                            </button>
+                                        </div>
                                     </div>
                                 )}
                             </div>
