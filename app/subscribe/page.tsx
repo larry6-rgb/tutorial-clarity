@@ -11,6 +11,8 @@ const OVERAGE_PRICE_ID = 'price_1Tf0wr3eI6L9ZOHZ2Dx9b0FN';
 
 export default function SubscribePage() {
   const [loading, setLoading] = useState<string | null>(null);
+  const [subtamerKey, setSubtamerKey] = useState('');
+  const [keyStatus, setKeyStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
   const router = useRouter();
 
   const handleCheckout = async (priceId: string, plan: string, mode: 'subscription' | 'payment' = 'subscription') => {
@@ -27,6 +29,44 @@ export default function SubscribePage() {
       }
     } catch (error) {
       console.error('Checkout error:', error);
+      setLoading(null);
+    }
+  };
+
+  const handleValidateKey = async () => {
+    if (!subtamerKey.trim()) return;
+    setKeyStatus('checking');
+    try {
+      const res = await fetch('/api/subtamer-key/check', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subtamerKey: subtamerKey.trim() }),
+      });
+      const data = await res.json();
+      setKeyStatus(data.active ? 'valid' : 'invalid');
+    } catch (error) {
+      console.error('Key validation error:', error);
+      setKeyStatus('invalid');
+    }
+  };
+
+  const handleBundleCheckout = async () => {
+    setLoading('bundle');
+    try {
+      const res = await fetch('/api/stripe-checkout-bundle', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ subtamerKey: subtamerKey.trim() }),
+      });
+      const data = await res.json();
+      if (data.url) {
+        window.location.href = data.url;
+      } else {
+        setKeyStatus('invalid');
+        setLoading(null);
+      }
+    } catch (error) {
+      console.error('Bundle checkout error:', error);
       setLoading(null);
     }
   };
@@ -111,6 +151,42 @@ export default function SubscribePage() {
         <p className="text-center text-gray-500 text-sm mt-8">
           You won't be charged until your 14-day trial ends. Cancel anytime.
         </p>
+
+        {/* SubTamer Bundle Discount */}
+        <div className="mt-16 border-t border-gray-800 pt-14">
+          <h2 className="text-2xl font-bold text-center mb-2">Already a SubTamer subscriber?</h2>
+          <p className="text-gray-400 text-center mb-10 max-w-2xl mx-auto">
+            You're paying $4.99/mo for SubTamer — enter your SubTamer key and get Tutorial Clarity for just
+            <strong className="text-white"> $8/mo more</strong> instead of the full $12.99. You'll also unlock
+            video indexing inside Tutorial Clarity's own extension.
+          </p>
+          <div className="max-w-sm mx-auto bg-gray-900 border border-gray-700 rounded-2xl p-8">
+            <div className="text-4xl font-bold mb-1">$8<span className="text-lg text-gray-400">/mo</span></div>
+            <div className="text-gray-400 mb-6">for existing SubTamer subscribers</div>
+            <input
+              type="text"
+              value={subtamerKey}
+              onChange={(e) => { setSubtamerKey(e.target.value); setKeyStatus('idle'); }}
+              onBlur={handleValidateKey}
+              placeholder="Your SubTamer key"
+              className="w-full bg-gray-800 border border-gray-600 rounded-xl px-4 py-3 text-white mb-2 focus:outline-none focus:border-blue-500"
+            />
+            {keyStatus === 'checking' && <p className="text-gray-500 text-sm mb-4">Checking...</p>}
+            {keyStatus === 'valid' && <p className="text-green-400 text-sm mb-4">✓ Key active</p>}
+            {keyStatus === 'invalid' && <p className="text-red-400 text-sm mb-4">Key not found or inactive.</p>}
+            {keyStatus === 'idle' && <div className="mb-4" />}
+            <button
+              onClick={handleBundleCheckout}
+              disabled={loading !== null || keyStatus !== 'valid'}
+              className="w-full bg-purple-600 hover:bg-purple-500 disabled:opacity-50 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
+            >
+              {loading === 'bundle' ? 'Redirecting...' : 'Upgrade for $8/mo'}
+            </button>
+            <p className="text-center text-gray-600 text-xs mt-3">
+              If you later cancel SubTamer, your Tutorial Clarity price returns to $12.99/mo — we'll email you before that happens.
+            </p>
+          </div>
+        </div>
 
         {/* Overage Pack */}
         <div className="mt-16 border-t border-gray-800 pt-14">

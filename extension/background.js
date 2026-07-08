@@ -3,8 +3,17 @@ console.log('Tutorial Clarity background script loaded');
 
 const TC_BASE = 'https://tutorial-clarity-production.up.railway.app';
 
-// Listen for extension icon clicks
-chrome.action.onClicked.addListener((tab) => {
+// Listen for extension icon clicks — on a YouTube tab, toggle the video
+// indexing overlay (index-overlay.js); everywhere else, open/focus the TC web app.
+chrome.action.onClicked.addListener(async (tab) => {
+  if (tab.url && tab.url.includes('youtube.com')) {
+    try {
+      await chrome.tabs.sendMessage(tab.id, { type: 'TOGGLE_INDEX_OVERLAY' });
+      return;
+    } catch (e) {
+      console.warn('Tutorial Clarity: could not reach content script for overlay toggle', e);
+    }
+  }
   chrome.tabs.create({ url: TC_BASE });
 });
 

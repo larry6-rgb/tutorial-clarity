@@ -312,6 +312,29 @@ function WatchPageContent() {
     const [isDraggingPopup, setIsDraggingPopup] = useState(false);
     const popupDragStart = useRef<{ mouseX: number; mouseY: number; popupX: number; popupY: number } | null>(null);
     const [userTier] = useState<'free' | 'premium'>('free');
+    const [tcActivationKey, setTcActivationKey] = useState<string | null>(null);
+    const [tcActivationStatus, setTcActivationStatus] = useState<'idle' | 'loading' | 'ready' | 'not_premium' | 'error'>('idle');
+
+    const loadTcActivationKey = async () => {
+        if (tcActivationStatus === 'loading' || tcActivationStatus === 'ready') return;
+        setTcActivationStatus('loading');
+        try {
+            const res = await fetch('/api/tc-extension/activate');
+            if (res.status === 403 || res.status === 404) {
+                setTcActivationStatus('not_premium');
+                return;
+            }
+            const data = await res.json();
+            if (data.activationKey) {
+                setTcActivationKey(data.activationKey);
+                setTcActivationStatus('ready');
+            } else {
+                setTcActivationStatus('error');
+            }
+        } catch {
+            setTcActivationStatus('error');
+        }
+    };
 
     // ── YouTube iframe mute status (for robust muting during AI audio) ──
     // 'unmuted' = YT audio is playing normally
@@ -3423,6 +3446,63 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         ) : (
                                             <p style={{ color: '#9ca3af', lineHeight: '1.6' }}>
                                                 Coming soon — a step-by-step video guide to using all of Tutorial Clarity's features.
+                                            </p>
+                                        )}
+                                    </div>
+                                )}
+                            </div>
+
+                            {/* 16. VIDEO INDEXING */}
+                            <div style={{ borderBottom: '1px solid #374151' }}>
+                                <h3
+                                    onClick={() => { toggleSection('video-indexing'); loadTcActivationKey(); }}
+                                    style={{
+                                        fontSize: '16px', fontWeight: 'bold', padding: '12px',
+                                        cursor: 'pointer', display: 'flex',
+                                        justifyContent: 'space-between', alignItems: 'center',
+                                    }}
+                                >
+                                    <span>16. VIDEO INDEXING</span>
+                                    <span>{expandedSections.has('video-indexing') ? '▼' : '▶'}</span>
+                                </h3>
+                                {expandedSections.has('video-indexing') && (
+                                    <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
+                                        {tcActivationStatus === 'ready' && tcActivationKey ? (
+                                            <>
+                                                <p style={{ color: '#d1d5db', lineHeight: '1.6', marginBottom: '10px' }}>
+                                                    Search every video on any channel you follow — right inside the Tutorial Clarity browser extension. Install the extension, go to any YouTube page, click the Tutorial Clarity icon, and paste this key once to activate:
+                                                </p>
+                                                <div style={{
+                                                    display: 'flex', alignItems: 'center', gap: '8px',
+                                                    backgroundColor: '#1f2937', border: '1px solid #374151',
+                                                    borderRadius: '6px', padding: '8px 12px', marginBottom: '10px',
+                                                }}>
+                                                    <code style={{ color: '#facc15', flex: 1, wordBreak: 'break-all', fontSize: '12px' }}>
+                                                        {tcActivationKey}
+                                                    </code>
+                                                    <button
+                                                        onClick={() => navigator.clipboard.writeText(tcActivationKey)}
+                                                        style={{
+                                                            backgroundColor: '#374151', color: '#d1d5db', border: 'none',
+                                                            borderRadius: '4px', padding: '4px 10px', fontSize: '11px', cursor: 'pointer',
+                                                        }}
+                                                    >
+                                                        Copy
+                                                    </button>
+                                                </div>
+                                                <p style={{ color: '#9ca3af', lineHeight: '1.6' }}>
+                                                    Don't have the extension yet? Load it unpacked from your Tutorial Clarity install folder's <code>extension</code> subfolder via <code>chrome://extensions</code> (Developer mode → Load unpacked).
+                                                </p>
+                                            </>
+                                        ) : tcActivationStatus === 'not_premium' ? (
+                                            <p style={{ color: '#9ca3af', lineHeight: '1.6' }}>
+                                                Video indexing — search every video on any channel you follow — is included with any paid Tutorial Clarity plan. <a href="/subscribe" style={{ color: '#facc15' }}>Upgrade to unlock it →</a>
+                                            </p>
+                                        ) : tcActivationStatus === 'loading' ? (
+                                            <p style={{ color: '#9ca3af' }}>Loading...</p>
+                                        ) : (
+                                            <p style={{ color: '#9ca3af', lineHeight: '1.6' }}>
+                                                Video indexing — search every video on any channel you follow, right inside the browser. Included with any paid Tutorial Clarity plan.
                                             </p>
                                         )}
                                     </div>

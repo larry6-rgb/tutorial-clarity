@@ -9,13 +9,14 @@ datasource db {
 }
 
 model User {
-  id              String        @id @default(cuid())
-  clerkId         String        @unique
-  email           String        @unique
-  createdAt       DateTime      @default(now())
-  referredByCode  String?
-  subscription    Subscription?
-  usageRecords    UsageRecord[]
+  id                     String                  @id @default(cuid())
+  clerkId                String                  @unique
+  email                  String                  @unique
+  createdAt              DateTime                @default(now())
+  referredByCode         String?
+  subscription           Subscription?
+  usageRecords           UsageRecord[]
+  tcExtensionActivation  TCExtensionActivation?
 }
 
 model Affiliate {
@@ -52,13 +53,14 @@ model Subscription {
   user                 User      @relation(fields: [userId], references: [id])
   stripeCustomerId     String?   @unique
   stripeSubscriptionId String?   @unique
-  plan                 String    @default("trial") // trial | monthly | annual | free
+  plan                 String    @default("trial") // trial | monthly | annual | free | bundle
   status               String    @default("active") // active | canceled | past_due
   trialEndsAt          DateTime?
   currentPeriodEnd     DateTime?
   sessionsUsed         Int       @default(0)
   bonusSessions        Int       @default(0)
   sessionsResetAt      DateTime?
+  subtamerKeyUsed      String?   // SubTamer license key validated at bundle signup; rechecked by cron/bundle-recheck
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
 }
@@ -97,6 +99,20 @@ model SubTamerLicense {
   status               String    @default("active") // active | canceled
   createdAt            DateTime  @default(now())
   updatedAt            DateTime  @updatedAt
+}
+
+// Gates the video-indexing feature ported into TC's own Chrome extension.
+// Only ever issued to users with an active paid Subscription (see
+// app/api/webhooks/stripe/route.ts and app/api/tc-extension/activate/route.ts) —
+// a real SubTamer license key is never accepted here, keeping this firewalled
+// off from ordinary $4.99 SubTamer subscribers.
+model TCExtensionActivation {
+  id            String   @id @default(cuid())
+  userId        String   @unique
+  user          User     @relation(fields: [userId], references: [id])
+  activationKey String   @unique
+  active        Boolean  @default(true)
+  createdAt     DateTime @default(now())
 }
 
 model Library {
