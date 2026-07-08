@@ -21,7 +21,7 @@ export async function POST(req: Request) {
       cancel_url: `${process.env.NEXT_PUBLIC_APP_URL}/subtamer-cancel`,
       metadata: { subtamer: 'true', email },
       subscription_data: { metadata: { subtamer: 'true', email } },
-      // automatic_tax disabled until TX Sales and Use Tax permit is active
+      automatic_tax: { enabled: true },
       billing_address_collection: 'required',
     });
 

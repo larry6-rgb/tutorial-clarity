@@ -3390,7 +3390,18 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         justifyContent: 'space-between', alignItems: 'center',
                                     }}
                                 >
-                                    <span>15. TUTORIAL</span>
+                                    <span>
+                                        15. TUTORIAL
+                                        {!TUTORIAL_VIDEO_ID && (
+                                            <span style={{
+                                                marginLeft: '8px', fontSize: '11px', fontWeight: 'normal',
+                                                color: '#9ca3af', backgroundColor: '#374151',
+                                                padding: '2px 8px', borderRadius: '10px',
+                                            }}>
+                                                Coming Soon
+                                            </span>
+                                        )}
+                                    </span>
                                     <span>{expandedSections.has('tutorial') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('tutorial') && (
