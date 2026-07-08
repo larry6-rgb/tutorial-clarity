@@ -101,28 +101,22 @@ function detectSpeakerGenders(
     }
   }
 
-  // Step 2: assign genders
-  // If multiple speakers detected: use relative ranking — lower F0 = male, higher F0 = female.
-  // This is more robust than an absolute threshold because male/female voices are reliably
-  // distinguishable relative to each other even when absolute pitch varies by person/language.
+  // Step 2: assign genders using an absolute pitch threshold, always — not a
+  // relative ranking within this video's speakers. A relative split (lower
+  // half = male, upper half = female) silently mislabels same-gender groups:
+  // two male speakers at 110Hz/130Hz are both clearly male in absolute terms,
+  // but a relative split would still force the higher-pitched one to
+  // "female" just because it's higher than the other speaker in THIS video.
+  // 170Hz is the standard rough dividing line between adult male and female
+  // fundamental frequency ranges.
+  // f0 <= 0 means pitch analysis failed for that speaker (silence, noise, too
+  // short a sample) — there's no real signal either way, so it falls to
+  // 'female' here only because that's what the condition evaluates to by
+  // default; it's an arbitrary tie-break, not a meaningful guess.
   const genderMap: Record<string, 'male' | 'female'> = {};
-  const validResults = f0Results.filter(r => r.f0 > 0);
-
-  if (validResults.length >= 2) {
-    // Sort ascending by F0 — lower half = male, upper half = female
-    const sorted = [...validResults].sort((a, b) => a.f0 - b.f0);
-    const midpoint = Math.floor(sorted.length / 2);
-    sorted.forEach((r, i) => {
-      genderMap[r.speaker] = i < midpoint ? 'male' : 'female';
-    });
-    // Speakers with failed F0 detection: default to male
-    f0Results.filter(r => r.f0 === 0).forEach(r => { genderMap[r.speaker] = 'male'; });
-  } else {
-    // Single speaker or all failed: use absolute threshold
-    f0Results.forEach(r => {
-      genderMap[r.speaker] = (r.f0 > 0 && r.f0 < 170) ? 'male' : 'female';
-    });
-  }
+  f0Results.forEach(r => {
+    genderMap[r.speaker] = (r.f0 > 0 && r.f0 < 170) ? 'male' : 'female';
+  });
 
   console.log('[Gender] Final assignments:', Object.entries(genderMap).map(([s, g]) => `${s}=${g}`).join(', '));
   return genderMap;
