@@ -10,6 +10,9 @@ const resend = new Resend(process.env.RESEND_API_KEY);
 // confirmed (see mycpa.cpa.state.tx.us or the letter itself).
 export async function POST(req: Request) {
   const authHeader = req.headers.get('authorization');
+  // TEMP DEBUG (2026-07-14) — remove once the Railway CRON_SECRET mismatch is
+  // diagnosed. Logs lengths only, never the actual secret values.
+  console.log(`[cron/tax-reminder] DEBUG: received header length=${authHeader?.length ?? 'null'}, expected secret length=${process.env.CRON_SECRET?.length ?? 'undefined'}, secretSet=${process.env.CRON_SECRET !== undefined}`);
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
