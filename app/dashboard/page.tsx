@@ -13,6 +13,26 @@ export default function DashboardPage() {
   const percentUsed = Math.min((sessionsUsed / totalAvailable) * 100, 100);
   const planName = 'Free Trial';
   const daysLeft = 14;
+  const [manageStatus, setManageStatus] = useState<'idle' | 'loading' | 'error'>('idle');
+  const [manageError, setManageError] = useState('');
+
+  async function handleManageSubscription() {
+    setManageStatus('loading');
+    setManageError('');
+    try {
+      const res = await fetch('/api/subscription-portal', { method: 'POST' });
+      const data = await res.json();
+      if (!res.ok) {
+        setManageStatus('error');
+        setManageError(data.error || 'Something went wrong. Please try again.');
+        return;
+      }
+      window.location.href = data.url;
+    } catch {
+      setManageStatus('error');
+      setManageError('Something went wrong. Please try again.');
+    }
+  }
 
   useEffect(() => {
     fetch('/api/sessions')
@@ -65,12 +85,24 @@ export default function DashboardPage() {
             <div className="text-sm text-gray-400 mb-1">Current Plan</div>
             <div className="text-2xl font-bold mb-1">{planName}</div>
             <div className="text-blue-400 text-sm">{daysLeft} days remaining in trial</div>
-            <Link
-              href="/subscribe"
-              className="inline-block mt-4 bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
-            >
-              Upgrade to Premium
-            </Link>
+            <div className="flex flex-wrap items-center gap-3 mt-4">
+              <Link
+                href="/subscribe"
+                className="inline-block bg-blue-600 hover:bg-blue-700 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors"
+              >
+                Upgrade to Premium
+              </Link>
+              <button
+                onClick={handleManageSubscription}
+                disabled={manageStatus === 'loading'}
+                className="inline-block bg-gray-700 hover:bg-gray-600 text-white px-4 py-2 rounded-lg text-sm font-semibold transition-colors disabled:opacity-50"
+              >
+                {manageStatus === 'loading' ? 'Loading…' : 'Manage Subscription'}
+              </button>
+            </div>
+            {manageStatus === 'error' && (
+              <div className="text-red-400 text-sm mt-2">{manageError}</div>
+            )}
           </div>
 
           {/* Usage card */}
