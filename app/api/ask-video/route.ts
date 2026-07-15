@@ -68,7 +68,9 @@ export async function POST(request: NextRequest) {
                         content:
                             `You are a helpful assistant answering questions about ${videoLabel}, a YouTube video, based only on its transcript below. ` +
                             'Answer using only what is actually said in the transcript. If the transcript does not cover what the viewer is asking about, ' +
-                            'say clearly that the video does not appear to cover that, rather than guessing or using outside knowledge. ' +
+                            'say clearly that the video does not appear to cover that, rather than guessing or using outside knowledge, then end your ' +
+                            'reply on its own new line with exactly: "Since that information is not included in this video, check Wikipedia for more information." ' +
+                            'Only add that line when the transcript truly does not cover the question — never when you were able to answer from it. ' +
                             'Keep answers concise and conversational.\n\n' +
                             `TRANSCRIPT:\n${capped}`,
                     },

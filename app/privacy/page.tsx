@@ -126,7 +126,7 @@ export default function PrivacyPage() {
               Tutorial Clarity also offers a companion Chrome extension. The following applies specifically to the extension:
             </p>
             <ul className="list-disc list-inside space-y-2">
-              <li><strong className="text-white">Saving videos</strong> — double-tapping Alt on a YouTube video sends that video&apos;s ID and title to our server so it appears in your Saved Videos list. No account or personal data is attached to this request.</li>
+              <li><strong className="text-white">Saving videos</strong> — double-tapping Caps Lock on a YouTube video sends that video&apos;s ID and title to our server so it appears in your Saved Videos list. No account or personal data is attached to this request.</li>
               <li><strong className="text-white">No tracking</strong> — the extension does not track your browsing activity, collect analytics, or share data with third parties.</li>
               <li><strong className="text-white">Permissions</strong> — the extension requests access to YouTube pages only, in order to detect the video being watched. It does not access any other websites.</li>
             </ul>

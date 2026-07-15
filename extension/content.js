@@ -1,8 +1,19 @@
 // Tutorial Clarity - YouTube Extension
 console.log('Tutorial Clarity extension loaded');
 
-let altPressCount = 0;
-let altPressTimer = null;
+// TEMP DEBUG — logs every key press/release so we can see whether ANY keydown reaches the page,
+// whether Alt specifically is being swallowed, and whether it's cleanly releasing between taps.
+// Remove once diagnosed.
+document.addEventListener('keydown', (e) => {
+  console.log('[TC DEBUG] KEYDOWN:', e.key, '| repeat:', e.repeat);
+}, true);
+document.addEventListener('keyup', (e) => {
+  console.log('[TC DEBUG] KEYUP:', e.key);
+}, true);
+
+let capsPressCount = 0;
+let capsPressTimer = null;
+let lastCapsPressTime = null;
 let currentFocusedVideo = null;
 let floatingIcon = null;
 
@@ -23,7 +34,7 @@ function createFloatingIcon() {
 
 // Handle icon click
 function handleIconClick() {
-  const base = 'https://tutorial-clarity-production.up.railway.app';
+  const base = 'http://localhost:3000'; // TEMP for local testing 2026-07-09 — revert to https://tutorial-clarity-production.up.railway.app before publishing
   const videoId = getCurrentVideoId();
   const appUrl = videoId ? `${base}/watch?url=${videoId}` : base;
 
@@ -82,24 +93,34 @@ function trackVideoFocus() {
   });
 }
 
-// Handle Alt key double-tap
-function handleAltPress(e) {
-  if (e.key === 'Alt') {
-    altPressCount++;
+// Handle Caps Lock double-tap
+// Switched from Alt (2026-07-11): standalone Alt keyup is intercepted by
+// Chrome/Windows for menu-bar focus, which was silently swallowing the
+// second tap. Caps Lock has no such OS-level meaning, and two taps cancel
+// out the caps-state toggle so there's no lasting side effect.
+function handleCapsPress(e) {
+  if (e.key === 'CapsLock') {
+    const now = Date.now();
+    const gap = lastCapsPressTime ? now - lastCapsPressTime : null;
+    lastCapsPressTime = now;
+    capsPressCount++;
+    console.log('[TC Extension] Caps Lock press detected, count:', capsPressCount, '— gap since last press (ms):', gap);
 
-    if (altPressTimer) {
-      clearTimeout(altPressTimer);
+    if (capsPressTimer) {
+      clearTimeout(capsPressTimer);
     }
 
-    if (altPressCount === 2) {
-      // Double Alt press detected!
+    if (capsPressCount === 2) {
+      // Double Caps Lock press detected!
+      console.log('[TC Extension] Double-tap detected, calling saveCurrentVideo()');
       saveCurrentVideo();
-      altPressCount = 0;
+      capsPressCount = 0;
     } else {
-      // Reset after 500ms
-      altPressTimer = setTimeout(() => {
-        altPressCount = 0;
-      }, 500);
+      // Reset after 3000ms — generous window since a deliberate double-tap
+      // gesture is often slower than it feels in the moment.
+      capsPressTimer = setTimeout(() => {
+        capsPressCount = 0;
+      }, 3000);
     }
   }
 }
@@ -128,7 +149,7 @@ function handleTCShortcut(e) {
   const tag = (document.activeElement?.tagName || '').toLowerCase();
   if (tag === 'input' || tag === 'textarea' || tag === 'select' || document.activeElement?.isContentEditable) return;
 
-  // Only handle if Alt is NOT held (Alt combos are reserved for save)
+  // Only handle if no modifier is held, to avoid firing on OS/browser accelerator combos
   if (e.altKey || e.ctrlKey || e.metaKey) return;
 
   const key = e.key;
@@ -165,10 +186,10 @@ function handleTCShortcut(e) {
 }
 
 // Tutorial Clarity app URL
-const TC_URL = 'https://tutorialclarity.com';
+const TC_URL = 'http://localhost:3000'; // TEMP for local testing 2026-07-09 — revert to https://tutorialclarity.com before publishing
 
 // Save current video — POSTs to Tutorial Clarity API so it appears in section 4
-async function saveCurrentVideo() {
+function saveCurrentVideo() {
   const videoId = getCurrentVideoId();
 
   if (!videoId) {
@@ -180,26 +201,24 @@ async function saveCurrentVideo() {
     ? getVideoTitle(currentFocusedVideo)
     : document.title.replace(' - YouTube', '');
 
-  try {
-    const response = await fetch(`${TC_URL}/api/save-video`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ videoId, title }),
-    });
+  // Routed through the background service worker, not fetched here directly —
+  // a page-context fetch from https://youtube.com to http://localhost gets
+  // blocked by Chrome's Private Network Access policy ("loopback address
+  // space" denied). The background worker's fetch is exempt from that check.
+  chrome.runtime.sendMessage({ type: 'SAVE_VIDEO', videoId, title }, (result) => {
+    if (!result || !result.ok) {
+      console.error('[TC Extension] Save failed:', result && result.error);
+      showNotification('Could not reach Tutorial Clarity — is the app running?', 'error');
+      return;
+    }
 
-    if (!response.ok) throw new Error(`HTTP ${response.status}`);
-    const data = await response.json();
-
-    if (data.message === 'Already saved') {
+    if (result.data.message === 'Already saved') {
       showNotification('Already in your saved list!', 'info');
     } else {
       showNotification('✅ Saved to Tutorial Clarity!', 'success');
     }
     console.log('[TC Extension] Saved:', videoId, title);
-  } catch (err) {
-    console.error('[TC Extension] Save failed:', err);
-    showNotification('Could not reach Tutorial Clarity — is the app running?', 'error');
-  }
+  });
 }
 
 // Show notification
@@ -234,8 +253,9 @@ function init() {
     subtree: true
   });
   
-  // Listen for Alt key (save) and TC shortcut keys
-  document.addEventListener('keydown', handleAltPress);
+  // Listen for Caps Lock (save) and TC shortcut keys — capture phase so we see the
+  // event before YouTube's own player-level keyboard handling can intercept it.
+  document.addEventListener('keydown', handleCapsPress, true);
   document.addEventListener('keydown', handleTCShortcut, true);
 }
 

@@ -3,11 +3,15 @@ import { prisma as db } from '@/lib/db';
 
 export const dynamic = 'force-dynamic';
 
-// CORS headers — allow YouTube and any origin to reach this endpoint
+// CORS headers — allow YouTube and any origin to reach this endpoint.
+// Access-Control-Allow-Private-Network is required by Chrome's Private Network Access
+// policy for public-origin (youtube.com) requests to reach a loopback address (localhost)
+// — without it, the browser silently blocks the request before it reaches this server.
 const CORS_HEADERS = {
   'Access-Control-Allow-Origin': '*',
   'Access-Control-Allow-Methods': 'GET, POST, PUT, DELETE, OPTIONS',
   'Access-Control-Allow-Headers': 'Content-Type',
+  'Access-Control-Allow-Private-Network': 'true',
 };
 
 interface SavedVideoOut {

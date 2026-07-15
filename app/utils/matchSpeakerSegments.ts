@@ -73,15 +73,54 @@ export function matchSpeakerSegments(
 
   console.log('[MATCH] Speaker label mapping:', Object.fromEntries(speakerNormMap));
 
+  // AssemblyAI timestamps are relative to the extracted audio file, YouTube caption
+  // timestamps are relative to the video's own timeline — these can be offset by an
+  // unknown, per-video amount (see ASSEMBLYAI_SYNC_ANALYSIS.md, "never solved").
+  // Estimate that offset from confident (near-exact) text matches so Strategy 1 can be
+  // scoped to a plausible time window instead of searching the whole video — otherwise
+  // a short, generic phrase ("Wow!", "Buffalo steak") repeated by a DIFFERENT speaker
+  // elsewhere in the video can win the text-similarity contest purely by coincidence,
+  // silently mislabeling that speaker (and therefore their gender/voice).
+  const offsetSamples: number[] = [];
+  for (const ytSeg of youtubeSegments) {
+    let best: { asmSeg: AssemblySegment; similarity: number } | null = null;
+    for (const asmSeg of assemblySegments) {
+      const sim = textSimilarity(ytSeg.text, asmSeg.text);
+      if (!best || sim > best.similarity) best = { asmSeg, similarity: sim };
+    }
+    if (best && best.similarity >= 0.6) {
+      offsetSamples.push(best.asmSeg.start - ytSeg.start);
+    }
+  }
+  offsetSamples.sort((a, b) => a - b);
+  const timelineOffset = offsetSamples.length >= 3
+    ? offsetSamples[Math.floor(offsetSamples.length / 2)]
+    : 0;
+  console.log(`[MATCH] Estimated AssemblyAI↔YouTube offset: ${timelineOffset.toFixed(1)}s (from ${offsetSamples.length} confident matches)`);
+
   let textMatches = 0;
   let timeMatches = 0;
   let fallbacks = 0;
 
+  const CANDIDATE_WINDOW_SEC = 25;
+
   youtubeSegments.forEach(ytSeg => {
-    // Strategy 1: Text similarity match
+    // Strategy 1: Text similarity match. Short/generic text (<=4 words) is too easy to
+    // match by coincidence, so restrict its search to utterances near this segment's
+    // estimated time — but only when we trust the offset estimate (>=3 samples);
+    // otherwise search the whole video as before rather than risk false negatives.
+    const wordCount = ytSeg.text.trim().split(/\s+/).filter(Boolean).length;
+    const restrictToWindow = wordCount <= 4 && offsetSamples.length >= 3;
+    const searchPool = restrictToWindow
+      ? assemblySegments.filter(a =>
+          a.end >= (ytSeg.start + timelineOffset) - CANDIDATE_WINDOW_SEC &&
+          a.start <= (ytSeg.end + timelineOffset) + CANDIDATE_WINDOW_SEC)
+      : assemblySegments;
+    const effectivePool = searchPool.length > 0 ? searchPool : assemblySegments;
+
     let bestTextMatch: { speaker: string; similarity: number } | null = null;
 
-    for (const asmSeg of assemblySegments) {
+    for (const asmSeg of effectivePool) {
       const sim = textSimilarity(ytSeg.text, asmSeg.text);
       if (!bestTextMatch || sim > bestTextMatch.similarity) {
         bestTextMatch = { speaker: asmSeg.speaker, similarity: sim };

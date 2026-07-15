@@ -122,7 +122,9 @@ async function fetchWithYoutubeTranscript(
   try {
     const { YoutubeTranscript } = await import('youtube-transcript');
 
-    const variants = LANG_CODES[lang] || [lang];
+    // Empty lang means "auto" — skip straight to the no-lang default fetch below
+    // instead of asking youtube-transcript for an empty-string variant.
+    const variants = lang ? (LANG_CODES[lang] || [lang]) : [];
 
     // Try each language variant
     for (const variant of variants) {
@@ -402,12 +404,49 @@ async function fetchWithDirectAPI(
   }
 }
 
+// ─── Helper: detect the video's true original-language caption track ──────────
+// "No language specified" isn't reliable on its own — youtube-transcript's own
+// default can land on ANY available track (e.g. a manually-added translation),
+// not necessarily the video's actual spoken language (see the Chinese-default
+// bug found 2026-07-14: a Russian video's "default" track came back as "zh").
+// YouTube marks its auto-generated speech-recognition track with kind="asr" —
+// that's always in the video's real spoken language, so it's the authoritative
+// answer for what "auto" should mean.
+async function detectOriginalLanguage(videoId: string): Promise<string | null> {
+  try {
+    const playerResp = await fetch('https://www.youtube.com/youtubei/v1/player?prettyPrint=false', {
+      method: 'POST',
+      headers: {
+        'Content-Type': 'application/json',
+        'User-Agent': 'com.google.android.youtube/20.10.38 (Linux; U; Android 14)',
+      },
+      body: JSON.stringify({
+        context: { client: { clientName: 'ANDROID', clientVersion: '20.10.38' } },
+        videoId,
+      }),
+    });
+    if (!playerResp.ok) return null;
+
+    const playerData = await playerResp.json();
+    const tracks = playerData?.captions?.playerCaptionsTracklistRenderer?.captionTracks;
+    if (!Array.isArray(tracks) || tracks.length === 0) return null;
+
+    const asrTrack = tracks.find((t: any) => t.kind === 'asr');
+    const detected = asrTrack?.languageCode || tracks[0]?.languageCode || null;
+    console.log(`[v17] Auto-detect: ${tracks.length} tracks, asr="${asrTrack?.languageCode || 'none'}" → using "${detected}"`);
+    return detected;
+  } catch (err: any) {
+    console.log(`[v17] Auto-detect failed: ${err.message?.substring(0, 100)}`);
+    return null;
+  }
+}
+
 // ─── Main GET handler ─────────────────────────────────────────────────────────
 
 export async function GET(request: NextRequest) {
   const searchParams = request.nextUrl.searchParams;
   const videoId = (searchParams.get('videoId') ?? '').trim();
-  const requestedLang = (searchParams.get('lang') ?? 'de').trim().toLowerCase();
+  const requestedLang = (searchParams.get('lang') ?? '').trim().toLowerCase();
 
   if (!videoId) {
     return NextResponse.json(
@@ -424,8 +463,20 @@ export async function GET(request: NextRequest) {
   let result: { segments: TranscriptSegment[]; language: string; availableLanguages?: string[] } | null = null;
   let source = '';
 
+  // No language requested — resolve the video's true original (ASR) language
+  // first, rather than letting Method 1 fall through to its own unreliable
+  // "default" track.
+  let effectiveLang = requestedLang;
+  if (!effectiveLang) {
+    const detected = await detectOriginalLanguage(videoId);
+    if (detected) {
+      console.log(`[v17] No language requested — using detected original language "${detected}"`);
+      effectiveLang = detected;
+    }
+  }
+
   // ── Method 1: youtube-transcript ──
-  result = await fetchWithYoutubeTranscript(videoId, requestedLang);
+  result = await fetchWithYoutubeTranscript(videoId, effectiveLang);
   if (result) {
     source = 'youtube-transcript';
   }
@@ -433,7 +484,7 @@ export async function GET(request: NextRequest) {
   // ── Method 2: youtubei.js v17 ──
   if (!result) {
     console.log(`[v17] Method 1 failed, trying Method 2...`);
-    const ytResult = await fetchWithYoutubei(videoId, requestedLang);
+    const ytResult = await fetchWithYoutubei(videoId, effectiveLang);
     if (ytResult) {
       result = ytResult;
       source = 'youtubei.js-v17';
@@ -443,7 +494,7 @@ export async function GET(request: NextRequest) {
   // ── Method 3: Direct InnerTube API ──
   if (!result) {
     console.log(`[v17] Method 2 failed, trying Method 3...`);
-    result = await fetchWithDirectAPI(videoId, requestedLang);
+    result = await fetchWithDirectAPI(videoId, effectiveLang);
     if (result) {
       source = 'direct-innertube';
     }

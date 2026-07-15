@@ -142,7 +142,7 @@ function WatchPageContent() {
     const [transcript, setTranscript] = useState<TranscriptSegment[]>([]);
     const [transcriptLoading, setTranscriptLoading] = useState(false);
     const [transcriptError, setTranscriptError] = useState('');
-    const [transcriptLanguage, setTranscriptLanguage] = useState('de');
+    const [transcriptLanguage, setTranscriptLanguage] = useState('');
     const [transcriptOpacity, setTranscriptOpacity] = useState(90);
     const [transcriptHeight, setTranscriptHeight] = useState(54);
     const [transcriptBottom, setTranscriptBottom] = useState(0);
@@ -150,11 +150,6 @@ function WatchPageContent() {
     const [transcriptCenterOffset, setTranscriptCenterOffset] = useState(0);
     const [isDraggingHeight, setIsDraggingHeight] = useState(false);
     const [isDraggingPosition, setIsDraggingPosition] = useState(false);
-
-    // Clarify Audio transcript bar (rendered below video)
-    const [clarifyTranscript, setClarifyTranscript] = useState<{text: string; start: number; end: number}[]>([]);
-    const [clarifySegmentIndex, setClarifySegmentIndex] = useState(-1);
-    const clarifyScrollRef = useRef<HTMLDivElement>(null);
 
     // AI playback speed — persisted to localStorage
     const AI_SPEED_KEY = 'aiPlaybackSpeed';
@@ -319,24 +314,6 @@ function WatchPageContent() {
         return { scale: `${sx}, ${sy}`, translate: `${tx}px, ${ty}px` };
     })() : null;
 
-    // Clarify bar position/size — persisted to localStorage
-    const CLARIFY_BAR_KEY = 'clarifyBarLayout';
-    const getInitialClarifyLayout = () => {
-        if (typeof window === 'undefined') return { bottom: 0, height: 44 };
-        try {
-            const saved = localStorage.getItem(CLARIFY_BAR_KEY);
-            if (saved) return JSON.parse(saved);
-        } catch {}
-        return { bottom: 0, height: 44 };
-    };
-    const [clarifyBarBottom, setClarifyBarBottom] = useState(() => getInitialClarifyLayout().bottom);
-    const [clarifyBarHeight, setClarifyBarHeight] = useState(() => getInitialClarifyLayout().height);
-    const [isDraggingClarifyBar, setIsDraggingClarifyBar] = useState(false);
-    const [isResizingClarifyBar, setIsResizingClarifyBar] = useState(false);
-    const clarifyDragStartY = useRef(0);
-    const clarifyDragStartBottom = useRef(0);
-    const clarifyResizeStartY = useRef(0);
-    const clarifyResizeStartHeight = useRef(0);
     const dragStartY = useRef(0);
     const dragStartX = useRef(0);
     const dragStartHeight = useRef(0);
@@ -620,6 +597,14 @@ function WatchPageContent() {
     const detectedGenderMapRef = useRef<Record<string, 'male' | 'female'>>({});
     const [assemblyAILoading, setAssemblyAILoading] = useState(false);
     const [detectionRun, setDetectionRun] = useState(false);
+    // The backend detection pipeline (yt-dlp + ffmpeg + AssemblyAI) runs on blocking
+    // execSync calls and can't actually be interrupted once started. This flag lets
+    // the UI at least discard stale results and avoid reviving playback if the user
+    // hit Stop while a detection request was still in flight. The ref is what the
+    // async handler checks (avoids stale-closure issues after the await); the state
+    // twin is just so the warning banner below can re-render.
+    const detectionStoppedRef = useRef(false);
+    const [detectionStopped, setDetectionStopped] = useState(false);
     const [unknownSpeakerPrompt, setUnknownSpeakerPrompt] = useState<{ speakerId: string; assign: (gender: 'male' | 'female' | null) => void } | null>(null);
 
     // ── Stable callbacks for ClarifyAudioPanel (prevent re-render unmute bug) ──
@@ -639,13 +624,17 @@ function WatchPageContent() {
         }
     }, []);
 
-    const handleClarifyTranscriptReady = useCallback((segments: any[]) => {
-        setClarifyTranscript(segments);
-        setClarifySegmentIndex(-1);
+    // Switch the Scroll Transcript bar (the click-to-define one) to Clarify
+    // Audio's translated language while it's actively playing, and back to
+    // the source-language auto-detect once it stops — see ClarifyAudioPanel's
+    // onAiActiveChange for why.
+    const handleClarifyActiveChange = useCallback((active: boolean, language: string) => {
+        setTranscriptLanguage(active ? language : '');
     }, []);
 
-    const handleClarifySegmentChange = useCallback((idx: number) => {
-        setClarifySegmentIndex(idx);
+    const handleClarifyStop = useCallback(() => {
+        detectionStoppedRef.current = true;
+        setDetectionStopped(true);
     }, []);
 
     const handleClarifyRegisterHandlers = useCallback((handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[]; testAudioBlobs: () => void; hasAudioBlobs: () => boolean }) => {
@@ -722,15 +711,7 @@ function WatchPageContent() {
 
                 if (data.transcript && data.transcript.length > 0) {
                     setTranscript(data.transcript);
-                    // If the requested language wasn't available, show a note
-                    if (data.languageSwitched === false && data.language !== transcriptLanguage) {
-                        const langNames: Record<string, string> = { de: 'German', en: 'English', es: 'Spanish', fr: 'French', it: 'Italian', pt: 'Portuguese' };
-                        const requestedName = langNames[transcriptLanguage] || transcriptLanguage;
-                        const availableStr = (data.availableLanguages || []).join(', ');
-                        setTranscriptError(`"${requestedName}" not available for this video. Available: ${availableStr || 'unknown'}. Showing default.`);
-                    } else {
-                        setTranscriptError('');
-                    }
+                    setTranscriptError('');
                 } else {
                     setTranscriptError('No transcript available for this video');
                 }
@@ -1161,7 +1142,7 @@ function WatchPageContent() {
                 const deltaY = e.clientY - dragStartY.current;
                 const deltaX = e.clientX - dragStartX.current;
                 const windowHeight = window.innerHeight;
-                const windowWidth = window.innerWidth - 240;
+                const windowWidth = window.innerWidth - 340; // matches the right-hand menu panel's actual width
                 
                 const newBottom = Math.max(0, Math.min(windowHeight - transcriptHeight, dragStartBottom.current - deltaY));
                 
@@ -1170,11 +1151,18 @@ function WatchPageContent() {
                 const controlHandleHeight = 40;
                 const shouldShowControlsBelow = transcriptTopPosition < controlHandleHeight;
                 
-                // If controls would flip from their starting position, release the drag
+                // If controls would flip from their starting position, release the drag.
+                // Listeners are removed synchronously here (not just via setState) because
+                // React's re-render/cleanup is async — without this, rapid mousemove events
+                // firing before that cleanup runs keep using this stale closure (where
+                // isDraggingPosition is still captured as true) and the bar keeps chasing
+                // the cursor until it hits the bottom clamp.
                 if (shouldShowControlsBelow !== (controlsPositionOnDragStart.current === 'below')) {
                     setIsDraggingPosition(false);
                     document.body.style.cursor = '';
                     document.body.style.userSelect = '';
+                    window.removeEventListener('mousemove', handleMouseMove, true);
+                    window.removeEventListener('mouseup', handleMouseUp, true);
                     return;
                 }
                 
@@ -1307,7 +1295,18 @@ function WatchPageContent() {
         });
 
         try {
-            const context = transcript.map(seg => seg.text).join(' ').slice(0, 500);
+            // Center the AI context on wherever the video is paused, not the video's opening —
+            // the app tells users to pause right where the term comes up, so currentTime is
+            // exactly where the selected word/phrase was actually said. Previously this used
+            // the first 500 characters of the whole transcript regardless of playback position,
+            // so terms mentioned anywhere past the opening seconds had no relevant context at all.
+            let centerIdx = transcript.findIndex((seg, idx) =>
+                currentTime >= seg.start && (idx === transcript.length - 1 || currentTime < transcript[idx + 1].start)
+            );
+            if (centerIdx === -1) centerIdx = 0;
+            const windowStart = Math.max(0, centerIdx - 8);
+            const windowEnd = Math.min(transcript.length, centerIdx + 9);
+            const context = transcript.slice(windowStart, windowEnd).map(seg => seg.text).join(' ');
             const videoTitle = document.title || 'Tutorial Video';
 
             const response = await fetch('/api/define', {
@@ -1493,21 +1492,6 @@ function WatchPageContent() {
         controlsPositionOnDragStart.current = transcriptTopPosition >= controlHandleHeight ? 'above' : 'below';
     };
 
-    // Auto-scroll clarify transcript bar to current segment
-    useEffect(() => {
-        if (clarifySegmentIndex < 0 || !clarifyScrollRef.current) return;
-        const el = clarifyScrollRef.current.querySelector(`[data-clarify-bar-idx="${clarifySegmentIndex}"]`) as HTMLElement;
-        if (el) {
-            el.scrollIntoView({ behavior: 'smooth', block: 'nearest', inline: 'center' });
-        }
-    }, [clarifySegmentIndex]);
-
-    // Save clarify bar layout to localStorage
-    useEffect(() => {
-        if (typeof window === 'undefined') return;
-        try { localStorage.setItem('clarifyBarLayout', JSON.stringify({ bottom: clarifyBarBottom, height: clarifyBarHeight })); } catch {}
-    }, [clarifyBarBottom, clarifyBarHeight]);
-
     // Save AI playback speed to localStorage
     useEffect(() => {
         if (typeof window === 'undefined') return;
@@ -1630,38 +1614,11 @@ function WatchPageContent() {
         return () => clearInterval(interval);
     }, [videoId]);
 
-    // Clarify bar drag handler
-    useEffect(() => {
-        if (!isDraggingClarifyBar) return;
-        const handleMove = (e: MouseEvent) => {
-            const delta = clarifyDragStartY.current - e.clientY;
-            const newBottom = Math.max(0, Math.min(window.innerHeight - 80, clarifyDragStartBottom.current + delta));
-            setClarifyBarBottom(newBottom);
-        };
-        const handleUp = () => setIsDraggingClarifyBar(false);
-        window.addEventListener('mousemove', handleMove);
-        window.addEventListener('mouseup', handleUp);
-        return () => { window.removeEventListener('mousemove', handleMove); window.removeEventListener('mouseup', handleUp); };
-    }, [isDraggingClarifyBar]);
-
-    // Clarify bar resize handler
-    useEffect(() => {
-        if (!isResizingClarifyBar) return;
-        const handleMove = (e: MouseEvent) => {
-            const delta = clarifyResizeStartY.current - e.clientY;
-            const newHeight = Math.max(30, Math.min(200, clarifyResizeStartHeight.current + delta));
-            setClarifyBarHeight(newHeight);
-        };
-        const handleUp = () => setIsResizingClarifyBar(false);
-        window.addEventListener('mousemove', handleMove);
-        window.addEventListener('mouseup', handleUp);
-        return () => { window.removeEventListener('mousemove', handleMove); window.removeEventListener('mouseup', handleUp); };
-    }, [isResizingClarifyBar]);
 
     const fontSize = Math.max(14, Math.min(32, (transcriptHeight / 54) * 14));
     const showTranscriptBar = expandedSections.has('scroll') || expandedSections.has('definitions');
 const windowHeight = typeof window !== 'undefined' ? window.innerHeight : 800;
-const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 1200;
+const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 340 : 1200; // matches the right-hand menu panel's actual width
     const transcriptTopPosition = windowHeight - transcriptBottom - transcriptHeight;
     const controlHandleHeight = 40;
     const shouldShowControlsBelow = transcriptTopPosition < controlHandleHeight;
@@ -1749,7 +1706,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                 ref={containerRef}
                 tabIndex={0}
                 className="flex-1 outline-none relative"
-                style={{ marginRight: '240px' }}
+                style={{ marginRight: '340px' }}
             >
                 {/* ── Video wrapper — clips zoomed iframe ── */}
                 <div
@@ -1771,7 +1728,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 ? 'contrast(1.35) saturate(1.15) brightness(1.04)'
                                 : spyglassMode ? 'brightness(0.35)' : 'none',
                         }}
-                        src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=1`}
+                        src={`https://www.youtube.com/embed/${videoId}?enablejsapi=1&autoplay=1&controls=1&disablekb=1`}
                         allow="accelerometer; autoplay; clipboard-write; encrypted-media; gyroscope; picture-in-picture"
                         allowFullScreen
                     />
@@ -1802,7 +1759,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
 
                     {/* ── Zoom + Spyglass buttons — appear when paused and not in any mode ── */}
                     {!isPlaying && !zoomBase && !zoomMode && !spyglassMode && (
-                        <div style={{ position: 'absolute', bottom: 12, right: 12, zIndex: 10, display: 'flex', gap: '8px' }}>
+                        <div style={{ position: 'absolute', bottom: 46, right: 20, zIndex: 10, display: 'flex', gap: '8px' }}>
                             <button
                                 onClick={(e) => { e.stopPropagation(); setZoomMode(true); }}
                                 style={{
@@ -1996,8 +1953,8 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                     style={{
                       position: "absolute",
                       left: 20,
-                      right: 160,
-                      bottom: 52,
+                      right: 20,
+                      bottom: 0,
                       height: 22,
                       display: "flex",
                       alignItems: "center",
@@ -2053,20 +2010,6 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                             "linear-gradient(90deg, #5a8cff 0%, #2f6df7 60%, #2f6df7 100%)",
                         }}
                       />
-                    </div>
-
-                    <div
-                      style={{
-                        minWidth: 36,
-                        textAlign: "right",
-                        color: "#a5c0ff",
-                        opacity: 0.95,
-                        fontWeight: 700,
-                        fontVariantNumeric: "tabular-nums",
-                      }}
-                      title="AI Audio Speed"
-                    >
-                      {aiPlaybackSpeed.toFixed(aiPlaybackSpeed % 1 === 0 ? 0 : 2)}x
                     </div>
                   </div>
                 )}
@@ -2229,13 +2172,17 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 backgroundColor: `rgba(0, 0, 0, ${transcriptOpacity / 100})`,
                                 zIndex: 51,
                                 borderTop: '4px solid #3b82f6',
-                                borderBottom: '3px solid white'
+                                borderBottom: '3px solid white',
+                                display: 'flex',
+                                alignItems: 'stretch',
                             }}
                         >
                             <div
                                 ref={transcriptRef}
-                                className="transcript-scroll w-full h-full overflow-x-auto overflow-y-hidden px-4 text-white flex items-center whitespace-nowrap"
+                                className="transcript-scroll h-full overflow-x-auto overflow-y-hidden px-4 text-white flex items-center whitespace-nowrap"
                                 style={{
+                                    flex: 1,
+                                    minWidth: 0,
                                     fontSize: `${fontSize}px`,
                                     scrollbarWidth: 'thin',
                                     scrollbarColor: '#000000 #ffffff',
@@ -2269,161 +2216,27 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                     );
                                 })}
                             </div>
+                            {/* Read-only AI speed indicator — not an interactive control.
+                                Changing AI speed independently here never worked reliably
+                                (also got hidden behind the right-hand menu panel at full bar
+                                width), and Section 3 (Playback Speed) already sets this value
+                                too — video and AI audio speed are intentionally slaved together
+                                there so translated audio stays in sync with the video pace. */}
+                            <div
+                                title="AI Audio Speed — change this in 3. PLAYBACK SPEED"
+                                style={{
+                                    flexShrink: 0, display: 'flex', alignItems: 'center',
+                                    padding: '0 10px', borderLeft: '2px solid white',
+                                    backgroundColor: '#f97316', color: '#ffffff',
+                                    fontSize: 12, fontWeight: 700,
+                                }}
+                            >
+                                {aiPlaybackSpeed}x AI
+                            </div>
                         </div>
                     </>
                 )}
 
-                {/* Clarify Audio Transcript Bar — fixed position, draggable & resizable */}
-                {clarifyTranscript.length > 0 && (
-                    <div style={{
-                        position: 'fixed',
-                        bottom: `${clarifyBarBottom}px`,
-                        left: 0,
-                        right: '240px',
-                        height: `${clarifyBarHeight}px`,
-                        zIndex: 60,
-                        backgroundColor: 'rgba(0, 0, 0, 0.92)',
-                        borderTop: '3px solid #3b82f6',
-                        display: 'flex',
-                        flexDirection: 'column',
-                    }}>
-                        {/* ═══ VISIBLE RESIZE HANDLE (top edge) ═══ */}
-                        <div
-                            style={{
-                                height: '10px', cursor: 'ns-resize', flexShrink: 0,
-                                display: 'flex', alignItems: 'center', justifyContent: 'center',
-                                backgroundColor: '#1e293b',
-                                borderBottom: '1px solid #334155',
-                            }}
-                            onMouseDown={(e) => {
-                                e.preventDefault();
-                                clarifyResizeStartY.current = e.clientY;
-                                clarifyResizeStartHeight.current = clarifyBarHeight;
-                                setIsResizingClarifyBar(true);
-                            }}
-                            title="Drag up/down to resize"
-                        >
-                            <span style={{ color: '#64748b', fontSize: '10px', letterSpacing: '3px', userSelect: 'none' }}>
-                                ═══════
-                            </span>
-                        </div>
-                        {/* Drag handle + scrollable content */}
-                        <div style={{ flex: 1, display: 'flex', overflow: 'hidden' }}>
-                            {/* ⋮⋮ VISIBLE DRAG HANDLE (left edge) ⋮⋮ */}
-                            <div
-                                style={{
-                                    width: '32px', flexShrink: 0, display: 'flex', alignItems: 'center',
-                                    justifyContent: 'center', cursor: 'move',
-                                    backgroundColor: '#1e40af',
-                                    color: '#93c5fd',
-                                    fontSize: '16px', userSelect: 'none',
-                                    borderRight: '2px solid #2563eb',
-                                    transition: 'background-color 0.15s',
-                                }}
-                                onMouseDown={(e) => {
-                                    e.preventDefault();
-                                    clarifyDragStartY.current = e.clientY;
-                                    clarifyDragStartBottom.current = clarifyBarBottom;
-                                    setIsDraggingClarifyBar(true);
-                                }}
-                                onMouseEnter={(e) => { (e.target as HTMLElement).style.backgroundColor = '#1d4ed8'; }}
-                                onMouseLeave={(e) => { (e.target as HTMLElement).style.backgroundColor = '#1e40af'; }}
-                                title="Drag to move bar up/down"
-                            >
-                                ⋮⋮
-                            </div>
-                            {/* Scrollable transcript segments */}
-                            <div
-                                ref={clarifyScrollRef}
-                                style={{
-                                    flex: 1,
-                                    display: 'flex',
-                                    alignItems: 'center',
-                                    gap: '2px',
-                                    overflowX: 'auto',
-                                    overflowY: 'hidden',
-                                    whiteSpace: 'nowrap',
-                                    padding: '0 8px',
-                                    scrollbarWidth: 'thin',
-                                    scrollbarColor: '#4b5563 transparent',
-                                }}
-                            >
-                                {clarifyTranscript.map((seg, idx) => {
-                                    const isActive = idx === clarifySegmentIndex;
-                                    const ts = `${Math.floor(seg.start / 60)}:${String(Math.floor(seg.start % 60)).padStart(2, '0')}`;
-                                    return (
-                                        <span
-                                            key={idx}
-                                            data-clarify-bar-idx={idx}
-                                            onClick={() => {
-                                                if (iframeRef.current?.contentWindow) {
-                                                    iframeRef.current.contentWindow.postMessage(
-                                                        JSON.stringify({ event: 'command', func: 'seekTo', args: [seg.start, true] }),
-                                                        '*'
-                                                    );
-                                                }
-                                            }}
-                                            style={{
-                                                display: 'inline-block',
-                                                padding: '3px 8px',
-                                                borderRadius: '4px',
-                                                fontSize: '12px',
-                                                cursor: 'pointer',
-                                                flexShrink: 0,
-                                                backgroundColor: isActive ? '#2563eb' : 'transparent',
-                                                color: isActive ? '#ffffff' : '#9ca3af',
-                                                fontWeight: isActive ? 'bold' : 'normal',
-                                                borderBottom: isActive ? '2px solid #22c55e' : '2px solid transparent',
-                                                transition: 'background-color 0.15s',
-                                            }}
-                                            title={`[${ts}] ${seg.text}`}
-                                        >
-                                            <span style={{
-                                                color: isActive ? '#93c5fd' : '#60a5fa',
-                                                fontSize: '10px',
-                                                marginRight: '4px',
-                                                fontWeight: 'bold',
-                                            }}>
-                                                [{ts}]
-                                            </span>
-                                            {seg.text.length > 40 ? seg.text.substring(0, 40) + '…' : seg.text}
-                                        </span>
-                                    );
-                                })}
-                            </div>
-                            {/* ═══ AI SPEED DROPDOWN (right end of bar) ═══ */}
-                            <div style={{
-                                flexShrink: 0,
-                                display: 'flex',
-                                alignItems: 'center',
-                                padding: '0 8px',
-                                borderLeft: '2px solid #334155',
-                            }}>
-                                <select
-                                    value={aiPlaybackSpeed}
-                                    onChange={(e) => setAiPlaybackSpeed(parseFloat(e.target.value))}
-                                    style={{
-                                        backgroundColor: '#f97316',
-                                        color: '#ffffff',
-                                        border: '2px solid #fb923c',
-                                        borderRadius: '6px',
-                                        padding: '3px 6px',
-                                        fontSize: '12px',
-                                        fontWeight: 'bold',
-                                        cursor: 'pointer',
-                                        outline: 'none',
-                                        textShadow: '0 1px 2px rgba(0,0,0,0.3)',
-                                    }}
-                                    title="AI Audio Playback Speed"
-                                >
-                                    {[0.5, 0.75, 1, 1.25, 1.5, 1.75, 2, 2.5, 3].map(s => (
-                                        <option key={s} value={s}>{s}x AI</option>
-                                    ))}
-                                </select>
-                            </div>
-                        </div>
-                    </div>
-                )}
             </div>
 
             {/* Right Panel - Menu */}
@@ -2431,7 +2244,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                 position: 'fixed',
                 right: 0,
                 top: 0,
-                width: '240px',
+                width: '340px',
                 height: '100vh',
                 backgroundColor: 'black',
                 display: 'flex',
@@ -2618,23 +2431,13 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                 🧩 One-Click Saving from YouTube
                                             </div>
                                             <p style={{ margin: '0 0 8px 0', color: '#d1d5db', lineHeight: '1.6' }}>
-                                                Install the Tutorial Clarity browser extension once, and you can save any YouTube video with a double-tap of the <strong>Alt key</strong> — without ever leaving YouTube.
+                                                Install the Tutorial Clarity browser extension once, and you can save any YouTube video with a double-tap of the <strong>Caps Lock key</strong> — without ever leaving YouTube.
                                             </p>
-                                            <div style={{ color: '#d1d5db', lineHeight: '1.8', marginBottom: '8px' }}>
-                                                <strong style={{ color: '#facc15' }}>One-time setup:</strong>
-                                                <ol style={{ margin: '4px 0 0 0', paddingLeft: '18px' }}>
-                                                    <li>Open Chrome and go to <strong>chrome://extensions</strong></li>
-                                                    <li>Turn on <strong>Developer mode</strong> (toggle in the top-right corner)</li>
-                                                    <li>Click <strong>Load unpacked</strong></li>
-                                                    <li>Navigate to your Tutorial Clarity folder and select the <strong>extension</strong> subfolder</li>
-                                                    <li>Click <strong>Select Folder</strong> — the extension is now installed</li>
-                                                </ol>
-                                            </div>
                                             <div style={{ color: '#d1d5db', lineHeight: '1.8' }}>
                                                 <strong style={{ color: '#facc15' }}>To save a video from YouTube:</strong>
                                                 <ul style={{ margin: '4px 0 0 0', paddingLeft: '18px' }}>
                                                     <li>Hover your mouse over any video thumbnail in the YouTube scroll list</li>
-                                                    <li>Press the <strong>Alt key twice quickly</strong></li>
+                                                    <li>Press the <strong>Caps Lock key twice quickly</strong></li>
                                                     <li>A green banner confirms <em>"Saved to Tutorial Clarity!"</em></li>
                                                     <li>The video appears here in your list — Tutorial Clarity must be running</li>
                                                 </ul>
@@ -2867,7 +2670,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 )}
                             </div>
 
-                            {/* 7. SCROLL */}
+                            {/* 6. SCROLL BAR CONTROLS */}
                             <div style={{ borderBottom: '1px solid #374151' }}>
                                 <h3
                                     onClick={() => toggleSection('scroll')}
@@ -2881,7 +2684,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         alignItems: 'center'
                                     }}
                                 >
-                                    <span>6. SCROLL</span>
+                                    <span>6. SCROLL BAR CONTROLS</span>
                                     <span>{expandedSections.has('scroll') ? '▼' : '▶'}</span>
                                 </h3>
                                 {expandedSections.has('scroll') && (
@@ -2919,8 +2722,8 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             <p>• Use ↕ control to move up/down and left/right</p>
                                             <p>• Use ⇕ control to adjust height</p>
                                             <p>• Click any word to jump to that time</p>
-                                            <p>• <strong>Drag across words/phrases in the transcript to see definitions</strong></p>
                                             <p>• Current word is highlighted in blue</p>
+                                            <p>• Want definitions? See Section 7 below</p>
                                             <p>• Adjust opacity to see video behind text</p>
                                             {transcriptLoading && <p style={{ color: '#60a5fa' }}>⏳ Loading transcript...</p>}
                                             {transcriptError && <p style={{ color: '#f87171' }}>• {transcriptError}</p>}
@@ -2957,11 +2760,11 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                         }}>
                                             <h4 style={{ fontWeight: 'bold', marginBottom: '6px' }}>📖 How to Get a Definition</h4>
                                             <p style={{ marginBottom: '6px', fontSize: '12px', color: '#93c5fd' }}>
-                                                Drag across words/phrases in the transcript below to see definitions
+                                                Double-click a single word, or drag across a phrase, in the transcript below
                                             </p>
                                             <ol style={{ paddingLeft: '16px' }}>
                                                 <li>Pause the video (spacebar)</li>
-                                                <li><strong>Drag across any word or phrase in the transcript below</strong></li>
+                                                <li><strong>Double-click one word</strong> for just that word, or <strong>drag across several words</strong> for a phrase</li>
                                                 <li>Definition appears in a popup overlay</li>
                                                 <li>Click X to close the definition</li>
                                             </ol>
@@ -3006,6 +2809,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                     cursor: 'pointer'
                                                 }}
                                             >
+                                                <option value="">🌐 Auto (Video Default)</option>
                                                 <option value="de">🇩🇪 German (Deutsch)</option>
                                                 <option value="en">🇬🇧 English</option>
                                                 <option value="es">🇪🇸 Spanish (Español)</option>
@@ -3057,8 +2861,12 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                     <span>8. CLARIFY AUDIO & TRANSLATION 🔊🌐</span>
                                     <span>{expandedSections.has('clarify') ? '▼' : '▶'}</span>
                                 </h3>
-                                {expandedSections.has('clarify') && (
-                                    <div style={{ padding: '0', backgroundColor: '#111827' }}>
+                                {/* Stay mounted even when collapsed — this panel owns the TTS
+                                    playback/scheduling engine, so unmounting it on collapse (the
+                                    old `&&` conditional) killed in-progress Clarify Audio playback
+                                    just from closing the section to look at something else.
+                                    Hide with display:none instead so playback keeps running. */}
+                                <div style={{ padding: '0', backgroundColor: '#111827', display: expandedSections.has('clarify') ? 'block' : 'none' }}>
 
                                         <p style={{ margin: '10px 8px', fontSize: '11px', color: '#9ca3af', lineHeight: '1.6' }}>
                                             Clearer speech, and translation into 12 languages (subtitles or full AI voice) — pick your language in Processing Options below.
@@ -3069,10 +2877,18 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             <button
                                                 onClick={async () => {
                                                     if (!clarifyHandlersRef.current?.detectWithAssemblyAI) return;
+                                                    detectionStoppedRef.current = false;
+                                                    setDetectionStopped(false);
                                                     setAssemblyAILoading(true);
                                                     try {
                                                         // Detection also fires onSpeakersDetected which sets detectedGenderMapRef
                                                         const speakers = await clarifyHandlersRef.current.detectWithAssemblyAI();
+                                                        if (detectionStoppedRef.current) {
+                                                            // User hit Stop while this was still running server-side —
+                                                            // discard the (now stale) results instead of reviving playback.
+                                                            console.log('[detect-speakers] Discarding results — user stopped during detection');
+                                                            return;
+                                                        }
                                                         if (speakers && speakers.length >= 1) {
                                                             setDetectedSpeakers(speakers);
 
@@ -3118,10 +2934,20 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                             <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.25" />
                                                             <path d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" fill="currentColor" opacity="0.75" />
                                                         </svg>
-                                                        Detecting Speakers…
+                                                        {detectionStopped ? 'Finishing previous attempt…' : 'Detecting Speakers…'}
                                                     </span>
                                                 ) : '🎯 Detect Speakers'}
                                             </button>
+                                            {assemblyAILoading && detectionStopped && (
+                                                <div style={{
+                                                    marginTop: '6px', padding: '6px 8px',
+                                                    backgroundColor: 'rgba(217,119,6,0.15)', border: '1px solid #d97706',
+                                                    borderRadius: '6px', fontSize: '10px', color: '#fbbf24', textAlign: 'center',
+                                                    lineHeight: '1.4',
+                                                }}>
+                                                    {'⚠️'} Stopped — but the previous detection is still finishing in the background and can't be interrupted. It can take up to 1–2 minutes before you can start a new attempt.
+                                                </div>
+                                            )}
                                         </div>
 
                                         {/* ─── STEP 2: PLAY ─── */}
@@ -3159,16 +2985,16 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                             onSubtitleChange={handleClarifySubtitle}
                                             onMuteYouTube={robustMuteYouTube}
                                             onPlayYouTube={handleClarifyPlayYouTube}
-                                            onTranscriptReady={handleClarifyTranscriptReady}
-                                            onSegmentChange={handleClarifySegmentChange}
+                                            onAiActiveChange={handleClarifyActiveChange}
+                                            onStop={handleClarifyStop}
                                             registerHandlers={handleClarifyRegisterHandlers}
                                             detectionRun={detectionRun}
+                                            detectionInProgress={assemblyAILoading}
                                             readyToPlay={detectionRun && !assemblyAILoading && !isRegenerating}
                                             onUnknownSpeaker={handleUnknownSpeaker}
                                         />
 
-                                    </div>
-                                )}
+                                </div>
                             </div>
 
                             {/* 9. ZOOM */}
@@ -3620,8 +3446,11 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 </h3>
                                 {expandedSections.has('video-indexing') && (
                                     <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
-                                        <p style={{ color: '#d1d5db', lineHeight: '1.6', marginBottom: '10px' }}>
+                                        <p style={{ color: '#d1d5db', lineHeight: '1.6', marginBottom: '6px' }}>
                                             Can't find that one video on a channel with thousands of uploads? Enter a channel below to index and search it instantly.
+                                        </p>
+                                        <p style={{ color: '#9ca3af', lineHeight: '1.6', marginBottom: '10px' }}>
+                                            Not sure what to type? Go to your YouTube subscriptions, right-click the channel you want, click "Copy Link," then come back here and paste it into the box below.
                                         </p>
                                         <div style={{ display: 'flex', gap: '6px', marginBottom: '10px' }}>
                                             <input
@@ -3659,14 +3488,14 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
 
                                         {channelIndexStatus === 'ready' && (
                                             <>
-                                                <div style={{ display: 'flex', gap: '6px', marginBottom: '8px', alignItems: 'center' }}>
+                                                <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px', alignItems: 'center' }}>
                                                     <input
                                                         type="text"
                                                         value={videoSearchQuery}
                                                         onChange={(e) => setVideoSearchQuery(e.target.value)}
                                                         placeholder="Search videos by title..."
                                                         style={{
-                                                            flex: 1, backgroundColor: '#1f2937', border: '1px solid #374151',
+                                                            flex: '1 1 100%', minWidth: '120px', backgroundColor: '#1f2937', border: '1px solid #374151',
                                                             borderRadius: '4px', padding: '6px 10px', color: '#fff', fontSize: '12px',
                                                         }}
                                                     />
@@ -3679,6 +3508,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                                                 color: videoSort === s ? '#111827' : '#d1d5db',
                                                                 border: 'none', borderRadius: '4px', padding: '5px 8px',
                                                                 fontSize: '11px', cursor: 'pointer', fontWeight: videoSort === s ? 'bold' : 'normal',
+                                                                flex: '0 0 auto',
                                                             }}
                                                         >
                                                             {s === 'alpha' ? 'A–Z' : s === 'newest' ? 'Newest' : 'Oldest'}
@@ -3802,7 +3632,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 200 : 12
                                 {expandedSections.has('bookmarks') && (
                                     <div style={{ padding: '12px', backgroundColor: '#111827', fontSize: '12px' }}>
                                         <p style={{ color: '#d1d5db', lineHeight: '1.6', marginBottom: '10px' }}>
-                                            Mark moments in this video to jump back to later. Saved on this device.
+                                            Mark moments in this video to jump back to later. Saved on this device. Play or pause at the moment you want, optionally type a label, then click "+ Add" below to save it. Click a yellow marker on the timeline (or a bookmark in the list) to jump back to it.
                                         </p>
 
                                         {duration > 0 && (

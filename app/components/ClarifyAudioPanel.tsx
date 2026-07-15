@@ -61,10 +61,13 @@ interface ClarifyAudioPanelProps {
   onPlayYouTube?: () => void;
   onTranscriptReady?: (segments: ClarifyTranscriptSegment[]) => void;
   onSegmentChange?: (index: number) => void;
+  onAiActiveChange?: (active: boolean, language: string) => void;
   registerHandlers?: (handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[]; testAudioBlobs: () => void; hasAudioBlobs: () => boolean }) => void;
   readyToPlay?: boolean;  // gates the Play button — false until detection + voice setup complete
   detectionRun?: boolean;  // true once speaker detection has completed
+  detectionInProgress?: boolean;  // true while speaker detection is actively running (distinct from "not yet started")
   onUnknownSpeaker?: (speakerId: string, assign: (gender: 'male' | 'female' | null) => void) => void;
+  onStop?: () => void;  // fires when the user hits Stop — lets the parent discard results from a detection request still in flight
 }
 
 // ═══ MULTI-VOICE SYSTEM — SMART ROTATION ═══
@@ -568,7 +571,7 @@ function fmtTime(sec: number): string {
 }
 
 export function ClarifyAudioPanel({
-  videoId, currentTime, aiPlaybackSpeed = 1, speakerConfig, onSpeakersDetected, onSubtitleChange, onMuteYouTube, onPlayYouTube, onTranscriptReady, onSegmentChange, registerHandlers, readyToPlay = true, detectionRun = false, onUnknownSpeaker,
+  videoId, currentTime, aiPlaybackSpeed = 1, speakerConfig, onSpeakersDetected, onSubtitleChange, onMuteYouTube, onPlayYouTube, onTranscriptReady, onSegmentChange, onAiActiveChange, registerHandlers, readyToPlay = true, detectionRun = false, detectionInProgress = false, onUnknownSpeaker, onStop,
 }: ClarifyAudioPanelProps) {
 
   const router = useRouter();
@@ -1468,7 +1471,8 @@ export function ClarifyAudioPanel({
     setPhase('stopped');
     if (onMuteYouTube) onMuteYouTube(false);
     if (onTranscriptReady) onTranscriptReady([]);
-  }, [onMuteYouTube, onTranscriptReady]);
+    if (onStop) onStop();
+  }, [onMuteYouTube, onTranscriptReady, onStop]);
 
   /** Clear audio cache and regenerate TTS with current speaker voice config.
    *  Called when the user applies new voice assignments from the speaker config UI.
@@ -2332,6 +2336,20 @@ export function ClarifyAudioPanel({
   const isAiActive = phase === 'playing';
   const activeTranscriptLang = isAiActive ? selectedLang : (sourceLanguage || 'source');
 
+  // Tell the parent when a Clarify Audio session is underway, so the Scroll
+  // Transcript bar (the only transcript with click-to-define word selection)
+  // can switch from the source language to the translated language —
+  // otherwise a non-source-language speaker has no way to know which words
+  // to click once AI audio is playing English over their video.
+  // Deliberately NOT just `isAiActive` (phase === 'playing'): users pause to
+  // freeze the bar in place so they can click a word precisely, which would
+  // otherwise flip the bar straight back to the source language at the exact
+  // moment they need the translated one.
+  const translationSessionActive = phase === 'playing' || phase === 'paused' || phase === 'buffering';
+  useEffect(() => {
+    if (onAiActiveChange) onAiActiveChange(translationSessionActive, selectedLang);
+  }, [translationSessionActive, selectedLang, onAiActiveChange]);
+
   // ═══ RENDER ═══
   return (
     <div style={{ padding: '12px', fontSize: '12px', color: 'white' }}>
@@ -2443,6 +2461,9 @@ export function ClarifyAudioPanel({
           <div style={{ fontSize: '11px', color: '#9ca3af', textAlign: 'center' }}>
             {processingStage || 'Fetching transcript...'}
           </div>
+          <div style={{ fontSize: '10px', color: '#60a5fa', textAlign: 'center', marginTop: '8px' }}>
+            {'⏳'} Please be patient — even though computers are fast, the AI needs a couple of minutes to translate and generate speech.
+          </div>
         </div>
       )}
 
@@ -2479,9 +2500,11 @@ export function ClarifyAudioPanel({
               border: '1px dashed #d97706', borderRadius: '8px', textAlign: 'center',
               fontSize: '13px', marginBottom: '10px', lineHeight: '1.5',
             }}>
-              {!detectionRun
-                ? '👆 Click "Detect Speakers" above, then assign voices to enable playback'
-                : 'Assign a gender to each speaker above, then click Apply & Reassign to enable playback'}
+              {detectionInProgress
+                ? '⏳ Detecting speakers — this can take a minute or two, please wait…'
+                : !detectionRun
+                  ? '👆 Click "Detect Speakers" above, then assign voices to enable playback'
+                  : 'Assign a gender to each speaker above, then click Apply & Reassign to enable playback'}
             </div>
           )}
 

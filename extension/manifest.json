@@ -9,7 +9,10 @@
     "tabs"
   ],
   "host_permissions": [
-    "https://www.youtube.com/*"
+    "https://www.youtube.com/*",
+    "http://localhost:3000/*",
+    "https://tutorial-clarity-production.up.railway.app/*",
+    "https://tutorialclarity.com/*"
   ],
   "content_scripts": [
     {
