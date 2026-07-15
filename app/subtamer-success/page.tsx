@@ -9,6 +9,9 @@ export default function SubTamerSuccess() {
           Paste it into the SubTamer extension to activate.
         </p>
         <p style={{ fontSize: '0.9rem', color: '#888' }}>You can close this tab.</p>
+        <p style={{ fontSize: '0.85rem', color: '#666', marginTop: '1.5rem' }}>
+          Need to manage or cancel later? Visit <a href="/subtamer-manage" style={{ color: '#ffd700' }}>Manage Subscription</a>.
+        </p>
       </div>
     </div>
   );
