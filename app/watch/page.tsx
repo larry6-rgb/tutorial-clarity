@@ -178,6 +178,11 @@ function WatchPageContent() {
     const [summaryLoading, setSummaryLoading] = useState(false);
     const [summaryError, setSummaryError] = useState('');
     const [summaryFetched, setSummaryFetched] = useState(false);
+    // Refs so keyboard handler always sees current summary state without stale closure
+    const summaryFetchedRef = useRef(false);
+    useEffect(() => { summaryFetchedRef.current = summaryFetched; }, [summaryFetched]);
+    const summaryLoadingRef = useRef(false);
+    useEffect(() => { summaryLoadingRef.current = summaryLoading; }, [summaryLoading]);
 
     const handleFetchSummary = async () => {
         if (summaryLoading) return;
@@ -211,6 +216,11 @@ function WatchPageContent() {
     const [transcriptDocLoading, setTranscriptDocLoading] = useState(false);
     const [transcriptDocError, setTranscriptDocError] = useState('');
     const [transcriptDocFetched, setTranscriptDocFetched] = useState(false);
+    // Refs so keyboard handler always sees current transcript-doc state without stale closure
+    const transcriptDocFetchedRef = useRef(false);
+    useEffect(() => { transcriptDocFetchedRef.current = transcriptDocFetched; }, [transcriptDocFetched]);
+    const transcriptDocLoadingRef = useRef(false);
+    useEffect(() => { transcriptDocLoadingRef.current = transcriptDocLoading; }, [transcriptDocLoading]);
 
     const handleFetchTranscriptDoc = async () => {
         if (transcriptDocLoading) return;
@@ -274,6 +284,8 @@ function WatchPageContent() {
     // Ref so keyboard handler always sees current zoom state without stale closure
     const zoomBaseRef = useRef<{ sx: number; sy: number; tx: number; ty: number } | null>(null);
     useEffect(() => { zoomBaseRef.current = zoomBase; }, [zoomBase]);
+    const zoomModeRef = useRef(false);
+    useEffect(() => { zoomModeRef.current = zoomMode; }, [zoomMode]);
 
     // ── SHERLOCK SPYGLASS STATE ──
     const [spyglassMode, setSpyglassMode] = useState(false);
@@ -1070,6 +1082,23 @@ function WatchPageContent() {
                     newSet.add(sectionMap[navKey]);
                     return newSet;
                 });
+
+                // U — also actually generate the summary, not just open the panel
+                if (navKey === 'U' && !summaryFetchedRef.current && !summaryLoadingRef.current) {
+                    handleFetchSummary();
+                }
+
+                // Z — also actually enter zoom draw mode, same as clicking the on-video
+                // 🔍 Zoom button, but only when that button would actually be showing
+                // (paused, and not already in zoom/spyglass mode)
+                if (navKey === 'Z' && !isPlaying && !zoomBaseRef.current && !zoomModeRef.current && !spyglassModeRef.current) {
+                    setZoomMode(true);
+                }
+
+                // X — also actually generate the transcript document, not just open the panel
+                if (navKey === 'X' && !transcriptDocFetchedRef.current && !transcriptDocLoadingRef.current) {
+                    handleFetchTranscriptDoc();
+                }
             }
 
         };
@@ -3351,30 +3380,37 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 340 : 12
                                             { key: 'Space', label: 'Pause / Play' },
                                             { key: 'M', label: 'Toggle Mute' },
                                             { key: ',  /  .', label: 'Speed Down / Up' },
-                                            { key: 'Alt  Alt', label: 'Save Video (extension — from YouTube)' },
-                                            { key: 'S', label: 'Save & Open Saved Videos' },
+                                            { key: 'Caps Lock  Caps Lock', label: 'Save Video (extension — from YouTube)' },
+                                            { key: 'S', label: 'Save & Open Saved Videos', note: 'Auto-saves only via the extension on YouTube; on this page it just opens the section.' },
                                             { key: 'A', label: 'Clarify Audio' },
                                             { key: 'V', label: 'Speaker Voices' },
                                             { key: 'T', label: 'Scroll Transcript' },
-                                            { key: 'Z', label: 'Zoom' },
+                                            { key: 'Z', label: 'Zoom', note: 'Video must already be paused to start drawing a zoom box — otherwise this just opens the instructions.' },
                                             { key: 'Space (in Spyglass)', label: '🕵️ Exit Spyglass & Resume' },
                                             { key: 'R', label: 'Resume Previous Video' },
-                                            { key: 'U', label: 'Summary' },
-                                            { key: 'X', label: 'Transcript' },
+                                            { key: 'U', label: 'Summary', note: 'Generates immediately. Only works on videos that have captions.' },
+                                            { key: 'X', label: 'Transcript', note: 'Generates immediately. Only works on videos that have captions.' },
                                             { key: 'K', label: 'Keyboard Shortcuts' },
                                             { key: '?', label: 'Tutorial' },
-                                        ].map(({ key, label }) => (
+                                        ].map(({ key, label, note }) => (
                                             <div key={key} style={{
                                                 display: 'flex', justifyContent: 'space-between',
                                                 alignItems: 'center', padding: '5px 0',
-                                                borderBottom: '1px solid #1f2937',
+                                                borderBottom: '1px solid #1f2937', gap: '10px',
                                             }}>
-                                                <span style={{ color: '#d1d5db' }}>{label}</span>
+                                                <div style={{ minWidth: 0 }}>
+                                                    <div style={{ color: '#d1d5db' }}>{label}</div>
+                                                    {note && (
+                                                        <div style={{ color: '#9ca3af', fontSize: '10px', marginTop: '2px', lineHeight: '1.4' }}>
+                                                            {note}
+                                                        </div>
+                                                    )}
+                                                </div>
                                                 <span style={{
                                                     backgroundColor: '#374151', color: '#facc15',
                                                     borderRadius: '4px', padding: '2px 8px',
                                                     fontFamily: 'monospace', fontSize: '12px',
-                                                    fontWeight: 'bold', whiteSpace: 'nowrap',
+                                                    fontWeight: 'bold', whiteSpace: 'nowrap', flexShrink: 0,
                                                 }}>{key}</span>
                                             </div>
                                         ))}

@@ -134,7 +134,7 @@ const TC_SECTION_KEYS = {
   '.': 'playback',
   's': 'saved',
   'a': 'clarify',
-  'v': 'speakers',
+  'v': 'clarify',   // Speaker Voices lives inside the Clarify Audio section — must match watch/page.tsx's own sectionMap key
   't': 'scroll',
   'z': 'zoom',
   'r': 'resume',
