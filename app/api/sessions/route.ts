@@ -3,6 +3,8 @@ import { NextResponse } from 'next/server';
 import { prisma as db } from '@/lib/db';
 
 const SESSIONS_PER_MONTH = 20;
+// See lib/subscription.ts for why this bypass exists and who it's for.
+const DEV_BYPASS_CLERK_ID = process.env.DEV_BYPASS_CLERK_ID;
 
 // GET — return current session usage for the logged-in user
 export async function GET() {
@@ -10,6 +12,12 @@ export async function GET() {
     const { userId } = await auth();
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    if (DEV_BYPASS_CLERK_ID && userId === DEV_BYPASS_CLERK_ID) {
+      return NextResponse.json({
+        sessionsUsed: 0, sessionsTotal: SESSIONS_PER_MONTH, bonusSessions: 0, hasReachedLimit: false,
+      });
     }
 
     const user = await db.user.findUnique({
@@ -67,6 +75,10 @@ export async function POST() {
     const { userId } = await auth();
     if (!userId) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
+    }
+
+    if (DEV_BYPASS_CLERK_ID && userId === DEV_BYPASS_CLERK_ID) {
+      return NextResponse.json({ success: true });
     }
 
     const user = await db.user.findUnique({

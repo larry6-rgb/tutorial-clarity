@@ -1,5 +1,10 @@
 import { prisma as db } from './db';
 
+// Developer account — exempt from trial expiry, subscription status, and
+// Clarify Audio session limits everywhere (local dev and production share
+// this database). Set to Larry's own Clerk user ID, epplerpublishingllc@gmail.com.
+const DEV_BYPASS_CLERK_ID = process.env.DEV_BYPASS_CLERK_ID;
+
 export type AccessResult =
   | { allowed: true }
   | { allowed: false; reason: 'no_account' | 'trial_expired' | 'subscription_inactive' };
@@ -17,6 +22,8 @@ export type SubscriptionStatus = {
 };
 
 export async function checkPremiumAccess(clerkUserId: string): Promise<AccessResult> {
+  if (DEV_BYPASS_CLERK_ID && clerkUserId === DEV_BYPASS_CLERK_ID) return { allowed: true };
+
   const user = await db.user.findUnique({
     where: { clerkId: clerkUserId },
     include: { subscription: true },
@@ -47,6 +54,14 @@ export async function checkPremiumAccess(clerkUserId: string): Promise<AccessRes
 }
 
 export async function getSubscriptionStatus(clerkUserId: string): Promise<SubscriptionStatus> {
+  if (DEV_BYPASS_CLERK_ID && clerkUserId === DEV_BYPASS_CLERK_ID) {
+    return {
+      plan: 'annual', premiumAllowed: true, trialExpired: false, trialEndsAt: null,
+      sessionsUsed: 0, sessionsLimit: 999999, sessionsRemaining: 999999,
+      sessionWarning: false, sessionBlocked: false,
+    };
+  }
+
   const user = await db.user.findUnique({
     where: { clerkId: clerkUserId },
     include: { subscription: true },
