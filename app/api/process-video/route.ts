@@ -60,6 +60,36 @@ async function fetchTranscript(
 }
 
 /**
+ * Translate a single line individually — slower than batch translation but
+ * immune to cross-line merging, used as a fallback when a batch's [N]
+ * numbering can't be trusted (see translateBatch).
+ */
+async function translateSingleLine(text: string, langName: string, apiKey: string): Promise<string> {
+  try {
+    const response = await fetch('https://api.openai.com/v1/chat/completions', {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${apiKey}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        model: 'gpt-4o-mini',
+        temperature: 0.3,
+        messages: [
+          { role: 'system', content: `You are a professional translator. Translate the following line to ${langName}. Output ONLY the translated line, no explanations.` },
+          { role: 'user', content: text },
+        ],
+      }),
+    });
+    if (!response.ok) return text;
+    const data = await response.json();
+    return data.choices?.[0]?.message?.content?.trim() || text;
+  } catch {
+    return text;
+  }
+}
+
+/**
  * Translate a batch of transcript segments to target language using OpenAI.
  */
 async function translateBatch(
@@ -100,7 +130,7 @@ async function translateBatch(
           messages: [
             {
               role: 'system',
-              content: `You are a professional translator. Translate each numbered line to ${langName}. Keep the [N] numbering prefix. Output ONLY the translated lines, one per line. Preserve the meaning and tone. Do not add explanations.`,
+              content: `You are a professional translator. Translate each numbered line to ${langName}. Keep the [N] numbering prefix, one input line per output line — never merge two lines into one or split one line into two, even if that reads awkwardly. Output ONLY the translated lines, one per line. Preserve the meaning and tone. Do not add explanations.`,
             },
             { role: 'user', content: textsToTranslate },
           ],
@@ -117,18 +147,40 @@ async function translateBatch(
       const translatedText = data.choices?.[0]?.message?.content || '';
       const translatedLines = translatedText.split('\n').filter((l: string) => l.trim());
 
+      // ── VALIDATE bracket numbering before trusting it ──
+      // GPT can silently merge two source lines into one translated line (very
+      // normal for a translator — sentence structure rarely maps 1:1 across
+      // languages), which shifts every subsequent [N] label onto the WRONG
+      // content while still producing a plausible-looking numbered list. Since
+      // each output segment keeps its ORIGINAL segment's timestamp, a shifted
+      // label means a correct translation gets glued onto the wrong segment's
+      // start/end time — audio then plays at the wrong point in the video even
+      // though the text itself is a fine translation. Only trust the fast
+      // bracket-matching path if every label 0..batch.length-1 appears exactly
+      // once; otherwise fall back to translating this sub-batch one line at a
+      // time, which is immune to cross-line merging by construction.
+      const labelCounts = new Map<number, number>();
+      translatedLines.forEach((l: string) => {
+        const m = l.match(/^\[(\d+)\]/);
+        if (m) {
+          const n = parseInt(m[1], 10);
+          labelCounts.set(n, (labelCounts.get(n) || 0) + 1);
+        }
+      });
+      const numberingValid = batch.every((_, j) => labelCounts.get(j) === 1);
+
+      if (!numberingValid) {
+        console.warn(`[process-video] ⚠️ Translation numbering mismatch in sub-batch ${Math.floor(i / SUB_BATCH) + 1} (expected exactly one each of [0]-[${batch.length - 1}], got ${JSON.stringify(Object.fromEntries(labelCounts))}) — falling back to line-by-line translation to avoid timestamp misalignment`);
+        const fallbackTexts = await Promise.all(batch.map(seg => translateSingleLine(seg.text, langName, apiKey)));
+        batch.forEach((seg, idx) => translated.push({ ...seg, text: fallbackTexts[idx] || seg.text }));
+        continue;
+      }
+
       for (let j = 0; j < batch.length; j++) {
         const seg = batch[j];
-        const matchingLine = translatedLines.find((l: string) => l.startsWith(`[${j}]`));
-        if (matchingLine) {
-          const translatedSegText = matchingLine.replace(/^\[\d+\]\s*/, '').trim();
-          translated.push({ ...seg, text: translatedSegText || seg.text });
-        } else if (translatedLines[j]) {
-          const translatedSegText = translatedLines[j].replace(/^\[\d+\]\s*/, '').trim();
-          translated.push({ ...seg, text: translatedSegText || seg.text });
-        } else {
-          translated.push(seg);
-        }
+        const matchingLine = translatedLines.find((l: string) => l.startsWith(`[${j}]`))!;
+        const translatedSegText = matchingLine.replace(/^\[\d+\]\s*/, '').trim();
+        translated.push({ ...seg, text: translatedSegText || seg.text });
       }
 
       console.log(`[process-video] Translated sub-batch ${Math.floor(i / SUB_BATCH) + 1}/${Math.ceil(segments.length / SUB_BATCH)}`);
