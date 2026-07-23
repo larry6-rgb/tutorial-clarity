@@ -1360,6 +1360,14 @@ function WatchPageContent() {
                     y: e.clientY,
                     loading: false
                 });
+            } else if (!response.ok || !data.definition) {
+                setDefinitionPopup({
+                    text,
+                    definition: `❌ ${data.error || 'Definition not available. Please try again.'}`,
+                    x: e.clientX,
+                    y: e.clientY,
+                    loading: false
+                });
             } else {
                 setDefinitionPopup({
                     text,

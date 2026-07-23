@@ -12,74 +12,34 @@ function getGroqClient(): Groq {
     return groq;
 }
 
-// Dictionary API
-async function getDictionaryDefinition(term: string): Promise<string | null> {
-    try {
-        const response = await fetch(`https://api.dictionaryapi.dev/api/v2/entries/en/${encodeURIComponent(term)}`);
-        if (!response.ok) return null;
-        
-        const data = await response.json();
-        if (data && data[0] && data[0].meanings && data[0].meanings[0]) {
-            const meaning = data[0].meanings[0];
-            const definition = meaning.definitions[0].definition;
-            return `📖 **Dictionary**: ${definition}`;
-        }
-        return null;
-    } catch (error) {
-        return null;
-    }
-}
-
-// Wikipedia API
-async function getWikipediaDefinition(term: string): Promise<string | null> {
-    try {
-        const response = await fetch(
-            `https://en.wikipedia.org/api/rest_v1/page/summary/${encodeURIComponent(term)}`
-        );
-        if (!response.ok) return null;
-        
-        const data = await response.json();
-        if (data && data.extract) {
-            return `📚 **Wikipedia**: ${data.extract.slice(0, 300)}...`;
-        }
-        return null;
-    } catch (error) {
-        return null;
-    }
-}
-
-// AI Definition using Groq
-async function getAIDefinition(
+// Ask the AI to define the term. It's told to use the video's own explanation
+// when the transcript context covers the term, and to fall back to its own
+// general knowledge when the video doesn't explain it — one call handles both
+// cases instead of chaining separate dictionary/Wikipedia lookups first.
+async function getDefinition(
     term: string,
     context: string,
     videoTitle: string
 ): Promise<string> {
-    try {
-        const prompt = `You are a helpful tutor explaining technical terms from a YouTube tutorial.
+    const prompt = `You are a helpful tutor explaining a word or phrase a viewer highlighted in a YouTube tutorial.
 
 Video Title: "${videoTitle}"
-Context: "${context}"
+Transcript excerpt around where the viewer paused: "${context}"
 Term to define: "${term}"
 
-Provide a clear, concise definition of "${term}" in the context of this tutorial. Focus on:
-1. What it means in simple terms
-2. Why it's relevant to the tutorial topic
-3. A brief example if helpful
+Look for a definition within the video's transcript above. If the transcript explains this term, base your answer on that explanation.
+If the transcript does NOT explain it, ignore the transcript and give a clear, accurate general definition from your own knowledge instead.
 
-Keep the response under 150 words.`;
+Keep the response under 150 words. Do not mention whether the video did or didn't cover it — just give the definition directly.`;
 
-        const completion = await getGroqClient().chat.completions.create({
-            messages: [{ role: 'user', content: prompt }],
-            model: 'llama-3.3-70b-versatile',
-            temperature: 0.7,
-            max_tokens: 300
-        });
+    const completion = await getGroqClient().chat.completions.create({
+        messages: [{ role: 'user', content: prompt }],
+        model: 'llama-3.3-70b-versatile',
+        temperature: 0.7,
+        max_tokens: 300
+    });
 
-        return `🤖 **AI Explanation**: ${completion.choices[0]?.message?.content || 'Definition not available.'}`;
-    } catch (error) {
-        console.error('Groq API error:', error);
-        throw error;
-    }
+    return completion.choices[0]?.message?.content?.trim() || 'Definition not available.';
 }
 
 export async function POST(request: NextRequest) {
@@ -93,34 +53,21 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // Try dictionary first (free for all users)
-        const dictDef = await getDictionaryDefinition(term);
-        if (dictDef) {
-            return NextResponse.json({ definition: dictDef });
+        // AI definitions require premium access (or dev mode override)
+        if (developmentMode !== true && userTier !== 'premium') {
+            return NextResponse.json({
+                requiresUpgrade: true,
+                message: 'To access AI-powered definitions for technical terms, please upgrade to a premium plan.'
+            });
         }
 
-        // Try Wikipedia (free for all users)
-        const wikiDef = await getWikipediaDefinition(term);
-        if (wikiDef) {
-            return NextResponse.json({ definition: wikiDef });
-        }
-
-        // AI definition - check development mode OR premium tier
-        if (developmentMode === true || userTier === 'premium') {
-            const aiDef = await getAIDefinition(term, context, videoTitle);
-            return NextResponse.json({ definition: aiDef });
-        }
-
-        // User needs to upgrade for AI definitions
-        return NextResponse.json({
-            requiresUpgrade: true,
-            message: 'To access AI-powered definitions for technical terms, please upgrade to a premium plan.'
-        });
+        const definition = await getDefinition(term, context, videoTitle);
+        return NextResponse.json({ definition });
 
     } catch (error) {
         console.error('Definition API error:', error);
         return NextResponse.json(
-            { error: 'Failed to fetch definition' },
+            { error: 'Failed to fetch definition. Please try again.' },
             { status: 500 }
         );
     }
