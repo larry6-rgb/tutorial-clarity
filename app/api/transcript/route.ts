@@ -518,7 +518,7 @@ export async function getTranscriptData(
     console.log(`[v17] If on datacenter: YouTube is likely blocking the IP`);
 
     return {
-      error: 'Could not fetch transcript. YouTube may be blocking server requests, or this video has no captions.',
+      error: "Could not fetch transcript. This video doesn't have real YouTube captions available — note that on-screen subtitles built into the video image don't count, since this feature needs YouTube's separate caption data. It's also possible YouTube is temporarily blocking server requests.",
       transcript: [],
       source: 'none',
       videoId,
@@ -527,7 +527,7 @@ export async function getTranscriptData(
       availableLanguages: [],
       count: 0,
       blocked: true,
-      details: 'All 3 methods failed. On a home network this usually means the video has no captions. On a cloud server it means YouTube is blocking the IP.',
+      details: 'All 3 methods failed. On a home network this usually means the video has no real YouTube caption track (on-screen/burned-in subtitles do not count). On a cloud server it can also mean YouTube is blocking the IP.',
     };
   }
 
