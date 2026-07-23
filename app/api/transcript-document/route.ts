@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server';
 import { auth } from '@clerk/nextjs/server';
 import { checkPremiumAccess } from '@/lib/subscription';
+import { getTranscriptData } from '@/app/api/transcript/route';
 
 export const dynamic = 'force-dynamic';
 
@@ -25,17 +26,9 @@ export async function POST(request: NextRequest) {
             return NextResponse.json({ error: 'OpenAI API key not configured.' }, { status: 500 });
         }
 
-        // Fetch the transcript from our own endpoint
-        const origin = request.nextUrl.origin;
-        const transcriptRes = await fetch(`${origin}/api/transcript?videoId=${videoId}`, {
-            headers: { Accept: 'application/json' },
-        });
-
-        if (!transcriptRes.ok) {
-            return NextResponse.json({ error: 'Could not retrieve transcript for this video.' }, { status: 422 });
-        }
-
-        const transcriptData = await transcriptRes.json();
+        // Fetch the transcript in-process (not via a self-fetch over HTTPS —
+        // that pattern fails with ERR_SSL_WRONG_VERSION_NUMBER on Railway)
+        const transcriptData = await getTranscriptData(videoId);
         const segments: { text: string; start: number }[] = transcriptData.transcript ?? [];
 
         if (segments.length === 0) {

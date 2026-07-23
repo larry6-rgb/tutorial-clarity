@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { getTranscriptData } from '@/app/api/transcript/route';
 
 export const dynamic = 'force-dynamic';
 
@@ -29,25 +30,19 @@ const transcriptCache = new Map<string, { segments: TranscriptSegment[]; detecte
 const CACHE_TTL = 10 * 60 * 1000; // 10 minutes
 
 /**
- * Fetch transcript from our /api/transcript endpoint.
+ * Fetch transcript in-process via the shared transcript logic — not via a
+ * fetch() back to this app's own public HTTPS URL, which fails with
+ * ERR_SSL_WRONG_VERSION_NUMBER on Railway (found 2026-07-23).
  */
 async function fetchTranscript(
   videoId: string,
   request: NextRequest
 ): Promise<TranscriptSegment[]> {
-  const origin = request.nextUrl.origin;
-  const transcriptUrl = `${origin}/api/transcript?videoId=${videoId}`;
-  console.log(`[process-video] Fetching transcript from: ${transcriptUrl}`);
+  console.log(`[process-video] Fetching transcript for videoId="${videoId}"`);
 
-  const response = await fetch(transcriptUrl, { headers: { 'Accept': 'application/json' } });
-  if (!response.ok) {
-    const errorData = await response.json().catch(() => ({}));
-    throw new Error(errorData.error || `Transcript fetch failed (${response.status})`);
-  }
-
-  const data = await response.json();
-  if (!data.transcript || !Array.isArray(data.transcript)) {
-    throw new Error('Invalid transcript response');
+  const data = await getTranscriptData(videoId);
+  if (!data.transcript || !Array.isArray(data.transcript) || data.transcript.length === 0) {
+    throw new Error(data.error || 'Invalid transcript response');
   }
 
   console.log(`[process-video] Got ${data.transcript.length} segments (language: ${data.language || 'unknown'})`);

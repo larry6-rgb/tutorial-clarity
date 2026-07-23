@@ -441,20 +441,31 @@ async function detectOriginalLanguage(videoId: string): Promise<string | null> {
   }
 }
 
-// ─── Main GET handler ─────────────────────────────────────────────────────────
+// ─── Shared core logic ─────────────────────────────────────────────────────────
+// Exported so other server-side routes (summarize-video, ask-video,
+// transcript-document, process-video) can call this directly in-process
+// instead of doing a fetch() back to this route's own public HTTPS URL —
+// that self-fetch pattern is prone to failing with ERR_SSL_WRONG_VERSION_NUMBER
+// on Railway (found 2026-07-23 debugging a Summary failure). Calling the
+// function directly has identical behavior and can't hit that network bug.
 
-export async function GET(request: NextRequest) {
-  const searchParams = request.nextUrl.searchParams;
-  const videoId = (searchParams.get('videoId') ?? '').trim();
-  const requestedLang = (searchParams.get('lang') ?? '').trim().toLowerCase();
+export interface TranscriptApiResult {
+  transcript: TranscriptSegment[];
+  source: string;
+  videoId: string;
+  language: string;
+  languageSwitched: boolean;
+  availableLanguages: string[];
+  count: number;
+  error?: string;
+  blocked?: boolean;
+  details?: string;
+}
 
-  if (!videoId) {
-    return NextResponse.json(
-      { error: 'Video ID is required', transcript: [] },
-      { status: 400 }
-    );
-  }
-
+export async function getTranscriptData(
+  videoId: string,
+  requestedLang: string = ''
+): Promise<TranscriptApiResult> {
   console.log(`\n${'='.repeat(60)}`);
   console.log(`[v17] TRANSCRIPT REQUEST: videoId="${videoId}", lang="${requestedLang}"`);
   console.log(`[v17] Time: ${new Date().toISOString()}`);
@@ -506,24 +517,18 @@ export async function GET(request: NextRequest) {
     console.log(`[v17] If on home network: check that the video actually has captions on YouTube`);
     console.log(`[v17] If on datacenter: YouTube is likely blocking the IP`);
 
-    return NextResponse.json(
-      {
-        error: 'Could not fetch transcript. YouTube may be blocking server requests, or this video has no captions.',
-        transcript: [],
-        source: 'none',
-        videoId,
-        language: requestedLang,
-        blocked: true,
-        details: 'All 3 methods failed. On a home network this usually means the video has no captions. On a cloud server it means YouTube is blocking the IP.',
-      },
-      {
-        status: 200,
-        headers: {
-          'Cache-Control': 'no-store, no-cache, must-revalidate',
-          'Pragma': 'no-cache',
-        },
-      }
-    );
+    return {
+      error: 'Could not fetch transcript. YouTube may be blocking server requests, or this video has no captions.',
+      transcript: [],
+      source: 'none',
+      videoId,
+      language: requestedLang,
+      languageSwitched: false,
+      availableLanguages: [],
+      count: 0,
+      blocked: true,
+      details: 'All 3 methods failed. On a home network this usually means the video has no captions. On a cloud server it means YouTube is blocking the IP.',
+    };
   }
 
   // ── Success ──
@@ -532,21 +537,37 @@ export async function GET(request: NextRequest) {
 
   console.log(`[v17] ✅ SUCCESS: ${result.segments.length} segments via ${source}, lang="${result.language}"`);
 
-  return NextResponse.json(
-    {
-      transcript: result.segments,
-      source,
-      videoId,
-      language: result.language,
-      languageSwitched: !languageSwitched,
-      availableLanguages: result.availableLanguages || [],
-      count: result.segments.length,
+  return {
+    transcript: result.segments,
+    source,
+    videoId,
+    language: result.language,
+    languageSwitched: !languageSwitched,
+    availableLanguages: result.availableLanguages || [],
+    count: result.segments.length,
+  };
+}
+
+// ─── Main GET handler ─────────────────────────────────────────────────────────
+
+export async function GET(request: NextRequest) {
+  const searchParams = request.nextUrl.searchParams;
+  const videoId = (searchParams.get('videoId') ?? '').trim();
+  const requestedLang = (searchParams.get('lang') ?? '').trim().toLowerCase();
+
+  if (!videoId) {
+    return NextResponse.json(
+      { error: 'Video ID is required', transcript: [] },
+      { status: 400 }
+    );
+  }
+
+  const data = await getTranscriptData(videoId, requestedLang);
+
+  return NextResponse.json(data, {
+    headers: {
+      'Cache-Control': 'no-store, no-cache, must-revalidate',
+      'Pragma': 'no-cache',
     },
-    {
-      headers: {
-        'Cache-Control': 'no-store, no-cache, must-revalidate',
-        'Pragma': 'no-cache',
-      },
-    }
-  );
+  });
 }
