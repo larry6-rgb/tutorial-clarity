@@ -8,9 +8,9 @@
         "curl -L https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o .railpack-bin/yt-dlp",
         "chmod +x .railpack-bin/yt-dlp"
       ],
-      "deployOutputs": {
-        "include": [".railpack-bin"]
-      }
+      "deployOutputs": [
+        { "include": [".railpack-bin"] }
+      ]
     }
   },
   "deploy": {
