@@ -3,6 +3,7 @@
   "buildAptPackages": ["curl", "ca-certificates"],
   "steps": {
     "yt-dlp-install": {
+      "inputs": [{ "step": "build" }],
       "commands": [
         "mkdir -p .railpack-bin",
         "curl -fL --retry 3 --retry-delay 2 https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o .railpack-bin/yt-dlp",
