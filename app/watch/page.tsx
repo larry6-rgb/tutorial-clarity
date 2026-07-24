@@ -2,7 +2,7 @@
 
 import { useSearchParams, useRouter } from 'next/navigation';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
-import { ClarifyAudioPanel, SpeakerConfig } from '../components/ClarifyAudioPanel';
+import { ClarifyAudioPanel } from '../components/ClarifyAudioPanel';
 
 interface SavedVideo {
     id: string;
@@ -163,15 +163,6 @@ function WatchPageContent() {
         return 1; // Default: 1x normal speed
     });
 
-    // Speaker voice configuration — persisted per videoId to localStorage
-    // NOTE: initialized empty to avoid hydration mismatch, loaded in useEffect below
-    const SPEAKER_CONFIG_KEY = `speaker-config-${videoId}`;
-    const [speakerConfig, setSpeakerConfig] = useState<SpeakerConfig>({});
-    const [detectedSpeakers, setDetectedSpeakers] = useState<string[]>([]);
-    const [speakerFirstSeen, setSpeakerFirstSeen] = useState<Record<string, number>>({});
-    const [speakerStateHydrated, setSpeakerStateHydrated] = useState(false);
-    const [hasUnsavedVoiceConfig, setHasUnsavedVoiceConfig] = useState(false);
-    const [isRegenerating, setIsRegenerating] = useState(false);
 
     // ── SUMMARY STATE ──
     const [summaryText, setSummaryText] = useState<string>('');
@@ -604,20 +595,7 @@ function WatchPageContent() {
     }, []);
 
     // ── Ref to ClarifyAudioPanel handlers (for spacebar + video sync control) ──
-    const clarifyHandlersRef = useRef<{ play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[]; testAudioBlobs: () => void; hasAudioBlobs: () => boolean } | null>(null);
-    // Captures auto-detected genders from the onSpeakersDetected callback so the button handler can apply them
-    const detectedGenderMapRef = useRef<Record<string, 'male' | 'female'>>({});
-    const [assemblyAILoading, setAssemblyAILoading] = useState(false);
-    const [detectionRun, setDetectionRun] = useState(false);
-    // The backend detection pipeline (yt-dlp + ffmpeg + AssemblyAI) runs on blocking
-    // execSync calls and can't actually be interrupted once started. This flag lets
-    // the UI at least discard stale results and avoid reviving playback if the user
-    // hit Stop while a detection request was still in flight. The ref is what the
-    // async handler checks (avoids stale-closure issues after the await); the state
-    // twin is just so the warning banner below can re-render.
-    const detectionStoppedRef = useRef(false);
-    const [detectionStopped, setDetectionStopped] = useState(false);
-    const [unknownSpeakerPrompt, setUnknownSpeakerPrompt] = useState<{ speakerId: string; assign: (gender: 'male' | 'female' | null) => void } | null>(null);
+    const clarifyHandlersRef = useRef<{ play: () => void; pause: () => void; isPlaying: () => boolean; testAudioBlobs: () => void; hasAudioBlobs: () => boolean } | null>(null);
 
     // ── Stable callbacks for ClarifyAudioPanel (prevent re-render unmute bug) ──
     const fmtTime = (sec: number) => { const m = Math.floor(sec / 60); const s = Math.floor(sec % 60); return `${m}:${s.toString().padStart(2, '0')}`; };
@@ -644,18 +622,9 @@ function WatchPageContent() {
         setTranscriptLanguage(active ? language : '');
     }, []);
 
-    const handleClarifyStop = useCallback(() => {
-        detectionStoppedRef.current = true;
-        setDetectionStopped(true);
-    }, []);
-
-    const handleClarifyRegisterHandlers = useCallback((handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; regenerateVoices: (config?: SpeakerConfig) => Promise<void> | void; detectWithAssemblyAI: () => Promise<string[]>; manualDetectSpeakers: () => string[]; testAudioBlobs: () => void; hasAudioBlobs: () => boolean }) => {
+    const handleClarifyRegisterHandlers = useCallback((handlers: { play: () => void; pause: () => void; isPlaying: () => boolean; testAudioBlobs: () => void; hasAudioBlobs: () => boolean }) => {
         clarifyHandlersRef.current = handlers;
-        console.log('[watch] ClarifyAudioPanel handlers registered (incl. regenerateVoices, detectWithAssemblyAI, manualDetectSpeakers, testAudioBlobs)');
-    }, []);
-
-    const handleUnknownSpeaker = useCallback((speakerId: string, assign: (gender: 'male' | 'female' | null) => void) => {
-        setUnknownSpeakerPrompt({ speakerId, assign });
+        console.log('[watch] ClarifyAudioPanel handlers registered');
     }, []);
 
     // Load saved videos — API file is the source of truth (written by extension),
@@ -1065,7 +1034,7 @@ function WatchPageContent() {
             const sectionMap: Record<string, string> = {
                 'S': 'saved',
                 'A': 'clarify',
-                'V': 'clarify',   // Speaker Voices lives inside the Clarify Audio section
+                'V': 'clarify',   // alternate shortcut into the Clarify Audio section
                 'T': 'scroll',
                 'Z': 'zoom',
                 'R': 'resume',
@@ -1535,56 +1504,6 @@ function WatchPageContent() {
         try { localStorage.setItem(AI_SPEED_KEY, String(aiPlaybackSpeed)); } catch {}
     }, [aiPlaybackSpeed]);
 
-    // Hydrate speaker state from localStorage AFTER mount (avoids SSR mismatch)
-    useEffect(() => {
-        // Do NOT restore speakerConfig — user must always assign genders fresh after detection
-        // Load detected speakers list only (so the panel shows the right speakers)
-        try {
-            const savedSpeakers = localStorage.getItem(`detected-speakers-${videoId}`);
-            if (savedSpeakers) {
-                const parsed = JSON.parse(savedSpeakers);
-                console.log('[speaker-ui] Hydrated detectedSpeakers from localStorage:', parsed);
-                setDetectedSpeakers(parsed);
-            }
-        } catch {}
-        setSpeakerStateHydrated(true);
-    }, [videoId]);
-
-    // Save speaker config to localStorage when it changes (skip initial empty state)
-    useEffect(() => {
-        if (!speakerStateHydrated) return;
-        if (Object.keys(speakerConfig).length > 0) {
-            try { localStorage.setItem(`speaker-config-${videoId}`, JSON.stringify(speakerConfig)); } catch {}
-            console.log('[speaker-config] Saved to localStorage:', speakerConfig);
-        }
-    }, [speakerConfig, videoId, speakerStateHydrated]);
-
-
-    // Debug: track detectedSpeakers state changes
-    useEffect(() => {
-        console.log(`[speaker-ui] detectedSpeakers changed -> ${detectedSpeakers.length} speakers:`, detectedSpeakers);
-        console.log(`[speaker-ui] UI visible: ${detectedSpeakers.length > 1}`);
-    }, [detectedSpeakers]);
-
-    // Callbacks for speaker config — only GROW the list, never shrink
-    const handleSpeakersDetected = useCallback((speakers: string[], firstSeenAt?: Record<string, number>, genderMap?: Record<string, 'male' | 'female'>) => {
-        // Store auto-detected genders in ref so button handler can apply them
-        detectedGenderMapRef.current = genderMap || {};
-        console.log('[speaker-ui] Auto-detected genders stored:', genderMap);
-        setSpeakerConfig({});
-        setHasUnsavedVoiceConfig(false);
-        try { localStorage.removeItem(`speaker-config-${videoId}`); } catch {}
-
-        if (firstSeenAt) setSpeakerFirstSeen(firstSeenAt);
-
-        setDetectedSpeakers(prev => {
-            const merged = [...new Set([...prev, ...speakers])].sort();
-            console.log(`[speaker-ui] Speakers detected: ${speakers.length} new, ${merged.length} total`, merged);
-            try { localStorage.setItem(`detected-speakers-${videoId}`, JSON.stringify(merged)); } catch {}
-            return merged;
-        });
-    }, [videoId]);
-
     // Reset zoom and spyglass when navigating to a new video
     useEffect(() => {
         setZoomBase(null);
@@ -2049,50 +1968,6 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 340 : 12
                       />
                     </div>
                   </div>
-                )}
-
-                {/* ── UNKNOWN SPEAKER POPUP ── */}
-                {unknownSpeakerPrompt && (
-                    <div style={{
-                        position: 'fixed', inset: 0, zIndex: 99999,
-                        display: 'flex', alignItems: 'center', justifyContent: 'center',
-                        backgroundColor: 'rgba(0,0,0,0.7)',
-                    }}>
-                        <div style={{
-                            backgroundColor: '#1e293b', borderRadius: '12px',
-                            padding: '24px', maxWidth: '340px', width: '100%',
-                            border: '1px solid #6366f1', boxShadow: '0 8px 32px rgba(0,0,0,0.5)',
-                            textAlign: 'center',
-                        }}>
-                            <div style={{ fontSize: '28px', marginBottom: '10px' }}>🎤</div>
-                            <div style={{ fontSize: '15px', fontWeight: 'bold', color: '#e2e8f0', marginBottom: '4px' }}>
-                                New Speaker Detected
-                            </div>
-                            <div style={{ fontSize: '12px', color: '#6366f1', fontWeight: 'bold', marginBottom: '8px' }}>
-                                {`Speaker ${parseInt(unknownSpeakerPrompt.speakerId.replace('speaker_', ''))}`} is speaking right now
-                            </div>
-                            <div style={{ fontSize: '13px', color: '#94a3b8', marginBottom: '20px', lineHeight: '1.5' }}>
-                                Would you like to assign them a gender going forward?
-                            </div>
-                            <div style={{ display: 'flex', gap: '10px', justifyContent: 'center' }}>
-                                <button onClick={() => { unknownSpeakerPrompt.assign('male'); setUnknownSpeakerPrompt(null); }} style={{
-                                    padding: '10px 20px', backgroundColor: '#3b82f6', color: 'white',
-                                    border: 'none', borderRadius: '8px', cursor: 'pointer',
-                                    fontSize: '14px', fontWeight: 'bold',
-                                }}>♂ Male</button>
-                                <button onClick={() => { unknownSpeakerPrompt.assign('female'); setUnknownSpeakerPrompt(null); }} style={{
-                                    padding: '10px 20px', backgroundColor: '#ec4899', color: 'white',
-                                    border: 'none', borderRadius: '8px', cursor: 'pointer',
-                                    fontSize: '14px', fontWeight: 'bold',
-                                }}>♀ Female</button>
-                                <button onClick={() => { unknownSpeakerPrompt.assign(null); setUnknownSpeakerPrompt(null); }} style={{
-                                    padding: '10px 20px', backgroundColor: '#475569', color: '#e2e8f0',
-                                    border: 'none', borderRadius: '8px', cursor: 'pointer',
-                                    fontSize: '14px',
-                                }}>Skip</button>
-                            </div>
-                        </div>
-                    </div>
                 )}
 
                 {definitionPopup && (() => {
@@ -2909,85 +2784,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 340 : 12
                                             Clearer speech, and translation into 12 languages (subtitles or full AI voice) — pick your language in Processing Options below.
                                         </p>
 
-                                        {/* ─── STEP 1: DETECT SPEAKERS ─── */}
-                                        <div style={{ margin: '10px 8px' }}>
-                                            <button
-                                                onClick={async () => {
-                                                    if (!clarifyHandlersRef.current?.detectWithAssemblyAI) return;
-                                                    detectionStoppedRef.current = false;
-                                                    setDetectionStopped(false);
-                                                    setAssemblyAILoading(true);
-                                                    try {
-                                                        // Detection also fires onSpeakersDetected which sets detectedGenderMapRef
-                                                        const speakers = await clarifyHandlersRef.current.detectWithAssemblyAI();
-                                                        if (detectionStoppedRef.current) {
-                                                            // User hit Stop while this was still running server-side —
-                                                            // discard the (now stale) results instead of reviving playback.
-                                                            console.log('[detect-speakers] Discarding results — user stopped during detection');
-                                                            return;
-                                                        }
-                                                        if (speakers && speakers.length >= 1) {
-                                                            setDetectedSpeakers(speakers);
-
-                                                            // Build config from auto-detected genders and apply immediately
-                                                            const genderMap = detectedGenderMapRef.current;
-                                                            const fullConfig: SpeakerConfig = {};
-                                                            speakers.forEach(sid => {
-                                                                if (genderMap[sid]) fullConfig[sid] = genderMap[sid];
-                                                            });
-                                                            setSpeakerConfig(fullConfig);
-                                                            try { localStorage.setItem(`speaker-config-${videoId}`, JSON.stringify(fullConfig)); } catch {}
-                                                            console.log('[auto-apply] Applying gender config:', fullConfig);
-
-                                                            setIsRegenerating(true);
-                                                            if (clarifyHandlersRef.current?.regenerateVoices) {
-                                                                await clarifyHandlersRef.current.regenerateVoices(fullConfig);
-                                                            }
-                                                            setIsRegenerating(false);
-                                                            setDetectionRun(true);
-                                                        }
-                                                    } catch (err: any) {
-                                                        alert(`Speaker detection failed: ${err.message || 'Unknown error'}`);
-                                                        setIsRegenerating(false);
-                                                    } finally {
-                                                        setAssemblyAILoading(false);
-                                                    }
-                                                }}
-                                                disabled={assemblyAILoading}
-                                                style={{
-                                                    width: '100%', padding: '8px 12px',
-                                                    backgroundColor: assemblyAILoading ? '#475569' : detectionRun ? '#1e3a5f' : '#2563eb',
-                                                    color: detectionRun && !assemblyAILoading ? '#64748b' : 'white',
-                                                    border: detectionRun && !assemblyAILoading ? '1px solid #334155' : 'none',
-                                                    borderRadius: '6px',
-                                                    fontSize: '12px', fontWeight: 'bold',
-                                                    cursor: assemblyAILoading ? 'wait' : 'pointer',
-                                                    opacity: assemblyAILoading ? 0.7 : 1,
-                                                }}
-                                            >
-                                                {assemblyAILoading ? (
-                                                    <span style={{ display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px' }}>
-                                                        <svg width="16" height="16" viewBox="0 0 24 24" fill="none" xmlns="http://www.w3.org/2000/svg" style={{ animation: 'spin 1s linear infinite' }}>
-                                                            <circle cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" opacity="0.25" />
-                                                            <path d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" fill="currentColor" opacity="0.75" />
-                                                        </svg>
-                                                        {detectionStopped ? 'Finishing previous attempt…' : 'Detecting Speakers…'}
-                                                    </span>
-                                                ) : '🎯 Detect Speakers'}
-                                            </button>
-                                            {assemblyAILoading && detectionStopped && (
-                                                <div style={{
-                                                    marginTop: '6px', padding: '6px 8px',
-                                                    backgroundColor: 'rgba(217,119,6,0.15)', border: '1px solid #d97706',
-                                                    borderRadius: '6px', fontSize: '10px', color: '#fbbf24', textAlign: 'center',
-                                                    lineHeight: '1.4',
-                                                }}>
-                                                    {'⚠️'} Stopped — but the previous detection is still finishing in the background and can't be interrupted. It can take up to 1–2 minutes before you can start a new attempt.
-                                                </div>
-                                            )}
-                                        </div>
-
-                                        {/* ─── STEP 2: PLAY ─── */}
+                                        {/* ─── PLAY ─── */}
                                         {ytMuteStatus !== 'unmuted' && (
                                             <div style={{
                                                 padding: '6px 12px',
@@ -3017,18 +2814,11 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 340 : 12
                                             videoId={videoId}
                                             currentTime={currentTime}
                                             aiPlaybackSpeed={aiPlaybackSpeed}
-                                            speakerConfig={Object.keys(speakerConfig).length > 0 ? speakerConfig : undefined}
-                                            onSpeakersDetected={handleSpeakersDetected}
                                             onSubtitleChange={handleClarifySubtitle}
                                             onMuteYouTube={robustMuteYouTube}
                                             onPlayYouTube={handleClarifyPlayYouTube}
                                             onAiActiveChange={handleClarifyActiveChange}
-                                            onStop={handleClarifyStop}
                                             registerHandlers={handleClarifyRegisterHandlers}
-                                            detectionRun={detectionRun}
-                                            detectionInProgress={assemblyAILoading}
-                                            readyToPlay={detectionRun && !assemblyAILoading && !isRegenerating}
-                                            onUnknownSpeaker={handleUnknownSpeaker}
                                         />
 
                                 </div>
@@ -3391,7 +3181,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 340 : 12
                                             { key: 'Caps Lock  Caps Lock', label: 'Save Video (extension — from YouTube)' },
                                             { key: 'S', label: 'Save & Open Saved Videos', note: 'Auto-saves only via the extension on YouTube; on this page it just opens the section.' },
                                             { key: 'A', label: 'Clarify Audio' },
-                                            { key: 'V', label: 'Speaker Voices' },
+                                            { key: 'V', label: 'Clarify Audio (alt)' },
                                             { key: 'T', label: 'Scroll Transcript' },
                                             { key: 'Z', label: 'Zoom', note: 'Video must already be paused to start drawing a zoom box — otherwise this just opens the instructions.' },
                                             { key: 'Space (in Spyglass)', label: '🕵️ Exit Spyglass & Resume' },
