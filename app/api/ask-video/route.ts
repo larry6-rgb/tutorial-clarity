@@ -28,7 +28,9 @@ export async function POST(request: NextRequest) {
 
         // Fetch the transcript in-process (not via a self-fetch over HTTPS —
         // that pattern fails with ERR_SSL_WRONG_VERSION_NUMBER on Railway)
-        const transcriptData = await getTranscriptData(videoId);
+        // Already verified premium/trial access above — safe to allow the paid
+        // Whisper fallback if this video has no YouTube caption track.
+        const transcriptData = await getTranscriptData(videoId, '', true);
         const segments: { text: string }[] = transcriptData.transcript ?? [];
 
         if (segments.length === 0) {

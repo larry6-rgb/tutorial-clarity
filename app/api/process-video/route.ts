@@ -1,5 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server';
-import { getTranscriptData } from '@/app/api/transcript/route';
+import { getTranscriptData, canUseAudioFallback } from '@/app/api/transcript/route';
 
 export const dynamic = 'force-dynamic';
 
@@ -40,7 +40,10 @@ async function fetchTranscript(
 ): Promise<TranscriptSegment[]> {
   console.log(`[process-video] Fetching transcript for videoId="${videoId}"`);
 
-  const data = await getTranscriptData(videoId);
+  // Whisper audio-transcription fallback costs real money — only offer it to
+  // logged-in trial/paid users, same gate the other AI-transcript routes use.
+  const allowAudioFallback = await canUseAudioFallback();
+  const data = await getTranscriptData(videoId, '', allowAudioFallback);
   if (!data.transcript || !Array.isArray(data.transcript) || data.transcript.length === 0) {
     throw new Error(data.error || 'Invalid transcript response');
   }

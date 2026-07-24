@@ -1,4 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server';
+import { execSync } from 'child_process';
+import { readFile, stat, unlink } from 'fs/promises';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { randomUUID } from 'crypto';
+import { auth } from '@clerk/nextjs/server';
+import { checkPremiumAccess } from '@/lib/subscription';
 
 // Prevent Next.js from caching this route
 export const dynamic = 'force-dynamic';
@@ -30,13 +37,17 @@ export const dynamic = 'force-dynamic';
  * 4. Available languages: transcriptInfo.languages (string[])
  *    Selected language: transcriptInfo.selectedLanguage (string)
  *
- * THREE-METHOD FALLBACK:
+ * FOUR-METHOD FALLBACK:
  * ─────────────────────
  * Method 1: youtube-transcript (npm) — fastest, simplest
  * Method 2: youtubei.js v17 — more detailed, language switching
- * Method 3: Direct InnerTube API fetch — last resort
+ * Method 3: Direct InnerTube API fetch — last resort for a real caption track
+ * Method 4: Download audio (yt-dlp) + transcribe with OpenAI Whisper — for
+ *           videos that genuinely have no YouTube caption track at all
+ *           (e.g. only burned-in/on-screen subtitles). Added 2026-07-24.
  *
- * If ALL fail, it's YouTube blocking the IP (datacenter vs residential).
+ * If Methods 1-3 all fail, it usually means the video has no real caption
+ * track — Method 4 is the actual fix for that case, not IP blocking.
  * =============================================================================
  */
 
@@ -441,6 +452,187 @@ async function detectOriginalLanguage(videoId: string): Promise<string | null> {
   }
 }
 
+// ─── Helper: find yt-dlp binary ────────────────────────────────────────────────
+// Same binary the old speaker-detection route used (see railpack.json — a custom
+// build step downloads yt-dlp's official GitHub release binary; ffmpeg comes from
+// apt). Proven working on Railway as of 2026-07-23.
+
+function findYtDlp(): string | null {
+  const candidates = [
+    'yt-dlp', 'yt-dlp.exe',
+    '/usr/local/bin/yt-dlp', '/usr/bin/yt-dlp',
+    'C:\\ProgramData\\chocolatey\\bin\\yt-dlp.exe',
+  ];
+  for (const cmd of candidates) {
+    try {
+      execSync(`"${cmd}" --version`, { encoding: 'utf8', timeout: 5000, stdio: ['pipe', 'pipe', 'pipe'] });
+      return cmd;
+    } catch { /* try next */ }
+  }
+  return null;
+}
+
+// Whisper's verbose_json returns full language names ("english"), not the
+// 2-letter codes the rest of this file uses — normalize the common ones so
+// callers (sourceLanguage display, "auto" detection) see a consistent shape.
+const WHISPER_LANG_CODES: Record<string, string> = {
+  english: 'en', german: 'de', spanish: 'es', french: 'fr', italian: 'it',
+  portuguese: 'pt', japanese: 'ja', korean: 'ko', chinese: 'zh',
+};
+
+// OpenAI's real limit is 25MB — stay a little under it.
+const WHISPER_MAX_BYTES = 24 * 1024 * 1024;
+
+// ─── Helper: is the current request allowed to trigger the paid Whisper fallback? ───
+// Soft check — never throws, just returns false for anonymous/free callers so
+// this stays a "skip the expensive step" decision, not a hard block on the
+// whole route. Trial counts as allowed (matches checkPremiumAccess elsewhere).
+export async function canUseAudioFallback(): Promise<boolean> {
+  try {
+    const { userId } = await auth();
+    if (!userId) return false;
+    const access = await checkPremiumAccess(userId);
+    return access.allowed;
+  } catch {
+    return false;
+  }
+}
+
+// ─── Method 4: download audio directly and transcribe with Whisper ────────────
+// Only reached when Methods 1-3 all failed to find a real YouTube caption
+// track — the actual gap, not a transient IP block. Most common on videos
+// where the creator burned subtitles into the picture instead of using
+// YouTube's separate caption feature (confirmed pattern, see project memory
+// 2026-07-23). This works regardless of whether YouTube ever had captions,
+// since it transcribes the real audio instead of asking YouTube for text.
+async function fetchWithWhisper(
+  videoId: string
+): Promise<{ segments: TranscriptSegment[]; language: string } | null> {
+  const apiKey = process.env.OPENAI_API_KEY;
+  if (!apiKey) {
+    console.log('[v17] Method 4: no OPENAI_API_KEY — skipping Whisper fallback');
+    return null;
+  }
+
+  const ytdlpPath = findYtDlp();
+  if (!ytdlpPath) {
+    console.log('[v17] Method 4: yt-dlp not found — skipping Whisper fallback');
+    return null;
+  }
+
+  const tempFileName = `whisper_${videoId}_${randomUUID()}`;
+  const tempFileTemplate = join(tmpdir(), tempFileName + '.%(ext)s');
+  const tempFileGlob = join(tmpdir(), tempFileName + '.*');
+  const youtubeUrl = `https://www.youtube.com/watch?v=${videoId}`;
+  let audioPath: string | null = null;
+
+  try {
+    console.log('[v17] Method 4: downloading audio via yt-dlp...');
+    // Not every video has a separate audio-only stream — try that first (fast,
+    // small), then fall back to downloading the best available stream and
+    // extracting audio from it. audio-quality 7 (~96kbps mp3) keeps file size
+    // down for Whisper's 25MB cap while staying plenty clear for speech.
+    const formatStrategies = [
+      { label: 'bestaudio', fmt: 'bestaudio' },
+      { label: 'best+extract', fmt: 'bestaudio*/best' },
+    ];
+    let downloadSuccess = false;
+    let lastDlError = '';
+    for (const strategy of formatStrategies) {
+      try {
+        execSync(
+          `"${ytdlpPath}" -f "${strategy.fmt}" --extract-audio --audio-format mp3 --audio-quality 7 --no-playlist --no-warnings -o "${tempFileTemplate}" "${youtubeUrl}"`,
+          { encoding: 'utf8', timeout: 180000, maxBuffer: 5 * 1024 * 1024, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
+        );
+        downloadSuccess = true;
+        break;
+      } catch (dlErr: any) {
+        lastDlError = dlErr.stderr?.toString() || dlErr.message || '';
+        console.log(`[v17] Method 4: strategy [${strategy.label}] failed: ${lastDlError.substring(0, 200)}`);
+        try {
+          const cleanCmd = process.platform === 'win32'
+            ? `del /q "${join(tmpdir(), tempFileName)}.*" 2>nul`
+            : `rm -f ${tempFileGlob} 2>/dev/null`;
+          execSync(cleanCmd, { stdio: 'pipe', timeout: 5000 });
+        } catch { /* ignore cleanup errors */ }
+      }
+    }
+    if (!downloadSuccess) {
+      console.log(`[v17] Method 4: yt-dlp download failed on all strategies: ${lastDlError.substring(0, 200)}`);
+      return null;
+    }
+
+    const findCmd = process.platform === 'win32'
+      ? `dir /b "${join(tmpdir(), tempFileName)}.*"`
+      : `ls -1 ${tempFileGlob} 2>/dev/null`;
+    const found = execSync(findCmd, {
+      encoding: 'utf8', timeout: 5000,
+      cwd: process.platform === 'win32' ? tmpdir() : undefined,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    }).trim().split('\n').filter(Boolean);
+
+    if (found.length === 0) {
+      console.log('[v17] Method 4: yt-dlp completed but no audio file found');
+      return null;
+    }
+    audioPath = process.platform === 'win32' ? join(tmpdir(), found[0].trim()) : found[0].trim();
+
+    const stats = await stat(audioPath);
+    const sizeMB = stats.size / 1024 / 1024;
+    console.log(`[v17] Method 4: downloaded ${sizeMB.toFixed(2)}MB`);
+    if (stats.size > WHISPER_MAX_BYTES) {
+      console.log(`[v17] Method 4: audio too large for Whisper (${sizeMB.toFixed(1)}MB > 24MB) — video too long for this fallback`);
+      return null;
+    }
+
+    console.log('[v17] Method 4: transcribing with Whisper...');
+    const fileBuffer = await readFile(audioPath);
+    const form = new FormData();
+    form.append('file', new Blob([fileBuffer], { type: 'audio/mpeg' }), 'audio.mp3');
+    form.append('model', 'whisper-1');
+    form.append('response_format', 'verbose_json');
+
+    const whisperRes = await fetch('https://api.openai.com/v1/audio/transcriptions', {
+      method: 'POST',
+      headers: { 'Authorization': `Bearer ${apiKey}` },
+      body: form,
+    });
+
+    if (!whisperRes.ok) {
+      const errBody = await whisperRes.text();
+      console.log(`[v17] Method 4: Whisper API failed ${whisperRes.status}: ${errBody.substring(0, 200)}`);
+      return null;
+    }
+
+    const data = await whisperRes.json();
+    const rawSegments: any[] = data.segments || [];
+    const segments: TranscriptSegment[] = rawSegments
+      .map((s: any) => ({
+        text: (s.text || '').trim(),
+        start: s.start || 0,
+        duration: Math.max(0, (s.end || 0) - (s.start || 0)),
+      }))
+      .filter((s: TranscriptSegment) => s.text.length > 0);
+
+    if (segments.length === 0) {
+      console.log('[v17] Method 4: Whisper returned no usable segments');
+      return null;
+    }
+
+    const detectedLang = (data.language || '').toLowerCase();
+    const language = WHISPER_LANG_CODES[detectedLang] || detectedLang || 'unknown';
+    console.log(`[v17] Method 4 ✅ ${segments.length} segments via Whisper, detected language="${language}"`);
+    return { segments, language };
+  } catch (err: any) {
+    console.error(`[v17] Method 4 FAILED: ${err.message?.substring(0, 200)}`);
+    return null;
+  } finally {
+    if (audioPath) {
+      try { await unlink(audioPath); } catch { /* best-effort cleanup */ }
+    }
+  }
+}
+
 // ─── Shared core logic ─────────────────────────────────────────────────────────
 // Exported so other server-side routes (summarize-video, ask-video,
 // transcript-document, process-video) can call this directly in-process
@@ -464,7 +656,8 @@ export interface TranscriptApiResult {
 
 export async function getTranscriptData(
   videoId: string,
-  requestedLang: string = ''
+  requestedLang: string = '',
+  allowAudioFallback: boolean = false
 ): Promise<TranscriptApiResult> {
   console.log(`\n${'='.repeat(60)}`);
   console.log(`[v17] TRANSCRIPT REQUEST: videoId="${videoId}", lang="${requestedLang}"`);
@@ -511,14 +704,34 @@ export async function getTranscriptData(
     }
   }
 
+  // ── Method 4: download audio + Whisper transcription (last resort) ──
+  // Costs real money (yt-dlp download + Whisper API) — only run it for callers
+  // that have already confirmed the requester is logged in and on a trial/paid
+  // plan. Free/anonymous callers still get Methods 1-3 for free, they just
+  // don't get this fallback when a video genuinely has no caption track.
+  if (!result && allowAudioFallback) {
+    console.log(`[v17] Method 3 failed, trying Method 4 (Whisper audio transcription)...`);
+    const whisperResult = await fetchWithWhisper(videoId);
+    if (whisperResult) {
+      result = whisperResult;
+      source = 'whisper-audio';
+    }
+  } else if (!result) {
+    console.log(`[v17] Method 3 failed — skipping Method 4 (Whisper): caller not authorized for paid fallback`);
+  }
+
   // ── All methods failed ──
   if (!result || result.segments.length === 0) {
     console.log(`[v17] ❌ ALL METHODS FAILED for videoId="${videoId}"`);
     console.log(`[v17] If on home network: check that the video actually has captions on YouTube`);
     console.log(`[v17] If on datacenter: YouTube is likely blocking the IP`);
 
+    const audioFallbackNote = allowAudioFallback
+      ? "automatic audio transcription also didn't succeed — possibly because the video is too long, or YouTube is temporarily blocking server requests."
+      : 'automatic audio transcription is available on trial/paid plans and may work for this video — sign in or upgrade to try it.';
+
     return {
-      error: "Could not fetch transcript. This video doesn't have real YouTube captions available — note that on-screen subtitles built into the video image don't count, since this feature needs YouTube's separate caption data. It's also possible YouTube is temporarily blocking server requests.",
+      error: `Could not fetch or generate a transcript for this video. It has no real YouTube caption track (on-screen/burned-in subtitles don't count), and ${audioFallbackNote}`,
       transcript: [],
       source: 'none',
       videoId,
@@ -527,7 +740,9 @@ export async function getTranscriptData(
       availableLanguages: [],
       count: 0,
       blocked: true,
-      details: 'All 3 methods failed. On a home network this usually means the video has no real YouTube caption track (on-screen/burned-in subtitles do not count). On a cloud server it can also mean YouTube is blocking the IP.',
+      details: allowAudioFallback
+        ? 'All 4 methods failed (3 caption-track methods + Whisper audio transcription fallback). On a home network this usually means the video has no real caption track and is also too long/unavailable for the audio fallback. On a cloud server it can also mean YouTube is blocking the IP.'
+        : '3 caption-track methods failed; the Whisper audio-transcription fallback was skipped (not attempted) because the caller is not on a trial/paid plan. On a home network this usually means the video has no real caption track. On a cloud server it can also mean YouTube is blocking the IP.',
     };
   }
 
@@ -562,7 +777,12 @@ export async function GET(request: NextRequest) {
     );
   }
 
-  const data = await getTranscriptData(videoId, requestedLang);
+  // Soft check — this route stays public (it backs the free Scroll Transcript
+  // feature too), so an anonymous/free caller still gets a normal response,
+  // just without the paid Whisper fallback if the video has no captions.
+  const allowAudioFallback = await canUseAudioFallback();
+
+  const data = await getTranscriptData(videoId, requestedLang, allowAudioFallback);
 
   return NextResponse.json(data, {
     headers: {
