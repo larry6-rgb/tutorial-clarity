@@ -7,7 +7,7 @@
       "commands": [
         "mkdir -p .railpack-bin",
         "curl -fL --retry 3 --retry-delay 2 https://github.com/yt-dlp/yt-dlp/releases/latest/download/yt-dlp -o .railpack-bin/yt-dlp",
-        "test $(stat -c%s .railpack-bin/yt-dlp) -gt 1000000 || { echo \"ERROR: yt-dlp download looks corrupted/truncated ($(stat -c%s .railpack-bin/yt-dlp) bytes, expected several MB) - failing build instead of shipping a broken binary\"; exit 1; }",
+        "SIZE=$(stat -c%s .railpack-bin/yt-dlp); if [ $SIZE -lt 1000000 ]; then echo ERROR: yt-dlp download too small - only $SIZE bytes, expected several MB - failing build instead of shipping a broken binary; exit 1; fi",
         "chmod +x .railpack-bin/yt-dlp"
       ],
       "deployOutputs": [
