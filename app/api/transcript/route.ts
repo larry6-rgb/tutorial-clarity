@@ -532,6 +532,13 @@ async function fetchWithWhisper(
     // small), then fall back to downloading the best available stream and
     // extracting audio from it. audio-quality 7 (~96kbps mp3) keeps file size
     // down for Whisper's 25MB cap while staying plenty clear for speech.
+    //
+    // --extractor-args player_client=android: makes yt-dlp present itself as
+    // YouTube's Android app API instead of the web player. Cloud/datacenter
+    // IPs (like Railway's) get hit with "Sign in to confirm you're not a bot"
+    // on the web client — the Android client path is subject to much lighter
+    // bot-checking and is the community-standard fix for this exact error
+    // (confirmed 2026-07-24 after that error showed up in Railway's logs).
     const formatStrategies = [
       { label: 'bestaudio', fmt: 'bestaudio' },
       { label: 'best+extract', fmt: 'bestaudio*/best' },
@@ -541,7 +548,7 @@ async function fetchWithWhisper(
     for (const strategy of formatStrategies) {
       try {
         execSync(
-          `"${ytdlpPath}" -f "${strategy.fmt}" --extract-audio --audio-format mp3 --audio-quality 7 --no-playlist --no-warnings -o "${tempFileTemplate}" "${youtubeUrl}"`,
+          `"${ytdlpPath}" -f "${strategy.fmt}" --extractor-args "youtube:player_client=android" --extract-audio --audio-format mp3 --audio-quality 7 --no-playlist --no-warnings -o "${tempFileTemplate}" "${youtubeUrl}"`,
           { encoding: 'utf8', timeout: 180000, maxBuffer: 5 * 1024 * 1024, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
         );
         downloadSuccess = true;
