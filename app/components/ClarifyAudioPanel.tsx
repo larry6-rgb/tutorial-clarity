@@ -109,6 +109,11 @@ export function ClarifyAudioPanel({
   const [currentSegIdx, setCurrentSegIdx] = useState(-1);
   const [generatedCount, setGeneratedCount] = useState(0);
   const [useClientTTS, setUseClientTTS] = useState(false);
+  // Buffer readiness is checked against the segments actually needed to start
+  // playback (from wherever the video currently is), not always segment 0 —
+  // see bufferStartIdxRef below. This state drives the "X/Y ready" UI so it
+  // reflects the real gate instead of a misleading total generation count.
+  const [bufferStatus, setBufferStatus] = useState({ ready: 0, threshold: BUFFER_THRESHOLD });
 
   const [volume, setVolume] = useState(100);
   const [isMuted, setIsMuted] = useState(false);
@@ -120,6 +125,10 @@ export function ClarifyAudioPanel({
   const cacheRef = useRef<AudioCache>({});
   const genSetRef = useRef<Set<number>>(new Set());
   const playingIdxRef = useRef(-1);
+  // Segment index the video was actually at when the user hit Play — the
+  // buffer must fill THIS segment forward, not always from 0 (the video is
+  // rarely still at time 0 by the time Play is clicked).
+  const bufferStartIdxRef = useRef(0);
   const isPlayingRef = useRef(false);
   const volRef = useRef(1.0);
   const mutedRef = useRef(false);
@@ -325,16 +334,23 @@ export function ClarifyAudioPanel({
   useEffect(() => {
     if (phase !== 'buffering') return;
 
-    // Count ready segments starting from position 0 — must be SEQUENTIAL so that
-    // segment 0 is guaranteed ready when playback opens (avoids leading silence).
-    const threshold = Math.min(BUFFER_THRESHOLD, translatedTranscript.length);
+    // Count ready segments starting from bufferStartIdxRef (the segment the
+    // video was actually at when Play was clicked) — must be SEQUENTIAL from
+    // there so the segment that plays FIRST is guaranteed ready (avoids
+    // leading silence). Checking from a hardcoded 0 here was the bug: if the
+    // video wasn't at time 0, TTS generation (which tracks live video
+    // position) never touched segments 0-N, so this check could never pass
+    // even though plenty of *other* segments had generated successfully.
+    const startIdx = bufferStartIdxRef.current;
+    const threshold = Math.min(BUFFER_THRESHOLD, translatedTranscript.length - startIdx);
     let readyCount = 0;
-    for (let i = 0; i < threshold; i++) {
+    for (let i = startIdx; i < startIdx + threshold; i++) {
       const e = cacheRef.current[i];
       if (e?.url || e?.useClientTTS) readyCount++;
-      else break;  // stop at first gap — segments must be contiguous from 0
+      else break;  // stop at first gap — segments must be contiguous from startIdx
     }
-    console.log(`[buffer] Tank level: ${readyCount}/${threshold} sequential segments ready`);
+    setBufferStatus({ ready: readyCount, threshold });
+    console.log(`[buffer] Tank level: ${readyCount}/${threshold} sequential segments ready (from seg ${startIdx})`);
 
     if (readyCount >= threshold) {
       console.log(`[buffer] ✅ Buffer full — opening outlet valve (starting playback)`);
@@ -347,7 +363,11 @@ export function ClarifyAudioPanel({
   useEffect(() => {
     if (phase !== 'playing' && phase !== 'buffering') return;
     if (translatedTranscript.length === 0) return;
-    const start = Math.max(0, currentSegIdx);
+    // While buffering, anchor to bufferStartIdxRef rather than currentSegIdx —
+    // currentSegIdx tracks the currently-displayed `transcript` state, which
+    // isn't switched to translatedTranscript until phase reaches 'playing',
+    // so it can be misaligned during 'buffering' itself.
+    const start = phase === 'buffering' ? bufferStartIdxRef.current : Math.max(0, currentSegIdx);
     // Generate TTS for segments ahead of current position — 20-segment lookahead (~60s buffer)
     for (let i = start; i < Math.min(start + 20, translatedTranscript.length); i++) {
       if (!cacheRef.current[i]) {
@@ -639,10 +659,17 @@ export function ClarifyAudioPanel({
     playingIdxRef.current = -1;
     lastScheduledSegRef.current = -1;
 
-    console.log(`[buffer] === BUFFERING === filling ${BUFFER_THRESHOLD} segments before playback opens...`);
+    // Anchor the buffer fill to wherever the video actually is right now —
+    // not segment 0. The video is almost never still at time 0 by the time
+    // the user clicks Play (they've been reading the options modal, the
+    // video kept playing in the background, etc.), so generation needs to
+    // target the segments that will actually play next.
+    const segs = translatedTxRef.current.length > 0 ? translatedTxRef.current : txRef.current;
+    bufferStartIdxRef.current = segs.length > 0 ? findSegForTime(currentTimeRef.current, segs) : 0;
+    console.log(`[buffer] === BUFFERING === starting from segment ${bufferStartIdxRef.current} (video at ${currentTimeRef.current.toFixed(1)}s), filling ${BUFFER_THRESHOLD} segments before playback opens...`);
     setPhase('buffering');
     // Buffering effect will watch the cache and switch to 'playing' when threshold is met
-  }, [onMuteYouTube, onPlayYouTube]);
+  }, [onMuteYouTube, onPlayYouTube, findSegForTime]);
 
   /** User clicks "Pause" */
   const handlePause = useCallback(() => {
@@ -1163,14 +1190,14 @@ export function ClarifyAudioPanel({
               ⏳ Filling audio buffer…
             </div>
             <div style={{ fontSize: '11px', color: '#9ca3af', marginBottom: '8px' }}>
-              {Math.min(generatedCount, BUFFER_THRESHOLD)} / {BUFFER_THRESHOLD} segments ready
+              {bufferStatus.ready} / {bufferStatus.threshold} segments ready
             </div>
             <div style={{
               height: '6px', backgroundColor: '#1e293b', borderRadius: '3px', overflow: 'hidden',
             }}>
               <div style={{
                 height: '100%', borderRadius: '3px', backgroundColor: '#60a5fa',
-                width: `${Math.min(100, (Math.min(generatedCount, BUFFER_THRESHOLD) / BUFFER_THRESHOLD) * 100)}%`,
+                width: `${bufferStatus.threshold > 0 ? Math.min(100, (bufferStatus.ready / bufferStatus.threshold) * 100) : 0}%`,
                 transition: 'width 0.3s ease',
               }} />
             </div>
