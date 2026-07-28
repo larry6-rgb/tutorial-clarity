@@ -539,6 +539,15 @@ async function fetchWithWhisper(
     // on the web client — the Android client path is subject to much lighter
     // bot-checking and is the community-standard fix for this exact error
     // (confirmed 2026-07-24 after that error showed up in Railway's logs).
+    //
+    // YTDLP_PROXY_URL: the android-client trick above is a moving target —
+    // YouTube's bot-detection stopped accepting it again 4 days later
+    // (2026-07-28). A residential proxy routes the request through a real
+    // consumer IP instead of Railway's flagged datacenter range, which isn't
+    // subject to the same cat-and-mouse cycle. Optional: yt-dlp runs exactly
+    // as before if this env var is unset.
+    const proxyUrl = process.env.YTDLP_PROXY_URL;
+    const proxyArg = proxyUrl ? `--proxy "${proxyUrl}"` : '';
     const formatStrategies = [
       { label: 'bestaudio', fmt: 'bestaudio' },
       { label: 'best+extract', fmt: 'bestaudio*/best' },
@@ -548,7 +557,7 @@ async function fetchWithWhisper(
     for (const strategy of formatStrategies) {
       try {
         execSync(
-          `"${ytdlpPath}" -f "${strategy.fmt}" --extractor-args "youtube:player_client=android" --extract-audio --audio-format mp3 --audio-quality 7 --no-playlist --no-warnings -o "${tempFileTemplate}" "${youtubeUrl}"`,
+          `"${ytdlpPath}" -f "${strategy.fmt}" --extractor-args "youtube:player_client=android" ${proxyArg} --extract-audio --audio-format mp3 --audio-quality 7 --no-playlist --no-warnings -o "${tempFileTemplate}" "${youtubeUrl}"`,
           { encoding: 'utf8', timeout: 180000, maxBuffer: 5 * 1024 * 1024, windowsHide: true, stdio: ['pipe', 'pipe', 'pipe'] }
         );
         downloadSuccess = true;
