@@ -1095,6 +1095,15 @@ export function ClarifyAudioPanel({
             padding: '8px', backgroundColor: 'rgba(220,38,38,0.15)', border: '1px solid #dc2626',
             borderRadius: '6px', fontSize: '11px', color: '#fca5a5', marginBottom: '10px',
           }}>{'❌'} {error}</div>
+          {/sign in/i.test(error) && (
+            <button
+              onClick={() => router.push(`/sign-in?redirect_url=${encodeURIComponent(window.location.href)}`)}
+              style={{
+                width: '100%', padding: '10px', backgroundColor: '#16a34a', color: 'white',
+                border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold',
+                marginBottom: '8px',
+              }}>{'🔑'} Sign In</button>
+          )}
           <button onClick={handleRestart} style={{
             width: '100%', padding: '10px', backgroundColor: '#2563eb', color: 'white',
             border: 'none', borderRadius: '6px', cursor: 'pointer', fontSize: '13px', fontWeight: 'bold',
