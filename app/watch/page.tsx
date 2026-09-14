@@ -18,13 +18,17 @@ interface TranscriptSegment {
     text: string;
 }
 
-const DEVELOPMENT_MODE = true;
-
 // ── TUTORIAL VIDEO ──
 // When the tutorial video is ready, paste its YouTube video ID here.
 // Example: 'dQw4w9WgXcQ'  (the part after ?v= in the YouTube URL)
 // Leave empty to show the "Coming soon" placeholder.
 const TUTORIAL_VIDEO_ID = '';
+
+// Match all search words, ignoring punctuation, accents, and repeated whitespace.
+function normalizeVideoSearch(text: string) {
+    return text.normalize('NFKD').replace(/\p{M}/gu, '').toLowerCase()
+        .replace(/[^\p{L}\p{N}]+/gu, ' ').trim();
+}
 
 function WatchPageContent() {
     const searchParams = useSearchParams();
@@ -337,10 +341,10 @@ function WatchPageContent() {
     const [popupDragOffset, setPopupDragOffset] = useState<{ x: number; y: number } | null>(null);
     const [isDraggingPopup, setIsDraggingPopup] = useState(false);
     const popupDragStart = useRef<{ mouseX: number; mouseY: number; popupX: number; popupY: number } | null>(null);
-    const [userTier] = useState<'free' | 'premium'>('free');
     const [channelInput, setChannelInput] = useState('');
     const [channelIndexStatus, setChannelIndexStatus] = useState<'idle' | 'loading' | 'ready' | 'not_premium' | 'error'>('idle');
     const [channelIndexError, setChannelIndexError] = useState<string | null>(null);
+    const [channelIndexWarning, setChannelIndexWarning] = useState<string | null>(null);
     const [channelVideos, setChannelVideos] = useState<{ id: string; title: string; date: string; thumbnail: string }[]>([]);
     const [videoSearchQuery, setVideoSearchQuery] = useState('');
     const [videoSort, setVideoSort] = useState<'alpha' | 'newest' | 'oldest'>('alpha');
@@ -364,6 +368,8 @@ function WatchPageContent() {
             return;
         }
         setChannelIndexStatus('loading');
+        setChannelIndexError(null);
+        setChannelIndexWarning(null);
         try {
             const res = await fetch(`/api/channel-videos?channelId=${encodeURIComponent(channelId)}&sort=${sort}`);
             if (res.status === 401 || res.status === 403) {
@@ -377,6 +383,9 @@ function WatchPageContent() {
                 return;
             }
             setChannelVideos(data.videos || []);
+            setChannelIndexWarning(data.complete === false
+                ? (data.warning || 'Some videos could not be loaded. Search results may be incomplete.')
+                : null);
             setChannelIndexStatus('ready');
         } catch {
             setChannelIndexStatus('error');
@@ -384,8 +393,12 @@ function WatchPageContent() {
         }
     };
 
-    const filteredChannelVideos = videoSearchQuery
-        ? channelVideos.filter(v => v.title.toLowerCase().includes(videoSearchQuery.toLowerCase()))
+    const videoSearchTerms = normalizeVideoSearch(videoSearchQuery).split(' ').filter(Boolean);
+    const filteredChannelVideos = videoSearchTerms.length
+        ? channelVideos.filter(v => {
+            const title = normalizeVideoSearch(v.title);
+            return videoSearchTerms.every(term => title.includes(term));
+        })
         : channelVideos;
 
     // ── CHAPTERS ──
@@ -1313,9 +1326,7 @@ function WatchPageContent() {
                 body: JSON.stringify({
                     term: text,
                     context,
-                    videoTitle,
-                    userTier,
-                    developmentMode: DEVELOPMENT_MODE
+                    videoTitle
                 })
             });
 
@@ -3322,6 +3333,11 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 340 : 12
 
                                         {channelIndexStatus === 'ready' && (
                                             <>
+                                                {channelIndexWarning && (
+                                                    <p role="status" style={{ color: '#fbbf24', lineHeight: '1.6', marginBottom: '8px' }}>
+                                                        ⚠ {channelIndexWarning}
+                                                    </p>
+                                                )}
                                                 <div style={{ display: 'flex', flexWrap: 'wrap', gap: '6px', marginBottom: '8px', alignItems: 'center' }}>
                                                     <input
                                                         type="text"

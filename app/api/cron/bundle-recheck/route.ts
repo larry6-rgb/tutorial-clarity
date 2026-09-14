@@ -5,8 +5,6 @@ import { Resend } from 'resend';
 import { validateSubtamerKey } from '@/lib/subtamerKey';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, { apiVersion: '2026-05-27.dahlia' });
-const resend = new Resend(process.env.RESEND_API_KEY);
-
 // Runs daily on a separate Railway cron service (mirrors AFFILIATE-PAYOUTS —
 // never add a Cron Schedule to the main tutorial-clarity web service, it
 // makes Railway treat the container as a one-shot job that exits immediately).
@@ -21,6 +19,13 @@ export async function POST(req: Request) {
   if (authHeader !== `Bearer ${process.env.CRON_SECRET}`) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
   }
+
+  const resendApiKey = process.env.RESEND_API_KEY;
+  if (!resendApiKey) {
+    console.error('[cron/bundle-recheck] RESEND_API_KEY is not configured');
+    return NextResponse.json({ error: 'Email service is not configured' }, { status: 503 });
+  }
+  const resend = new Resend(resendApiKey);
 
   const bundleSubs = await db.subscription.findMany({
     where: { plan: 'bundle' },

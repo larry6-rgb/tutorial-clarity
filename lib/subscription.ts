@@ -10,7 +10,7 @@ export type AccessResult =
   | { allowed: false; reason: 'no_account' | 'trial_expired' | 'subscription_inactive' };
 
 export type SubscriptionStatus = {
-  plan: 'trial' | 'monthly' | 'annual' | 'free';
+  plan: 'trial' | 'monthly' | 'annual' | 'bundle' | 'free';
   premiumAllowed: boolean;
   trialExpired: boolean;
   trialEndsAt: Date | null;
@@ -46,7 +46,7 @@ export async function checkPremiumAccess(clerkUserId: string): Promise<AccessRes
     return { allowed: false, reason: 'trial_expired' };
   }
 
-  if (sub.status === 'active' && (sub.plan === 'monthly' || sub.plan === 'annual')) {
+  if (sub.status === 'active' && (sub.plan === 'monthly' || sub.plan === 'annual' || sub.plan === 'bundle')) {
     return { allowed: true };
   }
 
@@ -106,7 +106,7 @@ export async function getSubscriptionStatus(clerkUserId: string): Promise<Subscr
         });
       }
     }
-  } else if (sub.plan === 'monthly' || sub.plan === 'annual') {
+  } else if (sub.plan === 'monthly' || sub.plan === 'annual' || sub.plan === 'bundle') {
     plan = sub.plan;
     premiumAllowed = sub.status === 'active';
   }

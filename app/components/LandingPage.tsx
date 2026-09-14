@@ -1,74 +1,10 @@
 'use client';
 
 import Link from 'next/link';
-import { useState } from 'react';
 
 export default function LandingPage() {
-  const [email, setEmail] = useState('');
-  const [status, setStatus] = useState<'idle' | 'sending' | 'done' | 'error'>('idle');
-  // While TC is still under construction, "Start Free Trial" doesn't send people
-  // to sign-up — it flashes the banner and offers the same email-interest capture
-  // instead, so nobody thinks they're getting a working product that isn't ready.
-  const [showGateModal, setShowGateModal] = useState(false);
-  const [bannerFlash, setBannerFlash] = useState(false);
-
-  async function handleNotify(e: React.FormEvent) {
-    e.preventDefault();
-    setStatus('sending');
-    try {
-      const res = await fetch('/api/email-interest', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ email }),
-      });
-      setStatus(res.ok ? 'done' : 'error');
-    } catch {
-      setStatus('error');
-    }
-  }
-
-  function handleStartTrialClick(e: React.MouseEvent) {
-    e.preventDefault();
-    setShowGateModal(true);
-    setBannerFlash(true);
-    document.getElementById('under-construction-banner')?.scrollIntoView({ behavior: 'smooth', block: 'start' });
-    setTimeout(() => setBannerFlash(false), 1500);
-  }
-
   return (
     <div className="min-h-screen bg-gray-950 text-white">
-
-      {/* Under construction banner */}
-      <div
-        id="under-construction-banner"
-        className={`w-full bg-amber-500 text-gray-950 text-center text-sm font-semibold py-3 px-4 transition-all ${bannerFlash ? 'animate-pulse ring-4 ring-amber-300 ring-inset' : ''}`}
-      >
-        🚧 Tutorial Clarity is currently under construction and will be opening soon.
-        {status === 'done' ? (
-          <span className="ml-2">✅ You&apos;re on the list — we&apos;ll notify you at launch!</span>
-        ) : (
-          <form onSubmit={handleNotify} className="inline-flex items-center gap-2 ml-3">
-            <span className="font-normal">Want to be notified when we launch?</span>
-            <input
-              type="email"
-              required
-              placeholder="your@email.com"
-              value={email}
-              onChange={e => setEmail(e.target.value)}
-              className="rounded px-2 py-0.5 text-gray-950 bg-white border border-amber-700 text-sm w-48 font-normal"
-            />
-            <button
-              type="submit"
-              disabled={status === 'sending'}
-              className="bg-gray-950 text-amber-400 rounded px-3 py-0.5 text-sm hover:bg-gray-800 transition-colors disabled:opacity-50"
-            >
-              {status === 'sending' ? 'Saving…' : 'Notify Me'}
-            </button>
-            {status === 'error' && <span className="text-red-800 font-normal">Something went wrong, try again.</span>}
-          </form>
-        )}
-      </div>
-
       {/* Nav */}
       <nav className="flex items-center justify-between px-8 py-5 border-b border-gray-800">
         <span
@@ -89,12 +25,12 @@ export default function LandingPage() {
           <Link href="/sign-in" className="text-gray-300 hover:text-white transition-colors">
             Sign In
           </Link>
-          <button
-            onClick={handleStartTrialClick}
+          <Link
+            href="/sign-up"
             className="bg-blue-600 hover:bg-blue-700 text-white px-5 py-2 rounded-lg font-semibold transition-colors"
           >
             Start Free Trial
-          </button>
+          </Link>
         </div>
       </nav>
 
@@ -122,12 +58,12 @@ export default function LandingPage() {
           Designed specifically for people who just want YouTube to work better — no technical knowledge required.
         </p>
         <div className="flex flex-col sm:flex-row gap-4 justify-center">
-          <button
-            onClick={handleStartTrialClick}
+          <Link
+            href="/sign-up"
             className="bg-blue-600 hover:bg-blue-700 text-white px-8 py-4 rounded-xl font-bold text-lg transition-colors"
           >
             Start Your Free 2-Week Trial
-          </button>
+          </Link>
           <Link
             href="/sign-in"
             className="border border-gray-600 hover:border-gray-400 text-gray-300 hover:text-white px-8 py-4 rounded-xl font-semibold text-lg transition-colors"
@@ -184,12 +120,12 @@ export default function LandingPage() {
                 </li>
               ))}
             </ul>
-            <button
-              onClick={handleStartTrialClick}
+            <Link
+              href="/sign-up"
               className="block w-full text-center bg-gray-700 hover:bg-gray-600 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
             >
               Start Free Trial
-            </button>
+            </Link>
           </div>
 
           {/* Annual — highlighted */}
@@ -208,12 +144,12 @@ export default function LandingPage() {
                 </li>
               ))}
             </ul>
-            <button
-              onClick={handleStartTrialClick}
+            <Link
+              href="/sign-up"
               className="block w-full text-center bg-blue-500 hover:bg-blue-400 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
             >
               Start Free Trial
-            </button>
+            </Link>
           </div>
         </div>
 
@@ -235,52 +171,6 @@ export default function LandingPage() {
         </div>
       </footer>
 
-      {/* Gate modal — shown instead of sending people to sign-up while under construction */}
-      {showGateModal && (
-        <div
-          className="fixed inset-0 bg-black/70 flex items-center justify-center z-50 px-4"
-          onClick={() => setShowGateModal(false)}
-        >
-          <div
-            className="bg-gray-900 border border-amber-500 rounded-2xl p-8 max-w-md w-full"
-            onClick={e => e.stopPropagation()}
-          >
-            <div className="text-3xl mb-3 text-center">🚧</div>
-            <h3 className="text-xl font-bold mb-2 text-center">Tutorial Clarity isn&apos;t open yet</h3>
-            <p className="text-gray-400 text-center mb-6">
-              We&apos;re still finishing things up. If you&apos;d like us to contact you once we&apos;re fully operational, leave your email below.
-            </p>
-            {status === 'done' ? (
-              <p className="text-green-400 text-center font-semibold">✅ You&apos;re on the list — we&apos;ll notify you at launch!</p>
-            ) : (
-              <form onSubmit={handleNotify} className="flex flex-col gap-3">
-                <input
-                  type="email"
-                  required
-                  placeholder="your@email.com"
-                  value={email}
-                  onChange={e => setEmail(e.target.value)}
-                  className="rounded-lg px-3 py-2 text-gray-950 bg-white border border-gray-300"
-                />
-                <button
-                  type="submit"
-                  disabled={status === 'sending'}
-                  className="bg-amber-500 hover:bg-amber-400 text-gray-950 rounded-lg px-4 py-2 font-semibold transition-colors disabled:opacity-50"
-                >
-                  {status === 'sending' ? 'Saving…' : 'Notify Me'}
-                </button>
-                {status === 'error' && <span className="text-red-400 text-sm text-center">Something went wrong, try again.</span>}
-              </form>
-            )}
-            <button
-              onClick={() => setShowGateModal(false)}
-              className="mt-4 text-gray-500 hover:text-gray-300 text-sm w-full text-center"
-            >
-              Close
-            </button>
-          </div>
-        </div>
-      )}
     </div>
   );
 }

@@ -89,8 +89,8 @@ export default function AdminPage() {
   const counts = subscribers ? {
     total: subscribers.length,
     trial: subscribers.filter(s => s.trialActive).length,
-    paid: subscribers.filter(s => s.plan === 'monthly' || s.plan === 'annual').length,
-    expired: subscribers.filter(s => s.trialExpired && s.plan !== 'monthly' && s.plan !== 'annual').length,
+    paid: subscribers.filter(s => s.plan === 'monthly' || s.plan === 'annual' || s.plan === 'bundle').length,
+    expired: subscribers.filter(s => s.trialExpired && s.plan !== 'monthly' && s.plan !== 'annual' && s.plan !== 'bundle').length,
   } : null;
 
   return (

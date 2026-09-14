@@ -4,8 +4,6 @@ import { prisma as db } from '@/lib/db';
 import { Resend } from 'resend';
 import crypto from 'crypto';
 
-const resend = new Resend(process.env.RESEND_API_KEY);
-
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2026-05-27.dahlia',
 });
@@ -48,6 +46,12 @@ async function processEvent(event: Stripe.Event) {
       if (session.metadata?.subtamer === 'true') {
         const email = session.metadata?.email;
         if (!email) break;
+
+        const resendApiKey = process.env.RESEND_API_KEY;
+        if (!resendApiKey) {
+          throw new Error('RESEND_API_KEY is not configured');
+        }
+        const resend = new Resend(resendApiKey);
 
         const licenseKey = 'ST-' + crypto.randomBytes(12).toString('hex').toUpperCase();
 

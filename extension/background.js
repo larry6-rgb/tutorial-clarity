@@ -1,7 +1,7 @@
 // Tutorial Clarity Background Script
 console.log('Tutorial Clarity background script loaded');
 
-const TC_BASE = 'http://localhost:3000'; // TEMP for local testing 2026-07-09 — revert to https://tutorial-clarity-production.up.railway.app before publishing
+const TC_BASE = 'https://tutorialclarity.com';
 
 function extractYouTubeId(rawUrl) {
   if (!rawUrl) return null;

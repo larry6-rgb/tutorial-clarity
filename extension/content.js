@@ -1,16 +1,6 @@
 // Tutorial Clarity - YouTube Extension
 console.log('Tutorial Clarity extension loaded');
 
-// TEMP DEBUG — logs every key press/release so we can see whether ANY keydown reaches the page,
-// whether Alt specifically is being swallowed, and whether it's cleanly releasing between taps.
-// Remove once diagnosed.
-document.addEventListener('keydown', (e) => {
-  console.log('[TC DEBUG] KEYDOWN:', e.key, '| repeat:', e.repeat);
-}, true);
-document.addEventListener('keyup', (e) => {
-  console.log('[TC DEBUG] KEYUP:', e.key);
-}, true);
-
 let capsPressCount = 0;
 let capsPressTimer = null;
 let lastCapsPressTime = null;
@@ -34,7 +24,7 @@ function createFloatingIcon() {
 
 // Handle icon click
 function handleIconClick() {
-  const base = 'http://localhost:3000'; // TEMP for local testing 2026-07-09 — revert to https://tutorial-clarity-production.up.railway.app before publishing
+  const base = 'https://tutorialclarity.com';
   const videoId = getCurrentVideoId();
   const appUrl = videoId ? `${base}/watch?url=${videoId}` : base;
 
@@ -134,7 +124,7 @@ const TC_SECTION_KEYS = {
   '.': 'playback',
   's': 'saved',
   'a': 'clarify',
-  'v': 'clarify',   // Speaker Voices lives inside the Clarify Audio section — must match watch/page.tsx's own sectionMap key
+  'v': 'clarify',   // alternate shortcut into the Clarify Audio section — must match watch/page.tsx's own sectionMap key
   't': 'scroll',
   'z': 'zoom',
   'r': 'resume',
@@ -186,7 +176,7 @@ function handleTCShortcut(e) {
 }
 
 // Tutorial Clarity app URL
-const TC_URL = 'http://localhost:3000'; // TEMP for local testing 2026-07-09 — revert to https://tutorialclarity.com before publishing
+const TC_URL = 'https://tutorialclarity.com';
 
 // Save current video — POSTs to Tutorial Clarity API so it appears in section 4
 function saveCurrentVideo() {

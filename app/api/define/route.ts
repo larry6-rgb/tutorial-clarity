@@ -2,6 +2,8 @@ export const dynamic = 'force-dynamic';
 
 import { NextRequest, NextResponse } from 'next/server';
 import Groq from 'groq-sdk';
+import { auth } from '@clerk/nextjs/server';
+import { checkPremiumAccess } from '@/lib/subscription';
 
 // Lazy-initialize Groq client to avoid build-time errors when GROQ_API_KEY is not set
 let groq: Groq | null = null;
@@ -44,7 +46,7 @@ Keep the response under 150 words. Do not mention whether the video did or didn'
 
 export async function POST(request: NextRequest) {
     try {
-        const { term, context, videoTitle, userTier, developmentMode } = await request.json();
+        const { term, context, videoTitle } = await request.json();
 
         if (!term) {
             return NextResponse.json(
@@ -53,12 +55,22 @@ export async function POST(request: NextRequest) {
             );
         }
 
-        // AI definitions require premium access (or dev mode override)
-        if (developmentMode !== true && userTier !== 'premium') {
+        // Entitlement is established on the server. Never trust a browser-supplied
+        // tier or development flag for a metered AI feature.
+        const { userId } = await auth();
+        if (!userId) {
+            return NextResponse.json({
+                requiresUpgrade: true,
+                message: 'Sign in and start a free trial to use AI-powered definitions.'
+            }, { status: 401 });
+        }
+
+        const access = await checkPremiumAccess(userId);
+        if (!access.allowed) {
             return NextResponse.json({
                 requiresUpgrade: true,
                 message: 'To access AI-powered definitions for technical terms, please upgrade to a premium plan.'
-            });
+            }, { status: 403 });
         }
 
         const definition = await getDefinition(term, context, videoTitle);
