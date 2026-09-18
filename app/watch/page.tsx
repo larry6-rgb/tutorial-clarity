@@ -22,7 +22,7 @@ interface TranscriptSegment {
 // When the tutorial video is ready, paste its YouTube video ID here.
 // Example: 'dQw4w9WgXcQ'  (the part after ?v= in the YouTube URL)
 // Leave empty to show the "Coming soon" placeholder.
-const TUTORIAL_VIDEO_ID = '';
+const TUTORIAL_VIDEO_ID = 'e75ttY2R_9E';
 
 // Match all search words, ignoring punctuation, accents, and repeated whitespace.
 function normalizeVideoSearch(text: string) {
