@@ -1,8 +1,9 @@
 'use client';
 
-import { useUser, UserButton } from '@clerk/nextjs';
+import { useUser } from '@clerk/nextjs';
 import Link from 'next/link';
 import { useEffect, useState } from 'react';
+import AccountUserButton from '../components/AccountUserButton';
 
 export default function DashboardPage() {
   const { user } = useUser();
@@ -65,7 +66,7 @@ export default function DashboardPage() {
           <span className="text-gray-400 text-sm">
             {user?.emailAddresses[0]?.emailAddress}
           </span>
-          <UserButton  />
+          <AccountUserButton />
         </div>
       </nav>
 

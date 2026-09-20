@@ -2,8 +2,9 @@
 
 import { useState, useEffect } from 'react';
 import { useRouter } from 'next/navigation';
-import { UserButton } from '@clerk/nextjs';
+import Link from 'next/link';
 import type { SubscriptionStatus } from '@/lib/subscription';
+import AccountUserButton from './AccountUserButton';
 
 export default function AppHome() {
   const [videoUrl, setVideoUrl] = useState('');
@@ -56,9 +57,11 @@ export default function AppHome() {
         backgroundColor: '#404040',
       }}
     >
-      {/* User menu top-right */}
-      <div className="absolute top-4 right-4">
-        <UserButton />
+      {/* Account and purchase actions */}
+      <div className="absolute top-4 right-4 flex items-center gap-3">
+        <Link href="/subscribe" className="rounded-lg bg-blue-600 px-4 py-2 text-sm font-semibold text-white transition-colors hover:bg-blue-500">View Plans / Upgrade</Link>
+        <Link href="/account" className="rounded-lg border border-gray-500 bg-black/70 px-4 py-2 text-sm font-semibold text-gray-200 transition-colors hover:border-gray-300 hover:text-white">Account Settings</Link>
+        <AccountUserButton />
       </div>
 
       <div className="w-full max-w-md px-4 space-y-4">

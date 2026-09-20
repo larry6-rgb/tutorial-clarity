@@ -19,6 +19,7 @@ export default function LandingPage() {
           Tutorial Clarity
         </span>
         <div className="flex items-center gap-4">
+          <Link href="#pricing" className="text-gray-300 hover:text-white transition-colors">Plans</Link>
           <Link href="/books" className="text-gray-300 hover:text-white transition-colors">
             Books
           </Link>
@@ -97,7 +98,7 @@ export default function LandingPage() {
       </section>
 
       {/* Pricing */}
-      <section className="px-6 py-20">
+      <section id="pricing" className="px-6 py-20 scroll-mt-6">
         <h2 className="text-3xl font-bold text-center mb-4">Simple, honest pricing</h2>
         <p className="text-gray-400 text-center mb-4">Try everything free for 14 days. No credit card needed.</p>
         <p className="text-gray-400 text-center max-w-2xl mx-auto mb-4">
@@ -121,10 +122,10 @@ export default function LandingPage() {
               ))}
             </ul>
             <Link
-              href="/sign-up"
+              href="/subscribe"
               className="block w-full text-center bg-gray-700 hover:bg-gray-600 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
             >
-              Start Free Trial
+              Choose Monthly
             </Link>
           </div>
 
@@ -145,10 +146,10 @@ export default function LandingPage() {
               ))}
             </ul>
             <Link
-              href="/sign-up"
+              href="/subscribe"
               className="block w-full text-center bg-blue-500 hover:bg-blue-400 text-white px-6 py-3 rounded-xl font-semibold transition-colors"
             >
-              Start Free Trial
+              Choose Annual
             </Link>
           </div>
         </div>

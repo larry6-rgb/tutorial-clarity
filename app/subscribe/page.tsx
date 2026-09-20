@@ -3,7 +3,7 @@
 import { useState } from 'react';
 import { useRouter } from 'next/navigation';
 import Link from 'next/link';
-import { UserButton } from '@clerk/nextjs';
+import AccountUserButton from '../components/AccountUserButton';
 
 const MONTHLY_PRICE_ID = 'price_1TeihB3eI6L9ZOHZQTUS1Q6k';
 const ANNUAL_PRICE_ID = 'price_1TeilR3eI6L9ZOHZbTtRZNiD';
@@ -87,7 +87,10 @@ export default function SubscribePage() {
         >
           Tutorial Clarity
         </Link>
-        <UserButton  />
+        <div className="flex items-center gap-3">
+          <Link href="/account" className="text-sm text-gray-300 hover:text-white">Account Settings</Link>
+          <AccountUserButton />
+        </div>
       </nav>
 
       <div className="max-w-4xl mx-auto px-6 py-16">

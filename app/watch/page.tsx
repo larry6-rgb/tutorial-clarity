@@ -1,8 +1,11 @@
 'use client';
 
 import { useSearchParams, useRouter } from 'next/navigation';
+import Link from 'next/link';
 import { Suspense, useCallback, useEffect, useRef, useState } from 'react';
+import { useUser } from '@clerk/nextjs';
 import { ClarifyAudioPanel } from '../components/ClarifyAudioPanel';
+import AccountUserButton from '../components/AccountUserButton';
 
 interface SavedVideo {
     id: string;
@@ -33,6 +36,7 @@ function normalizeVideoSearch(text: string) {
 function WatchPageContent() {
     const searchParams = useSearchParams();
     const router = useRouter();
+    const { isSignedIn } = useUser();
     const rawUrl = searchParams.get('url');
     const resumeTimestamp = parseInt(searchParams.get('t') || '0', 10);
     const extractId = (url: string | null): string | null => {
@@ -2177,6 +2181,15 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 340 : 12
                 zIndex: 1000,
                 overflowY: 'auto'
             }}>
+                <div style={{ width: '90%', display: 'flex', alignItems: 'center', justifyContent: 'center', gap: '8px', marginBottom: '12px' }}>
+                    <Link href="/subscribe" style={{ backgroundColor: '#2563eb', color: 'white', padding: '8px 12px', borderRadius: '6px', fontSize: '13px', fontWeight: 700, textDecoration: 'none' }}>View Plans / Upgrade</Link>
+                    {isSignedIn && (
+                        <>
+                            <Link href="/account" style={{ color: '#d1d5db', fontSize: '13px', textDecoration: 'underline' }}>Account</Link>
+                            <AccountUserButton />
+                        </>
+                    )}
+                </div>
                 <button
                     onClick={() => setShowMenu(!showMenu)}
                     style={{
