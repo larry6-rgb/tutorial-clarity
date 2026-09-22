@@ -42,10 +42,10 @@ export default function SupportChat() {
     setBusy(false);
   }
 
-  if (!open) return <button onClick={() => setOpen(true)} className="fixed bottom-5 right-5 z-[100] flex items-center gap-2 rounded-full bg-blue-600 px-5 py-3 font-semibold text-white shadow-xl hover:bg-blue-500" aria-label="Open Tutorial Clarity support"><HelpCircle size={20}/> Help</button>;
+  if (!open) return <button onClick={() => setOpen(true)} className="fixed bottom-5 left-5 z-[100] flex items-center gap-2 rounded-full bg-blue-600 px-5 py-3 font-semibold text-white shadow-xl hover:bg-blue-500" aria-label="Open Tutorial Clarity support"><HelpCircle size={20}/> Help</button>;
 
   return (
-    <section className="fixed bottom-4 right-4 z-[100] flex h-[min(620px,85vh)] w-[min(390px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-gray-700 bg-gray-950 text-white shadow-2xl" aria-label="Tutorial Clarity support chat">
+    <section className="fixed bottom-4 left-4 z-[100] flex h-[min(620px,85vh)] w-[min(390px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-gray-700 bg-gray-950 text-white shadow-2xl" aria-label="Tutorial Clarity support chat">
       <header className="flex items-center justify-between bg-blue-700 px-4 py-3"><div><div className="font-bold">Tutorial Clarity Support</div><div className="text-xs text-blue-100">Ask in your own words</div></div><button onClick={() => setOpen(false)} aria-label="Close support"><X/></button></header>
       <div className="flex-1 space-y-3 overflow-y-auto p-4" aria-live="polite">
         {messages.map((m, i) => <div key={i} className={`max-w-[88%] rounded-xl px-3 py-2 text-sm ${m.role === 'user' ? 'ml-auto bg-blue-600' : 'bg-gray-800'}`}>{m.content}</div>)}
