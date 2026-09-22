@@ -28,8 +28,8 @@ export const supportKnowledge: SupportKnowledgeEntry[] = [
   },
   {
     id: 'trial-upgrade', title: 'Free trial and upgrading', version: '1.0', effectiveDate: '2026-09-22', approved: true,
-    keywords: ['trial', 'upgrade', 'pay', 'plan', 'billing', 'subscribe', 'price'],
-    content: 'New accounts receive a 14-day free trial with no credit card required. View Plans / Upgrade is available from the signed-in home page and Account Settings. Paid choices are shown on the plans page. Existing paid customers can use the billing-management option in their account. Do not request card details in chat.'
+    keywords: ['trial', 'upgrade', 'pay', 'plan', 'billing', 'subscribe', 'price', 'subtamer', 'discount'],
+    content: 'New accounts receive a 14-day free trial with no credit card required. The standard Tutorial Clarity price is $12.99 per month or $99 per year ($8.25 per month when averaged across the year). An existing SubTamer subscriber with an active SubTamer key can get Tutorial Clarity for $8 per month instead of $12.99 per month. This is $8 more per month in addition to the separate $4.99 monthly SubTamer subscription. The customer enters the SubTamer key in the Already a SubTamer subscriber section of the Tutorial Clarity plans page. If SubTamer is later canceled, Tutorial Clarity returns to $12.99 per month after advance email notice. View Plans / Upgrade is available from the signed-in home page and Account Settings. Existing paid customers can use the billing-management option in their account. Do not request card details or a SubTamer key in chat.'
   },
   {
     id: 'clarify-audio', title: 'Clarify Audio and translation', version: '1.0', effectiveDate: '2026-09-22', approved: true,
@@ -59,7 +59,7 @@ export const supportKnowledge: SupportKnowledgeEntry[] = [
   {
     id: 'privacy-escalation', title: 'Privacy and human support', version: '1.0', effectiveDate: '2026-09-22', approved: true,
     keywords: ['human', 'support', 'email', 'unknown', 'privacy', 'help'],
-    content: 'If the verified knowledge does not answer the problem or the suggested steps fail, offer to forward the conversation to human support. Ask only for a reply email and useful non-secret context. Never request passwords, authentication codes, passkeys, card data, API keys, or other secrets.'
+    content: 'Do not make human support the default. First answer from verified knowledge and ask whether the answer was satisfactory. If the customer says no, apologize and ask which part was unclear, which part was unanswered, or whether they can rephrase the question. Use their clarification to try again. Continue a useful troubleshooting or clarification dialogue while progress is being made. Offer human support only after multiple good-faith repair attempts have failed, the conversation is repeating without progress, or no verified answer exists. Ask only for a reply email and useful non-secret context. Never request passwords, authentication codes, passkeys, card data, API keys, SubTamer keys, or other secrets.'
   }
 ];
 
