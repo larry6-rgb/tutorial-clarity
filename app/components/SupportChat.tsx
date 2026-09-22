@@ -28,10 +28,10 @@ export default function SupportChat() {
     const next = [...messages, { role: 'user' as const, content: question }];
     setMessages(next); setText(''); setBusy(true); setOfferEscalation(false); setAwaitingFeedback(false); setAwaitingClarification(false);
     try {
-      const res = await fetch('/api/support-chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: question, history: messages.slice(-8), page: window.location.href, repairAttempts: isClarification ? repairAttempts : 0 }) });
+      const res = await fetch('/api/support-chat', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ message: question, history: messages.slice(-16), page: window.location.href, repairAttempts: isClarification ? repairAttempts : 0 }) });
       const data = await res.json();
       setMessages([...next, { role: 'assistant', content: data.answer || data.error || 'I could not answer that right now.' }]);
-      setAwaitingFeedback(true);
+      setAwaitingFeedback(!data.awaitingStep);
       if (data.topic) setTopic(data.topic);
     } catch {
       setMessages([...next, { role: 'assistant', content: 'I am sorry—I could not complete that answer just now. Would you like to try asking it one more time in different words?' }]);
