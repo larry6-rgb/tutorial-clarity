@@ -61,8 +61,15 @@ export async function POST(request: NextRequest) {
   const data = await response.json();
   const text = data.choices?.[0]?.message?.content || '{}';
   const parsed = JSON.parse(text);
+  let answer = String(parsed.answer || 'I do not have a verified answer for that yet.');
+  const asksAboutPlan = /\b(trial|paywall|plans?|subscription|pricing|cost|price|premium access)\b/i.test(message);
+  const asksOnlyHowToUpgrade = /^(where|how)\b.*\b(upgrade|subscribe)\b/i.test(message);
+  if (asksAboutPlan && !asksOnlyHowToUpgrade &&
+      !(/20 Clarify Audio sessions/i.test(answer) && /refresh|reset/i.test(answer) && /pack/i.test(answer))) {
+    answer += '\n\nPaid plans include 20 Clarify Audio sessions per billing month; that allowance refreshes at the start of each new billing period. If you need more before then, a one-time $8.99 pack adds 20 bonus sessions while your subscription is active.';
+  }
   return NextResponse.json({
-    answer: String(parsed.answer || 'I do not have a verified answer for that yet.'),
+    answer,
     topic: String(parsed.topic || 'Support question').slice(0, 80),
     awaitingStep: parsed.awaitingStep === true,
   });
