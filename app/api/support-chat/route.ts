@@ -62,7 +62,7 @@ export async function POST(request: NextRequest) {
   const text = data.choices?.[0]?.message?.content || '{}';
   const parsed = JSON.parse(text);
   let answer = String(parsed.answer || 'I do not have a verified answer for that yet.');
-  const asksAboutPlan = /\b(trial|paywall|plans?|subscription|pricing|cost|price|premium access)\b/i.test(message);
+  const asksAboutPlan = /\b(trial ends|trial expires|after (my |the )?(14-day )?trial|paywall|plans?|subscriptions?|pricing|cost|price|how much|premium access)\b/i.test(message);
   const asksOnlyHowToUpgrade = /^(where|how)\b.*\b(upgrade|subscribe)\b/i.test(message);
   if (asksAboutPlan && !asksOnlyHowToUpgrade &&
       !(/20 Clarify Audio sessions/i.test(answer) && /refresh|reset/i.test(answer) && /pack/i.test(answer))) {
