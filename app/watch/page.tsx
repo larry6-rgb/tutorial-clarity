@@ -2167,7 +2167,7 @@ const windowWidth = typeof window !== 'undefined' ? window.innerWidth - 340 : 12
             </div>
 
             {/* Right Panel - Menu */}
-            <div style={{
+            <div className="pink-scrollbar" style={{
                 position: 'fixed',
                 right: 0,
                 top: 0,

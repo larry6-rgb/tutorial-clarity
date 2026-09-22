@@ -93,6 +93,29 @@
   display: none;
 }
 
+/* Make the movable scrollbar handle easy to spot without decorating the track. */
+.pink-scrollbar {
+  scrollbar-color: #ff1493 transparent;
+  scrollbar-width: auto;
+}
+
+.pink-scrollbar::-webkit-scrollbar {
+  width: 12px;
+}
+
+.pink-scrollbar::-webkit-scrollbar-track {
+  background: transparent;
+}
+
+.pink-scrollbar::-webkit-scrollbar-thumb {
+  background-color: #ff1493;
+  border-radius: 999px;
+}
+
+.pink-scrollbar::-webkit-scrollbar-thumb:hover {
+  background-color: #ff4db2;
+}
+
 .line-clamp-2 {
   display: -webkit-box;
   -webkit-line-clamp: 2;

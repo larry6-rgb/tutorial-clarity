@@ -75,7 +75,7 @@ export default function SupportChat() {
   return (
     <section className="fixed bottom-4 left-4 z-[100] flex h-[min(620px,85vh)] w-[min(390px,calc(100vw-2rem))] flex-col overflow-hidden rounded-2xl border border-gray-700 bg-gray-950 text-white shadow-2xl" aria-label="Tutorial Clarity support chat">
       <header className="flex items-center justify-between bg-blue-700 px-4 py-3"><div><div className="font-bold">Tutorial Clarity Support</div><div className="text-xs text-blue-100">Ask in your own words</div></div><button onClick={() => setOpen(false)} aria-label="Close support"><X/></button></header>
-      <div className="support-chat-scroll flex-1 space-y-3 overflow-y-auto p-4" aria-live="polite">
+      <div className="pink-scrollbar flex-1 space-y-3 overflow-y-auto p-4" aria-live="polite">
         {messages.map((m, i) => <div key={i} className={`max-w-[88%] rounded-xl px-3 py-2 text-sm ${m.role === 'user' ? 'ml-auto bg-blue-600' : 'bg-gray-800'}`}>{m.content}</div>)}
         {busy && <div className="text-sm text-gray-400">Working…</div>}
         {awaitingFeedback && !busy && !offerEscalation && <div className="rounded-xl border border-gray-700 bg-gray-900 p-3 text-sm"><p className="mb-2">Does that answer your question?</p><div className="flex gap-2"><button onClick={answerWasHelpful} className="rounded bg-blue-600 px-3 py-2 font-semibold hover:bg-blue-500">Yes</button><button onClick={answerWasNotHelpful} className="rounded bg-gray-700 px-3 py-2 font-semibold hover:bg-gray-600">No</button></div></div>}
@@ -83,28 +83,6 @@ export default function SupportChat() {
         {sent && <div className="rounded-xl border border-green-700 bg-green-950 p-3 text-sm text-green-200">Your question has been saved for additional research. Someone will contact you as soon as possible using the information you provided.</div>}
       </div>
       <form onSubmit={ask} className="flex gap-2 border-t border-gray-800 p-3"><input value={text} onChange={(e) => setText(e.target.value)} maxLength={2000} placeholder="How do I…?" className="min-w-0 flex-1 rounded-lg bg-gray-900 px-3 py-2 text-sm outline-none focus:ring-2 focus:ring-blue-500"/><button type="submit" disabled={busy || !text.trim()} className="rounded-lg bg-blue-600 p-2 disabled:opacity-50" aria-label="Send question"><Send size={20}/></button></form>
-      <style jsx>{`
-        .support-chat-scroll {
-          scrollbar-color: #ff1493 #24112a;
-          scrollbar-width: auto;
-        }
-        .support-chat-scroll::-webkit-scrollbar {
-          width: 14px;
-        }
-        .support-chat-scroll::-webkit-scrollbar-track {
-          background: #24112a;
-          border-left: 1px solid #5b2149;
-        }
-        .support-chat-scroll::-webkit-scrollbar-thumb {
-          background: #ff1493;
-          border: 2px solid #24112a;
-          border-radius: 999px;
-          box-shadow: 0 0 8px #ff1493;
-        }
-        .support-chat-scroll::-webkit-scrollbar-thumb:hover {
-          background: #ff4db2;
-        }
-      `}</style>
     </section>
   );
 }
