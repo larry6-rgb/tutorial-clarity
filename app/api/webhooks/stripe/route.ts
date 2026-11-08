@@ -220,7 +220,7 @@ async function processEvent(event: Stripe.Event) {
       if (sub.metadata?.subtamer === 'true') {
         await db.subTamerLicense.updateMany({
           where: { stripeSubscriptionId: sub.id },
-          data: { status: sub.status === 'active' ? 'active' : 'canceled' },
+          data: { status: sub.status === 'active' || sub.status === 'trialing' ? 'active' : 'canceled' },
         });
         break;
       }
@@ -235,7 +235,7 @@ async function processEvent(event: Stripe.Event) {
       await db.subscription.updateMany({
         where: { userId: user.id },
         data: {
-          status: sub.status === 'active' ? 'active' : 'canceled',
+          status: sub.status === 'active' || sub.status === 'trialing' ? 'active' : 'canceled',
           currentPeriodEnd: new Date((sub as any).current_period_end * 1000),
         },
       });

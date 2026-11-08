@@ -28,8 +28,10 @@ export async function POST(req: Request) {
     };
 
     if (!isOneTime) {
+      sessionParams.payment_method_collection = 'if_required';
       sessionParams.subscription_data = {
         trial_period_days: 14,
+        trial_settings: { end_behavior: { missing_payment_method: 'pause' } },
         metadata: { clerkUserId: userId },
       };
     }

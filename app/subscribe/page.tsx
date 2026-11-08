@@ -5,18 +5,20 @@ import { useRouter } from 'next/navigation';
 import Link from 'next/link';
 import AccountUserButton from '../components/AccountUserButton';
 
-const MONTHLY_PRICE_ID = 'price_1TeihB3eI6L9ZOHZQTUS1Q6k';
-const ANNUAL_PRICE_ID = 'price_1TeilR3eI6L9ZOHZbTtRZNiD';
-const OVERAGE_PRICE_ID = 'price_1Tf0wr3eI6L9ZOHZ2Dx9b0FN';
+const MONTHLY_PRICE_ID = 'price_1Tjn9A3VYW5f82T9SgDdl50L';
+const ANNUAL_PRICE_ID = 'price_1UZaTA3VYW5f82T9vVapxHkU';
+const OVERAGE_PRICE_ID = 'price_1TjnEZ3VYW5f82T9TS8xUtmw';
 
 export default function SubscribePage() {
   const [loading, setLoading] = useState<string | null>(null);
+  const [checkoutError, setCheckoutError] = useState('');
   const [subtamerKey, setSubtamerKey] = useState('');
   const [keyStatus, setKeyStatus] = useState<'idle' | 'checking' | 'valid' | 'invalid'>('idle');
   const router = useRouter();
 
   const handleCheckout = async (priceId: string, plan: string, mode: 'subscription' | 'payment' = 'subscription') => {
     setLoading(plan);
+    setCheckoutError('');
     try {
       const res = await fetch('/api/stripe-checkout', {
         method: 'POST',
@@ -26,9 +28,13 @@ export default function SubscribePage() {
       const data = await res.json();
       if (data.url) {
         window.location.href = data.url;
+      } else {
+        setCheckoutError('Checkout could not be opened. Please try again later.');
+        setLoading(null);
       }
     } catch (error) {
       console.error('Checkout error:', error);
+      setCheckoutError('Checkout could not be opened. Please try again later.');
       setLoading(null);
     }
   };
@@ -154,6 +160,11 @@ export default function SubscribePage() {
         <p className="text-center text-gray-500 text-sm mt-8">
           You won't be charged until your 14-day trial ends. Cancel anytime.
         </p>
+        {checkoutError && (
+          <p role="alert" className="text-center text-red-400 text-sm mt-4">
+            {checkoutError}
+          </p>
+        )}
 
         {/* SubTamer Bundle Discount */}
         <div className="mt-16 border-t border-gray-800 pt-14">
