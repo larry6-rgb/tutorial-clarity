@@ -29,7 +29,9 @@ export default function SubscribePage() {
       if (data.url) {
         window.location.href = data.url;
       } else {
-        setCheckoutError('Checkout could not be opened. Please try again later.');
+        setCheckoutError(res.status === 403 && plan === 'overage'
+          ? 'Session packs require an active membership.'
+          : 'Checkout could not be opened. Please try again later.');
         setLoading(null);
       }
     } catch (error) {
