@@ -1,6 +1,7 @@
 import { auth } from '@clerk/nextjs/server';
 import { NextResponse } from 'next/server';
 import Stripe from 'stripe';
+import { prisma as db } from '@/lib/db';
 
 const stripe = new Stripe(process.env.STRIPE_SECRET_KEY!, {
   apiVersion: '2026-05-27.dahlia',
@@ -15,6 +16,24 @@ export async function POST(req: Request) {
 
     const { priceId, mode: checkoutMode } = await req.json();
     const isOneTime = checkoutMode === 'payment';
+
+    const monthlyPrice = process.env.STRIPE_PRICE_MONTHLY;
+    const annualPrice = process.env.STRIPE_PRICE_ANNUAL;
+    const overagePrice = process.env.STRIPE_PRICE_OVERAGE;
+    if (!priceId || (isOneTime ? priceId !== overagePrice : priceId !== monthlyPrice && priceId !== annualPrice)) {
+      return NextResponse.json({ error: 'Invalid checkout selection.' }, { status: 400 });
+    }
+
+    if (isOneTime) {
+      const user = await db.user.findUnique({
+        where: { clerkId: userId },
+        include: { subscription: true },
+      });
+      const sub = user?.subscription;
+      if (!sub || sub.status !== 'active' || !['monthly', 'annual', 'bundle'].includes(sub.plan)) {
+        return NextResponse.json({ error: 'An active membership is required for session packs.' }, { status: 403 });
+      }
+    }
 
     const sessionParams: Stripe.Checkout.SessionCreateParams = {
       mode: isOneTime ? 'payment' : 'subscription',
